@@ -89,18 +89,9 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
 
 private object DisposableTracker {
 
-    private val maxBytes: Long
-
-    init {
-        // We want to limit memory-tracked objects to use at most 20% of the available memory. To find out how much
-        // system memory is available in total, we find the maximum heap size, then divide by the maximum heap size to
-        // RAM ratio specified at VM start up.
-        val opt = "-XX:MaxRAMPercentage"
-        val arg = ManagementFactory.getRuntimeMXBean().inputArguments.find { it.startsWith(opt) }
-        checkNotNull(arg) { "Expected the VM to be run with $opt." }
-        val ratio = arg.substring(opt.length + 1).toDouble() / 100.0
-        maxBytes = (0.2 * (Runtime.getRuntime().maxMemory() / ratio)).toLong()
-    }
+    // We want to limit memory-tracked objects to use at most 20% of the available memory.
+    private val maxBytes = (ManagementFactory.getOperatingSystemMXBean() as com.sun.management.OperatingSystemMXBean)
+        .totalMemorySize / 5
 
     private val lock = ReentrantLock()
     private val map = LinkedHashMap<Any, CompletableFuture<SizedValue<*>>>(16, 0.75f, true)
