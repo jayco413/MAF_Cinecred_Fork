@@ -279,6 +279,13 @@ class DockingFrame(
                 if (brick != comp)
                     brick.parent?.remove(brick)
                 val collapsed = node.collapsed && brick.dockable.collapsible
+                // If the brick is about to be collapsed, but one of its descendent components still has the focus,
+                // clear that focus to avoid some other component unpredictably gaining focus.
+                if (collapsed && brick.isVisible) {
+                    val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+                    if (focusOwner != null && SwingUtilities.isDescendingFrom(focusOwner, brick))
+                        SwingUtilities.getWindowAncestor(brick).requestFocusInWindow()
+                }
                 brick.isVisible = !collapsed
                 brick.dockable.minimumSize = if (collapsed || !applyMinimumSizes) Dimension() else null
                 if (collapsed != collapsedCache.put(node.id, collapsed))
