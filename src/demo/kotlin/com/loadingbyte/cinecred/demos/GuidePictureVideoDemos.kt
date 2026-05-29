@@ -8,7 +8,9 @@ import com.loadingbyte.cinecred.demo.*
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
-import com.loadingbyte.cinecred.projectio.CsvFormat
+import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetLook
+import com.loadingbyte.cinecred.projectio.XlsxFormat
 import com.loadingbyte.cinecred.ui.comms.DockableId.LOG
 import com.loadingbyte.cinecred.ui.comms.DockableId.STYLING
 import kotlinx.collections.immutable.persistentListOf
@@ -17,7 +19,10 @@ import org.bytedeco.ffmpeg.global.avutil.AVCOL_PRI_SMPTE428
 import org.bytedeco.ffmpeg.global.avutil.AVCOL_TRC_LOG_SQRT
 import java.awt.Dimension
 import java.lang.Thread.sleep
-import kotlin.io.path.*
+import kotlin.io.path.copyTo
+import kotlin.io.path.createTempDirectory
+import kotlin.io.path.moveTo
+import kotlin.io.path.name
 
 
 private const val DIR = "guide/picture-video"
@@ -47,14 +52,16 @@ val GUIDE_PICTURE_VIDEO_DEMOS
 @Suppress("DEPRECATION")
 object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VIDEO_GIF, 1100, 650, 0.85) {
     override fun generate() {
-        val creditsFile = projectDir.resolve("${projectDir.name}.csv")
+        val creditsFile = projectDir.resolve("${projectDir.name}.xlsx")
         addProjectWindows(dockedTrees.apply { leaf(LOG).collapsed = true }, prepareProjectDir = {
-            val lines = creditsFile.readLines().toMutableList()
-            val idx = lines.indexOfFirst { "Dirc Director" in it }
-            lines[idx] = lines[idx].replace("A,", ",").replace(",Film,", ",,")
-            lines[idx + 1] = ",,,4,,,,,,"
-            lines.subList(idx + 2, lines.size).fill(",,,,,,,,,")
-            creditsFile.writeLines(lines)
+            val sheet = XlsxFormat.read(creditsFile, "").first.single()
+            val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
+            val firstDataRow = matrix.subList(2, matrix.size).first { row -> row[1] != "" }
+            matrix.subList(3, matrix.size).clear()
+            matrix.add(listOf("", "Iris Imaginer", "") + firstDataRow.subList(3, firstDataRow.size))
+            repeat(100) { matrix.add(emptyList()) }
+            matrix.add(listOf("", "", "", "0"))
+            XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), SpreadsheetLook(emptyMap(), emptyList()))
 
             val logosDir = projectDir.resolve("Logos")
             logosDir.resolve("Cinecred H.svg").moveTo(logosDir.resolve("Cinecred.svg"))
@@ -80,7 +87,7 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
         }
         sleep(500)
 
-        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, CsvFormat, skipRows = 1).apply {
+        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat, skipRows = 1).apply {
             size = Dimension(600, 350)
             colWidths = intArrayOf(100, 200, 50, 100, 100, 50, 50, 50, 50, 50)
         }
@@ -89,18 +96,18 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
         dt.toBack(spreadsheetEditorWin)
 
         sc.hold(2 * hold)
-        sc.type(spreadsheetEditorWin, 6, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred}}", 8 * hold)
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred}}", 8 * hold)
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click(4 * hold)
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred"))
         sc.click(12 * hold)
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
-        sc.type(spreadsheetEditorWin, 6, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred.svg}}")
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred.svg}}")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click(8 * hold)
         sc.click()
-        sc.type(spreadsheetEditorWin, 6, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred Cropped}}")
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred Cropped}}")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred Cropped"))

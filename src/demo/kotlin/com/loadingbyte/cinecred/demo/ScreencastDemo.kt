@@ -3,7 +3,7 @@ package com.loadingbyte.cinecred.demo
 import com.loadingbyte.cinecred.common.FPS
 import com.loadingbyte.cinecred.common.useResourceStream
 import com.loadingbyte.cinecred.project.*
-import com.loadingbyte.cinecred.projectio.CsvFormat
+import com.loadingbyte.cinecred.projectio.XlsxFormat
 import com.loadingbyte.cinecred.projectio.tryCopyTemplate
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.ctrl.MasterCtrl
@@ -112,7 +112,7 @@ abstract class ScreencastDemo(
     ) {
         val existingProjectCtrl = masterCtrl!!.leakedProjectCtrls.lastOrNull()
         projectCtrl = if (existingProjectCtrl != null) existingProjectCtrl else {
-            tryCopyTemplate(projectDir, template(locale), CsvFormat)
+            tryCopyTemplate(projectDir, template(locale), XlsxFormat)
             prepareProjectDir?.invoke()
             if (fullscreenPrjWin)
                 trees[0].bounds = dt.fullscreen

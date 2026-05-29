@@ -1,6 +1,6 @@
 package com.loadingbyte.cinecred.demo
 
-import com.loadingbyte.cinecred.projectio.CsvFormat
+import com.loadingbyte.cinecred.projectio.XlsxFormat
 import com.loadingbyte.cinecred.projectio.tryCopyTemplate
 import com.loadingbyte.cinecred.ui.UIFactory
 import com.loadingbyte.cinecred.ui.ctrl.MasterCtrl
@@ -20,7 +20,7 @@ abstract class ProjectDemo(filename: String, format: Format) : Demo(filename, fo
         val masterCtrl = UIFactory().master() as MasterCtrl
         this.masterCtrl = masterCtrl
         withDemoProjectDir { projectDir ->
-            tryCopyTemplate(projectDir, template(locale), CsvFormat)
+            tryCopyTemplate(projectDir, template(locale), XlsxFormat)
             edt { masterCtrl.openProject(projectDir, null, trees()) }
             sleep(500)
             generate()

@@ -17,7 +17,7 @@ import com.loadingbyte.cinecred.project.Global
 import com.loadingbyte.cinecred.project.LetterStyle
 import com.loadingbyte.cinecred.project.Scan
 import com.loadingbyte.cinecred.project.st
-import com.loadingbyte.cinecred.projectio.CsvFormat
+import com.loadingbyte.cinecred.projectio.XlsxFormat
 import com.loadingbyte.cinecred.ui.DeliveryDestTemplate
 import com.loadingbyte.cinecred.ui.DeliveryDestTemplate.Placeholder.*
 import com.loadingbyte.cinecred.ui.PresetWindowLayout
@@ -269,8 +269,8 @@ object GuideUserInterfaceSnapSpreadsheetEditorDemo : ScreencastDemo(
         addProjectWindows(dockedTrees.apply { leaf(LOG).collapsed = true })
 
         edt { styTree.selectedRow = 8 }
-        val creditsFile = projectDir.resolve("${projectDir.name}.csv")
-        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, CsvFormat, skipRows = 1).apply {
+        val creditsFile = projectDir.resolve("${projectDir.name}.xlsx")
+        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat, skipRows = 1).apply {
             size = Dimension(600, 350)
             colWidths = intArrayOf(100, 100, 50, 100, 100, 50, 50, 50, 50, 50)
         }
