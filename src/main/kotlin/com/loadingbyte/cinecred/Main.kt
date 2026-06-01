@@ -29,6 +29,9 @@ import org.slf4j.LoggerFactory
 import sun.misc.Signal
 import java.awt.*
 import java.awt.event.MouseEvent
+import java.lang.foreign.FunctionDescriptor
+import java.lang.foreign.Linker
+import java.lang.foreign.ValueLayout.JAVA_INT
 import java.net.URI
 import java.net.URLEncoder
 import java.util.*
@@ -92,6 +95,19 @@ fun main(args: Array<String>) {
 fun setupNatives() {
     if (didSetupNatives.getAndSet(true))
         return
+
+    // On Linux, set glibc's M_MMAP_THRESHOLD to a fixed value. This is the threshold above which malloc() calls are
+    // directly forwarded to mmap(), meaning that when the memory is freed again, it's immediately returned to the OS.
+    // We desire this behavior for all our bigger allocations (e.g., bitmaps), since if they don't go via mmap(), they
+    // often linger around forever in malloc()'s memory pool after deallocation and are never returned to the OS.
+    // By default, glibc dynamically adjusts the M_MMAP_THRESHOLD, but for our usage profile, that adjustment leads to
+    // few allocations going via mmap(). As a fix, we set the threshold to a fixed value.
+    // Notice that on Windows and macOS, we never observed the above problematic behavior, so no fix is needed for them.
+    if (SystemInfo.isLinux)
+        Linker.nativeLinker().downcallHandle(
+            Linker.nativeLinker().defaultLookup().find("mallopt").get(),
+            FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)
+        )(-3 /* M_MMAP_THRESHOLD */, 64 * 1024)
 
     // Load our native libraries.
     System.loadLibrary("clib")
