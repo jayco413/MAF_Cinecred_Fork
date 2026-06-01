@@ -33,7 +33,7 @@ import kotlin.math.max
 class Bitmap private constructor(
     val spec: Spec,
     /**
-     * The underlying [AVFrame]. Only access it while in an [ifNotClosed] or [requireNotClosed] block. And if possible,
+     * The underlying [AVFrame]. Only access it while in a [requireNotClosed] block. And if possible,
      * please use [memorySegment] and [linesize] instead.
      */
     val frame: AVFrame
@@ -77,21 +77,22 @@ class Bitmap private constructor(
         cleanable.clean()
     }
 
-    /** Keeps the bitmap open until the given action returns. If the bitmap is already closed, the action is not run. */
-    fun <T> ifNotClosed(action: () -> T): T? = closureProtector.ifNotClosed(action)
-
-    /** Keeps the bitmap open until the given action returns. If the bitmap is already closed, throws an exception. */
+    /**
+     * Keeps the bitmap open until the given action returns.
+     *
+     * @throws IllegalStateException If the bitmap is already closed.
+     */
     fun <T> requireNotClosed(action: () -> T): T = closureProtector.requireNotClosed(action)
 
     /** Pay attention to never reference this bitmap object from the listener! */
     fun addClosureListener(listener: Runnable) {
-        if (ifNotClosed { closureListeners += listener; Any() } == null) listener.run()
+        if (closureProtector.ifNotClosed { closureListeners += listener; listener } == null) listener.run()
     }
 
     /**
      * Returns a safe [MemorySegment] that grants direct access to the given [plane] of the bitmap. When operating on
      * the raw [MemorySegment.address], or implicitly writing the address to some struct and then passing that struct to
-     * a downcall handle, make sure to be in an [ifNotClosed] or [requireNotClosed] block. When instead using Java's
+     * a downcall handle, make sure to be in a [requireNotClosed] block. When instead using Java's
      * memory access methods or passing the segment directly to a downcall handle (as opposed to first resolving the raw
      * address), Java guarantees that the segment is not closed during the operation, so the *NotClosed blocks don't
      * need to be used.

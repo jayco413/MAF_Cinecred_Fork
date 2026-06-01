@@ -451,8 +451,7 @@ private fun basicEmbeddedPic(style: PictureStyle, width: Double?, height: Double
                 style.cropLeftPx, style.cropRightPx, style.cropTopPx, style.cropBottomPx, style.cropBlankSpace
             )
         }
-    } catch (_: RuntimeException) {
-        // Catches IllegalStateException and IllegalArgumentException.
+    } catch (_: Exception) {
         null
     }
 

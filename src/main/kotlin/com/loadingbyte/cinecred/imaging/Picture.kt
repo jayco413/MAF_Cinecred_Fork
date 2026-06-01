@@ -54,13 +54,18 @@ sealed interface Picture : AutoCloseable {
     val width: Double
     val height: Double
 
+    /** @throws Exception */
     fun drawTo(canvas: Canvas, transform: AffineTransform? = null, clip: List<Shape> = emptyList())
 
+    /** @throws Exception */
     fun prepareAsBitmap(
         canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-    ): Canvas.PreparedBitmap?
+    ): Canvas.PreparedBitmap
 
-    /** A null return value means that the picture is fully blank. */
+    /**
+     * @return If null, the picture is fully blank.
+     * @throws Exception
+     */
     fun nonBlankBounds(crop: Rectangle2D? = null, transform: AffineTransform? = null): Rectangle2D?
 
 
@@ -85,15 +90,13 @@ sealed interface Picture : AutoCloseable {
         override val width get() = bitmap.spec.resolution.widthPx.toDouble()
         override val height get() = bitmap.spec.resolution.heightPx.toDouble()
 
-        // If the project that opened the picture has been closed and with it the picture (which is possible because
-        // materialization happens in a background thread), just silently skip the operation.
         override fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
-            bitmap.ifNotClosed { canvas.drawImage(bitmap, transform = transform, clip = clip) }
+            bitmap.requireNotClosed { canvas.drawImage(bitmap, transform = transform, clip = clip) }
         }
 
         override fun prepareAsBitmap(
             canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = bitmap.ifNotClosed {
+        ) = bitmap.requireNotClosed {
             val crop = (crop as? Rectangle)
                 ?: crop?.run { Rectangle(x.roundToInt(), y.roundToInt(), width.roundToInt(), height.roundToInt()) }
             canvas.prepareBitmap(bitmap, crop = crop, transform = transform, cached = cached)
@@ -214,16 +217,18 @@ sealed interface Picture : AutoCloseable {
 
         private val lock = ReentrantLock()
 
-        // If the project that opened the picture has been closed and with it the picture (which is possible because
-        // materialization happens in a background thread), just silently skip the operation.
         override fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
-            lock.withLock { if (src.handle.scope().isAlive) canvas.drawSVG(src, transform, clip) }
+            lock.withLock {
+                check(src.handle.scope().isAlive) { "SVG is already closed." }
+                canvas.drawSVG(src, transform, clip)
+            }
         }
 
         override fun prepareAsBitmap(
             canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
         ) = lock.withLock {
-            if (src.handle.scope().isAlive) canvas.prepareSVGAsBitmap(src, crop, transform, cached) else null
+            check(src.handle.scope().isAlive) { "SVG is already closed." }
+            canvas.prepareSVGAsBitmap(src, crop, transform, cached)
         }
 
         fun import(importer: Document): Element =
@@ -375,20 +380,25 @@ sealed interface Picture : AutoCloseable {
 
         private val lock = ReentrantLock()
 
-        // If the project that opened the picture has been closed and with it the picture (which is possible because
-        // materialization happens in a background thread), just silently skip the operation.
         override fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
-            lock.withLock { if (!doc.document.isClosed) canvas.drawPDF(doc, transform, clip) }
+            lock.withLock {
+                check(!doc.document.isClosed) { "PDF document is already closed." }
+                canvas.drawPDF(doc, transform, clip)
+            }
         }
 
         override fun prepareAsBitmap(
             canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
         ) = lock.withLock {
-            if (!doc.document.isClosed) canvas.preparePDFAsBitmap(doc, crop, transform, cached) else null
+            check(!doc.document.isClosed) { "PDF document is already closed." }
+            canvas.preparePDFAsBitmap(doc, crop, transform, cached)
         }
 
+        /** @throws Exception */
         fun import(importer: LayerUtility): PDFormXObject = lock.withLock {
-            if (!doc.document.isClosed) {
+            if (doc.document.isClosed)
+                throw IllegalStateException("PDF document is already closed.")
+            else {
                 val page = doc.getPage(0)
                 val form = importer.importPageAsForm(doc, page)
                 // The matrix set by LayerUtility does wrong scaling if the page is rotated, so we'll set it ourselves.
@@ -428,8 +438,7 @@ sealed interface Picture : AutoCloseable {
                 if (pdCSRGB != null && !form.group.cosObject.containsKey(COSName.CS))
                     form.group.cosObject.setItem(COSName.CS, pdCSRGB)
                 form
-            } else
-                PDFormXObject(importer.document)
+            }
         }
 
         override fun close() {

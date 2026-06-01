@@ -959,21 +959,16 @@ private val embeddedPictureCache = EmbeddedCache<PictureStyle, DeferredImage.Emb
 private fun PictureStyle.toEmbedded(styling: Styling): DeferredImage.EmbeddedPicture? =
     embeddedPictureCache.get(styling, this, ::createEmbedded)
 
-private fun PictureStyle.createEmbedded(): DeferredImage.EmbeddedPicture? {
-    val picture = try {
-        (picture.loader ?: return null).picture
-    } catch (_: IllegalStateException) {
-        return null
-    }
-    return try {
+private fun PictureStyle.createEmbedded(): DeferredImage.EmbeddedPicture? =
+    try {
+        val picture = (picture.loader ?: return null).picture
         DeferredImage.EmbeddedPicture(
             picture, widthPx.value, heightPx.value, cropLeftPx, cropRightPx, cropTopPx, cropBottomPx, cropBlankSpace,
             hFlip, vFlip, rotationDeg
         )
-    } catch (_: IllegalArgumentException) {
+    } catch (_: Exception) {
         null
     }
-}
 
 
 private val embeddedTapeCache = EmbeddedCache<TapeStyle, DeferredImage.EmbeddedTape>()

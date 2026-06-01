@@ -118,9 +118,14 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
      * Draws the content of this deferred image onto the given [Canvas]. The canvas must be backed by a bitmap. Raster
      * content is aligned with the canvas' pixel grid to prevent interpolation and retain as much quality as possible.
      */
-    fun materialize(canvas: Canvas, cache: CanvasMaterializationCache?, layers: List<Layer>) {
+    fun materialize(
+        canvas: Canvas,
+        cache: CanvasMaterializationCache?,
+        tolerateErroneousMedia: Boolean,
+        layers: List<Layer>
+    ) {
         require(canvas.bitmap != null) { "To materialize to an SVG or PDF, use the specialized methods." }
-        val backend = CanvasBackend(canvas, cache as CanvasMaterializationCacheImpl?)
+        val backend = CanvasBackend(canvas, cache as CanvasMaterializationCacheImpl?, tolerateErroneousMedia)
         // If only a portion of the deferred image is materialized, cull the rest to improve performance.
         // Notice that because the culling rect is aligned with the pixel grid, we correctly include all content
         // that at least partially lies inside one of the surface's pixels.
@@ -192,6 +197,15 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             is Coat.Gradient -> Canvas.Shader.LinearGradient(point1, point2, listOf(color1, color2))
         }
 
+        private fun MaterializationBackend.materializeMissingMedia(width: Double, height: Double, tr: AffineTransform) {
+            val shape = Rectangle2D.Double(0.0, 0.0, width, height).transformedBy(tr)
+            val coat = Coat.Gradient(
+                Color4f.MISSING_MEDIA_TOP, Color4f.MISSING_MEDIA_BOT,
+                Point2D.Double(0.0, 0.0), Point2D.Double(0.0, height)
+            ).transform(tr)
+            materializeShape(shape, coat, fill = true, dash = false, blurRadius = 0.0)
+        }
+
         private fun gaussianStdDev(radius: Double) = radius / 2.0
 
     }
@@ -225,6 +239,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     }
 
 
+    /** @throws Exception */
     class EmbeddedPicture(
         val picture: Picture,
         width: Double? = null,
@@ -608,14 +623,16 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
 
     /** Materializes tapes by rendering the tape's thumbnail or a "missing media" placeholder. */
-    private interface TapeThumbnailBackend : MaterializationBackend {
+    private abstract class TapeThumbnailBackend(private val tolerateErroneousTapes: Boolean) : MaterializationBackend {
 
         override fun materializeEmbeddedTape(
             x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape, asyncThumbnail: Future<Picture.Raster?>
         ) {
             val thumbnail = try {
                 asyncThumbnail.get()
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                if (!tolerateErroneousTapes)
+                    throw e
                 null
             }
             val (w, h) = embeddedTape.resolution
@@ -637,14 +654,8 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 val previewIndicator = Tape.previewIndicator(x, y, w * scaling, h * scaling)
                 val coat = Coat.Plain(Color4f.TAPE_PREVIEW)
                 materializeShape(previewIndicator, coat, fill = true, dash = false, blurRadius = 0.0)
-            } else {
-                val rect = Rectangle2D.Double(x, y, w * scaling, h * scaling)
-                val coat = Coat.Gradient(
-                    Color4f.MISSING_MEDIA_TOP, Color4f.MISSING_MEDIA_BOT,
-                    Point2D.Double(0.0, rect.minY), Point2D.Double(0.0, rect.maxY)
-                )
-                materializeShape(rect, coat, fill = true, dash = false, blurRadius = 0.0)
-            }
+            } else
+                materializeMissingMedia(w * scaling, h * scaling, AffineTransform.getTranslateInstance(x, y))
         }
 
     }
@@ -652,8 +663,9 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
     private class CanvasBackend(
         private val canvas: Canvas,
-        private val cache: CanvasMaterializationCacheImpl?
-    ) : TapeThumbnailBackend {
+        private val cache: CanvasMaterializationCacheImpl?,
+        private val tolerateErroneousMedia: Boolean
+    ) : TapeThumbnailBackend(tolerateErroneousMedia) {
 
         override fun materializeShape(shape: Shape, coat: Coat, fill: Boolean, dash: Boolean, blurRadius: Double) {
             if (fill)
@@ -722,9 +734,20 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 scale(scaling)
                 concatenate(embeddedPic.transform)
             }
-            val prep = pic.prepareAsBitmap(
-                canvas, embeddedPic.crop, if (draft) null else transform, cache?.popPreparedPicture(pic)
-            ) ?: return
+
+            val cached = cache?.popPreparedPicture(pic)
+            var prep: Canvas.PreparedBitmap? = null
+            try {
+                prep = pic.prepareAsBitmap(canvas, embeddedPic.crop, if (draft) null else transform, cached)
+            } catch (e: Exception) {
+                if (!tolerateErroneousMedia)
+                    throw e
+                materializeMissingMedia(embeddedPic.crop.width, embeddedPic.crop.height, transform)
+                return
+            } finally {
+                if (cached?.bitmap != prep?.bitmap)
+                    cached?.bitmap?.close()
+            }
             canvas.drawImage(
                 prep.bitmap ?: return, prep.promiseOpaque, promiseClamped = true, nearestNeighbor = draft,
                 transform = if (draft) transform else prep.transform
@@ -740,7 +763,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     // Note: SVG blending is always in sRGB and there's no way to change that, so this backend doesn't accept a color
     // space parameter. Technically, one could use SVG filters to at least blend in linear light, but that's very
     // convoluted and still doesn't give us general color space support.
-    private class SVGBackend(private val svg: Element) : TapeThumbnailBackend {
+    private class SVGBackend(private val svg: Element) : TapeThumbnailBackend(tolerateErroneousTapes = false) {
 
         private val doc get() = svg.ownerDocument
 
@@ -1034,7 +1057,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         private val tracker: PDFTrackerImpl,
         private val page: PDPage,
         private val cs: PDPageContentStream
-    ) : TapeThumbnailBackend {
+    ) : TapeThumbnailBackend(tolerateErroneousTapes = false) {
 
         private val csHeight = page.mediaBox.height
         private var fontKeyCtr = 1

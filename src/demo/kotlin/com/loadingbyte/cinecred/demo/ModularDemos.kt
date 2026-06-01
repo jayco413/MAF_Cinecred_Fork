@@ -529,7 +529,7 @@ private fun defImageToImage(
     val bgr24Bitmap = Bitmap.allocate(Bitmap.Spec(res, BGR24_REPRESENTATION))
     Canvas.forBitmap(canvasBitmap).use { canvas ->
         canvas.fill(Canvas.Shader.Solid(grounding))
-        defImg.materialize(canvas, cache = null, layers)
+        defImg.materialize(canvas, cache = null, tolerateErroneousMedia = false, layers)
     }
     BitmapConverter.convert(canvasBitmap, bgr24Bitmap, promiseOpaque = true)
     val img = bgr24BitmapToImage(bgr24Bitmap)

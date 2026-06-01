@@ -363,7 +363,7 @@ class DeferredImagePanel(
                 DeferredImage(matWidth.toDouble(), matHeight.toDouble().toY()).apply {
                     // If only a portion is materialized, scroll the deferred image to that portion.
                     drawDeferredImage(image, y = (-physicalStartY).toY(), universeScaling = physicalImageScaling)
-                }.materialize(canvas, highResCache, layers)
+                }.materialize(canvas, highResCache, tolerateErroneousMedia = true, layers)
             }
             SwingUtilities.invokeLater {
                 if (this.materializedContentVersion > contentVersion)
@@ -423,7 +423,9 @@ class DeferredImagePanel(
             val scaling = matWidth / image.width
             val matHeight = max(1, ceil(scaling * imageHeight).toInt())
             val materialized = drawToBufferedImage(matWidth, matHeight, grounding, bitmapJ2DBridge) { canvas ->
-                image.copy(universeScaling = scaling).materialize(canvas, lowResCache, layers)
+                image.copy(universeScaling = scaling).materialize(
+                    canvas, lowResCache, tolerateErroneousMedia = true, layers
+                )
             }
             SwingUtilities.invokeLater {
                 if (this.lowResMaterializedContentVersion > contentVersion)

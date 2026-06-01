@@ -99,7 +99,9 @@ class WholePageSequenceRenderJob private constructor(
                     Bitmap.allocate(Bitmap.Spec(res, rep)).use { bitmap ->
                         Canvas.forBitmap(bitmap, ceiling).use { canvas ->
                             if (ground) canvas.fill(Canvas.Shader.Solid(global.grounding)) else bitmap.zero()
-                            pageDefImage.materialize(canvas, cache = null, layers = listOf(STATIC, TAPES))
+                            pageDefImage.materialize(
+                                canvas, cache = null, tolerateErroneousMedia = false, layers = listOf(STATIC, TAPES)
+                            )
                         }
                         if (!matte)
                             bitmapWriter!!.convertAndWrite(bitmap, pageFile, promiseOpaque = !embedAlpha)
