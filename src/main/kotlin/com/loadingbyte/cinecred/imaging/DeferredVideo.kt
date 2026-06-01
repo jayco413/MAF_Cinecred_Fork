@@ -903,9 +903,13 @@ class DeferredVideo private constructor(
                 val origBitmap = when (source) {
                     Source.READER -> reader.read(timecode).bitmap
                     Source.PREVIEW -> try {
-                        previewTape.getPreviewFrame(timecode).get()!!.bitmap
+                        // For previews, create a view immediately because preview bitmaps might be closed at any time.
+                        // If the bitmap is already closed, the exception is caught and the missing bitmap is used.
+                        previewTape.getPreviewFrame(timecode).get()!!.bitmap.view()
                     } catch (_: Exception) {
-                        return missingMediaBitmap.value
+                        // Also create a view here since the code below expects to be able to close origBitmap if the
+                        // source is PREVIEW.
+                        return missingMediaBitmap.value.view()
                     }
                     Source.UNAVAILABLE -> return missingMediaBitmap.value
                 }
@@ -913,9 +917,12 @@ class DeferredVideo private constructor(
                 readConverter?.let { conv ->
                     convertedBitmap = Bitmap.allocate(readConvertedSpec!!)
                     conv.convert(origBitmap, convertedBitmap)
+                    if (source == Source.PREVIEW)
+                        origBitmap.close()
                 }
                 val croppedBitmap = readCrop.run { convertedBitmap.view(x, y, width, height, 1) }
-                if (convertedBitmap != origBitmap) convertedBitmap.close()
+                if (convertedBitmap != origBitmap || source == Source.PREVIEW)
+                    convertedBitmap.close()
                 val (flipH, flipV, transpose) = readReorder
                 if (!flipH && !flipV && !transpose)
                     return croppedBitmap

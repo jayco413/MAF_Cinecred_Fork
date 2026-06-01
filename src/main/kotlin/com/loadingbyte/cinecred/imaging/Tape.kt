@@ -148,12 +148,16 @@ class Tape private constructor(
         if (reinterpretParentPreview) {
             if (fileSeq)
                 fileSeqPreviewCache = MappingPreviewCache(parent.fileSeqPreviewCache!!, mapItem = { optional ->
-                    optional.map(reinterpretation::ofPreview)
-                }, getItemBytesFileSeq, closeItemFileSeq)
+                    val mapped = optional.map(reinterpretation::ofPreview)
+                    SizedValue(mapped, bytes = getItemBytesFileSeq(mapped), destroy = { closeItemFileSeq(mapped) })
+                })
             else
                 containerPreviewCache = MappingPreviewCache(parent.containerPreviewCache!!, mapItem = { list ->
-                    list.map { elem -> RasterPictureAndClock(reinterpretation.ofPreview(elem.picture), elem.clock) }
-                }, getItemBytesContainer, closeItemContainer)
+                    val mapped = list.map { elem ->
+                        RasterPictureAndClock(reinterpretation.ofPreview(elem.picture), elem.clock)
+                    }
+                    SizedValue(mapped, bytes = getItemBytesContainer(mapped), destroy = { closeItemContainer(mapped) })
+                })
         } else if (fileSeq)
             fileSeqPreviewCache = LoadingPreviewCache(fileOrDir.name, 500, 50, createLoader = { startFrames ->
                 val reader = VideoReader(fileOrPattern, Timecode.Frames(startFrames))
@@ -235,7 +239,11 @@ class Tape private constructor(
 
     }
 
-    /** The returned future resolves to null when the timecode is out of bounds, and may fail with any exception. */
+    /**
+     * The returned future resolves to null when the timecode is out of bounds, and may fail with any exception.
+     * The returned picture must neither be closed nor modified by the caller. However, this class can close it at any
+     * point, hence callers should consider creating a view.
+     */
     fun getPreviewFrame(timecode: Timecode): CompletableFuture<Picture.Raster?> {
         if (timecode !in availableRange)
             return CompletableFuture.completedFuture(null)
@@ -518,9 +526,7 @@ class Tape private constructor(
 
     private class MappingPreviewCache<I : Any>(
         private val delegate: PreviewCache<I>,
-        private val mapItem: (I) -> I,
-        private val getItemBytes: (I) -> Long,
-        private val closeItem: (I) -> Unit
+        private val mapItem: (I) -> SizedValue<I>
     ) : PreviewCache<I> {
 
         // Note: If mapItem() just reinterprets a bitmap, then we're counting the size of the cached bitmaps twice, but
@@ -528,13 +534,10 @@ class Tape private constructor(
         private val cache = DisposableCache<Int, I>()
 
         override fun getItem(point: Int): CompletableFuture<I> =
-            cache.getAsync(point) {
-                delegate.getItem(point).thenApply { item -> mapItem(item).let { SizedValue(it, getItemBytes(it)) } }
-            }
+            cache.getAsync(point) { delegate.getItem(point).thenApply(mapItem) }
 
         override fun close() {
             delegate.close()
-            cache.getAllAsync().forEach { future -> future.thenApply(closeItem) }
             cache.close()
         }
 
@@ -662,7 +665,9 @@ class Tape private constructor(
                     val items = this.items!!
                     items.add(item)
                     if (claim == stop - 1) {
-                        disposableItems = DisposableReference(items, bytes = items.sumOf(getItemBytes))
+                        disposableItems = DisposableReference(
+                            items, bytes = items.sumOf(getItemBytes), destroy = { items.forEach(closeItem) }
+                        )
                         this.items = null
                     }
                     val idx = claim - start
@@ -673,7 +678,8 @@ class Tape private constructor(
 
             override fun close() {
                 lock.withLock { closed = true }
-                (items ?: disposableItems?.getAndClose())?.forEach(closeItem)
+                items?.forEach(closeItem)
+                disposableItems?.close()
                 for (futures in pendingFutures)
                     futures?.forEach { future -> future.completeExceptionally(ClosedException()) }
             }
