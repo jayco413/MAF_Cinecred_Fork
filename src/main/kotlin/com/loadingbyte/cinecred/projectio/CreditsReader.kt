@@ -75,11 +75,13 @@ private class CreditsReader(
     // Prepare resolvers for pictures and tape.
     val pictureStyleResolver = AuxiliaryStyleResolver(
         pictureLoaders, isDirectory = { false }, pictureStyleMap,
+        { style -> style.picture.name.isEmpty() && style.picture.loader == null },
         { name -> PRESET_PICTURE_STYLE.copy(name = name) },
         { name, pictureLoader -> PRESET_PICTURE_STYLE.copy(name = name, picture = PictureRef(pictureLoader)) }
     )
     val tapeStyleResolver = AuxiliaryStyleResolver(
         tapes, isDirectory = Tape::fileSeq, tapeStyleMap,
+        { style -> style.tape.name.isEmpty() && style.tape.tape == null },
         { name -> PRESET_TAPE_STYLE.copy(name = name) },
         { name, tape ->
             val tcFmt = if (tape.fileSeq) TimecodeFormat.FRAMES else try {
@@ -1075,6 +1077,7 @@ private class CreditsReader(
         auxiliaries: Map<String, A>,
         isDirectory: (A) -> Boolean,
         private val styleMap: MutableMap<String, S>,
+        private val missesRef: (S) -> Boolean,
         private val makeStyle1: (String) -> S,
         private val makeStyle2: (String, A) -> S
     ) {
@@ -1108,9 +1111,11 @@ private class CreditsReader(
 
         fun legacyAddStyleForUnhinted(tagVal: String) {
             auxMap[tagVal]?.let { aux ->
-                styleMap.computeIfAbsent(tagVal) {
-                    makeStyle2(tagVal, aux).copy(PopupStyle::volatile.st().notarize(true))
-                }
+                val style = styleMap[tagVal]
+                // If the style is volatile and misses a ref, we can get away with creating a new style (as opposed to
+                // updating the existing one) because volatile styles are "fresh" and non-user-modified anyway.
+                if (style == null || style.volatile && missesRef(style))
+                    styleMap[tagVal] = makeStyle2(tagVal, aux).copy(PopupStyle::volatile.st().notarize(true))
             }
         }
 
