@@ -545,7 +545,9 @@ class DeferredVideo private constructor(
         private fun materialize(canvas: Canvas, defImg: DeferredImage, y: Double) {
             val shiftedSrc = if (y == 0.0) defImg else
                 DeferredImage(canvas.width, canvas.height.toY()).apply { drawDeferredImage(defImg, y = y.toY()) }
-            shiftedSrc.materialize(canvas, cache, tolerateErroneousMedia = randomAccessDraftMode, staticLayers)
+            shiftedSrc.materialize(
+                canvas, cache, permitTapePreviews = null, tolerateErroneousMedia = randomAccessDraftMode, staticLayers
+            )
         }
 
         /* *****************************************************

@@ -120,6 +120,7 @@ class DeferredImagePanel(
     private var lowResMaterializedContentVersion = 0L
     private val highResMaterializingJobSlot = JobSlot(slots = 2)
     private val lowResMaterializingJobSlot = JobSlot()
+    private val loadFullThumbnailsJobSlot = JobSlot()
 
     private val canvas = CanvasPanel()
     private val xScrollbar = Scrollbar(JScrollBar.HORIZONTAL)
@@ -358,12 +359,13 @@ class DeferredImagePanel(
             // Use max(1, ...) to ensure that the raster image dimensions don't drop to 0.
             val matWidth = max(1, (physicalImageScaling * image.width).roundToInt())
             val matHeight = max(1, (physicalStopY - physicalStartY).roundToInt())
+            val permitTapePreviews = DeferredImage.PermitTapePreviews()
             val materialized = drawToBufferedImage(matWidth, matHeight, grounding, bitmapJ2DBridge) { canvas ->
                 // Paint a scaled version of the deferred image onto the raster image.
                 DeferredImage(matWidth.toDouble(), matHeight.toDouble().toY()).apply {
                     // If only a portion is materialized, scroll the deferred image to that portion.
                     drawDeferredImage(image, y = (-physicalStartY).toY(), universeScaling = physicalImageScaling)
-                }.materialize(canvas, highResCache, tolerateErroneousMedia = true, layers)
+                }.materialize(canvas, highResCache, permitTapePreviews, tolerateErroneousMedia = true, layers)
             }
             SwingUtilities.invokeLater {
                 if (this.materializedContentVersion > contentVersion)
@@ -387,9 +389,22 @@ class DeferredImagePanel(
                 // back to its original value. We do the same thing for this.viewportCenterX/Y.
                 // Note that this quick change will not interfere with other code setting those variables because
                 // they may only be set from the AWT event thread (which we are in right now as well).
-                if (this.contentVersion == contentVersion)
+                if (this.contentVersion == contentVersion) {
                     canvas.repaint()
-                else {
+                    // If tape preview thumbnails were painted, rematerialize once the full thumbnails are available.
+                    if (permitTapePreviews.usedPreviewThumbnails)
+                        loadFullThumbnailsJobSlot.submit(delay = 200) {
+                            SwingUtilities.invokeLater {
+                                if (this.contentVersion == contentVersion)
+                                    permitTapePreviews.loadFullThumbnailsAndThen {
+                                        SwingUtilities.invokeLater {
+                                            if (this.contentVersion == contentVersion)
+                                                rematerialize(contentChanged = false)
+                                        }
+                                    }
+                            }
+                        }
+                } else {
                     val curImage = this._image
                     val curViewportCenterX = this.viewportCenterX
                     val curViewportCenterY = this.viewportCenterY
@@ -424,7 +439,7 @@ class DeferredImagePanel(
             val matHeight = max(1, ceil(scaling * imageHeight).toInt())
             val materialized = drawToBufferedImage(matWidth, matHeight, grounding, bitmapJ2DBridge) { canvas ->
                 image.copy(universeScaling = scaling).materialize(
-                    canvas, lowResCache, tolerateErroneousMedia = true, layers
+                    canvas, lowResCache, DeferredImage.PermitTapePreviews(), tolerateErroneousMedia = true, layers
                 )
             }
             SwingUtilities.invokeLater {

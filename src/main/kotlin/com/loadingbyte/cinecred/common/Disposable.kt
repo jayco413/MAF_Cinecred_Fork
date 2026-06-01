@@ -53,6 +53,10 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
     private val trackerKeys = Collections.newSetFromMap(WeakHashMap<TrackerKey, Boolean>())
     private val cleanable = CLEANER.register(this, CleanerAction(trackerKeys))
 
+    @Suppress("UNCHECKED_CAST")
+    fun getAsync(key: K): CompletableFuture<V>? =
+        DisposableTracker.get(TrackerKey(cacheId, key)) as CompletableFuture<V>?
+
     inline fun get(key: K, crossinline compute: () -> SizedValue<V>): V =
         getAsync(key) { CompletableFuture.completedFuture(compute()) }.get()
 

@@ -42,7 +42,7 @@ import java.lang.foreign.ValueLayout.JAVA_BYTE
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.*
-import java.util.concurrent.Future
+import java.util.concurrent.CompletableFuture
 import javax.xml.XMLConstants.XML_NS_URI
 import kotlin.math.*
 
@@ -110,8 +110,8 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
     fun drawEmbeddedTape(embeddedTape: EmbeddedTape, x: Double, y: Y, layer: Layer = TAPES) {
         // When the deferred image is materialized later, we'll need the tape's thumbnail, so already start loading it.
-        val asyncThumbnail = embeddedTape.tape.getPreviewFrame(embeddedTape.range.start)
-        addInstruction(layer, Instruction.DrawEmbeddedTape(x, y, embeddedTape, asyncThumbnail))
+        embeddedTape.tape.getPreviewFrame(embeddedTape.range.start)
+        addInstruction(layer, Instruction.DrawEmbeddedTape(x, y, embeddedTape))
     }
 
     /**
@@ -121,11 +121,17 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     fun materialize(
         canvas: Canvas,
         cache: CanvasMaterializationCache?,
+        permitTapePreviews: PermitTapePreviews?,
         tolerateErroneousMedia: Boolean,
         layers: List<Layer>
     ) {
         require(canvas.bitmap != null) { "To materialize to an SVG or PDF, use the specialized methods." }
-        val backend = CanvasBackend(canvas, cache as CanvasMaterializationCacheImpl?, tolerateErroneousMedia)
+        val backend = CanvasBackend(
+            canvas,
+            cache as CanvasMaterializationCacheImpl?,
+            permitTapePreviews as PermitTapePreviewsImpl?,
+            tolerateErroneousMedia
+        )
         // If only a portion of the deferred image is materialized, cull the rest to improve performance.
         // Notice that because the culling rect is aligned with the pixel grid, we correctly include all content
         // that at least partially lies inside one of the surface's pixels.
@@ -452,6 +458,24 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     }
 
 
+    sealed interface PermitTapePreviews {
+        val usedPreviewThumbnails: Boolean
+        fun loadFullThumbnailsAndThen(action: Runnable)
+
+        companion object {
+            operator fun invoke(): PermitTapePreviews = PermitTapePreviewsImpl()
+        }
+    }
+
+    private class PermitTapePreviewsImpl : PermitTapePreviews {
+        val fullThumbnailLoaders = mutableListOf<() -> CompletableFuture<*>>()
+        override val usedPreviewThumbnails: Boolean get() = fullThumbnailLoaders.isNotEmpty()
+        override fun loadFullThumbnailsAndThen(action: Runnable) {
+            CompletableFuture.allOf(*fullThumbnailLoaders.map { it() }.toTypedArray()).thenRun(action)
+        }
+    }
+
+
     private sealed interface Instruction {
 
         fun materialize(
@@ -588,7 +612,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         }
 
         class DrawEmbeddedTape(
-            val x: Double, val y: Y, val embeddedTape: EmbeddedTape, val asyncThumbnail: Future<Picture.Raster?>
+            val x: Double, val y: Y, val embeddedTape: EmbeddedTape,
         ) : Instruction {
             override fun materialize(
                 backend: MaterializationBackend,
@@ -598,7 +622,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 val y = y + universeScaling * this.y.resolve(elasticScaling)
                 val (w, h) = embeddedTape.resolution
                 if (culling == null || culling.intersects(x, y, universeScaling * w, universeScaling * h))
-                    backend.materializeEmbeddedTape(x, y, universeScaling, embeddedTape, asyncThumbnail)
+                    backend.materializeEmbeddedTape(x, y, universeScaling, embeddedTape)
             }
         }
 
@@ -615,26 +639,38 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         ) {
         }
 
-        fun materializeEmbeddedTape(
-            x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape, asyncThumbnail: Future<Picture.Raster?>
-        )
+        fun materializeEmbeddedTape(x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape)
 
     }
 
 
     /** Materializes tapes by rendering the tape's thumbnail or a "missing media" placeholder. */
-    private abstract class TapeThumbnailBackend(private val tolerateErroneousTapes: Boolean) : MaterializationBackend {
+    private abstract class TapeThumbnailBackend(
+        private val permitTapePreviews: PermitTapePreviewsImpl?,
+        private val tolerateErroneousTapes: Boolean
+    ) : MaterializationBackend {
 
-        override fun materializeEmbeddedTape(
-            x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape, asyncThumbnail: Future<Picture.Raster?>
-        ) {
-            val thumbnail = try {
-                asyncThumbnail.get()
+        override fun materializeEmbeddedTape(x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape) {
+            var thumbnail: Picture.Raster? = null
+            var preview = false
+            try {
+                val tape = embeddedTape.tape
+                val timecode = embeddedTape.range.start
+                if (permitTapePreviews == null)
+                    thumbnail = tape.getCachedFrame(timecode).get()
+                else {
+                    thumbnail = tape.getFrameIfCached(timecode)
+                    if (thumbnail == null) {
+                        thumbnail = tape.getPreviewFrame(timecode).get()
+                        preview = true
+                        permitTapePreviews.fullThumbnailLoaders.add { tape.getCachedFrame(timecode) }
+                    }
+                }
             } catch (e: Exception) {
                 if (!tolerateErroneousTapes)
                     throw e
-                null
             }
+
             val (w, h) = embeddedTape.resolution
             if (thumbnail != null) {
                 val (picW, picH) = embeddedTape.resolutionBeforeRotation
@@ -647,13 +683,15 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                     floor(cropMulY * embeddedTape.cropTop), floor(cropMulY * embeddedTape.cropBottom),
                     false, embeddedTape.flipH, embeddedTape.flipV, embeddedTape.rotation.toDouble()
                 )
-                // Set the draft=true, which sets the interpolation mode to nearest neighbor to achieve a "pixelated
+                // Supplying draft=true sets the interpolation mode to nearest neighbor to achieve a "pixelated
                 // preview" effect and thereby clearly communicate that the thumbnail is just a preview.
-                materializeEmbeddedPicture(x, y, scaling, embeddedThumbnail, draft = true)
+                materializeEmbeddedPicture(x, y, scaling, embeddedThumbnail, draft = preview)
 
-                val previewIndicator = Tape.previewIndicator(x, y, w * scaling, h * scaling)
-                val coat = Coat.Plain(Color4f.TAPE_PREVIEW)
-                materializeShape(previewIndicator, coat, fill = true, dash = false, blurRadius = 0.0)
+                if (preview) {
+                    val previewIndicator = Tape.previewIndicator(x, y, w * scaling, h * scaling)
+                    val coat = Coat.Plain(Color4f.TAPE_PREVIEW)
+                    materializeShape(previewIndicator, coat, fill = true, dash = false, blurRadius = 0.0)
+                }
             } else
                 materializeMissingMedia(w * scaling, h * scaling, AffineTransform.getTranslateInstance(x, y))
         }
@@ -664,8 +702,9 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     private class CanvasBackend(
         private val canvas: Canvas,
         private val cache: CanvasMaterializationCacheImpl?,
+        permitTapePreviews: PermitTapePreviewsImpl?,
         private val tolerateErroneousMedia: Boolean
-    ) : TapeThumbnailBackend(tolerateErroneousMedia) {
+    ) : TapeThumbnailBackend(permitTapePreviews, tolerateErroneousMedia) {
 
         override fun materializeShape(shape: Shape, coat: Coat, fill: Boolean, dash: Boolean, blurRadius: Double) {
             if (fill)
@@ -763,7 +802,9 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     // Note: SVG blending is always in sRGB and there's no way to change that, so this backend doesn't accept a color
     // space parameter. Technically, one could use SVG filters to at least blend in linear light, but that's very
     // convoluted and still doesn't give us general color space support.
-    private class SVGBackend(private val svg: Element) : TapeThumbnailBackend(tolerateErroneousTapes = false) {
+    private class SVGBackend(
+        private val svg: Element
+    ) : TapeThumbnailBackend(permitTapePreviews = null, tolerateErroneousTapes = false) {
 
         private val doc get() = svg.ownerDocument
 
@@ -1057,7 +1098,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         private val tracker: PDFTrackerImpl,
         private val page: PDPage,
         private val cs: PDPageContentStream
-    ) : TapeThumbnailBackend(tolerateErroneousTapes = false) {
+    ) : TapeThumbnailBackend(permitTapePreviews = null, tolerateErroneousTapes = false) {
 
         private val csHeight = page.mediaBox.height
         private var fontKeyCtr = 1
@@ -1589,9 +1630,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
         val collected = mutableListOf<PlacedTape>()
 
-        override fun materializeEmbeddedTape(
-            x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape, asyncThumbnail: Future<Picture.Raster?>
-        ) {
+        override fun materializeEmbeddedTape(x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape) {
             val res = embeddedTape.resolutionBeforeRotation
             val width = (res.widthPx * scaling).roundToInt()
             val height = (res.heightPx * scaling).roundToInt()

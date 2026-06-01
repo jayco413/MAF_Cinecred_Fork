@@ -125,6 +125,40 @@ class Tape private constructor(
     }
 
 
+    /* *********************************
+       ********** FRAME CACHE **********
+       ********************************* */
+
+    private val frameCache = DisposableCache<Timecode, Picture.Raster>()
+
+    /**
+     * The returned picture must neither be closed nor modified by the caller. However, this class can close it at any
+     * point, hence callers should consider creating a view.
+     */
+    fun getCachedFrame(timecode: Timecode): CompletableFuture<Picture.Raster> {
+        if (timecode !in availableRange)
+            return CompletableFuture.failedFuture(IndexOutOfBoundsException("Timecode $timecode is out of bounds."))
+
+        return frameCache.getAsync(timecode) {
+            CompletableFuture.supplyAsync({
+                try {
+                    val pic = SequentialReader(timecode).use { r -> Picture.Raster.convert(r.read(timecode).bitmap) }
+                    SizedValue(pic, pic.bitmap.bytes, destroy = pic::close)
+                } catch (e: Exception) {
+                    LOGGER.error("Could not get full frame at timecode {} for tape '{}'.", timecode, fileOrDir.name, e)
+                    throw e
+                }
+            }, GLOBAL_THREAD_POOL)
+        }
+    }
+
+    /** @see [getCachedFrame] */
+    fun getFrameIfCached(timecode: Timecode): Picture.Raster? {
+        val future = frameCache.getAsync(timecode)
+        return if (future != null && future.isDone) future.get() else null
+    }
+
+
     /* *****************************
        ********** PREVIEW **********
        ***************************** */
@@ -281,6 +315,7 @@ class Tape private constructor(
     /** Also closes all tapes created via [dependentReinterpretedTape]. */
     override fun close() {
         reinterpretedTapes.getAll().forEach(Tape::close)
+        frameCache.close()
         fileSeqPreviewCache?.close()
         containerPreviewCache?.close()
     }

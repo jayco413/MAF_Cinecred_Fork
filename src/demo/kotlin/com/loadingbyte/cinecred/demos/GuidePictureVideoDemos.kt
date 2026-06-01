@@ -39,7 +39,6 @@ val GUIDE_PICTURE_VIDEO_DEMOS
         GuidePictureVideoFlipAndRotateDemo,
         GuidePictureVideoPictureCropBlankSpaceDemo,
         GuidePictureVideoVideoMovingDemo,
-        GuidePictureVideoVideoPreviewDemo,
         GuidePictureVideoVideoSliceDemo,
         GuidePictureVideoVideoLoopDemo,
         GuidePictureVideoVideoTemporallyJustifyDemo,
@@ -237,11 +236,6 @@ object GuidePictureVideoPictureCropBlankSpaceDemo : StyleSettingsDemo<PictureSty
 object GuidePictureVideoVideoMovingDemo : VideoDemo("$DIR/video-moving", Format.VIDEO_GIF) {
     override val isLocaleSensitive get() = false
     override fun credits() = TAPE_SPREADSHEET.parseCreditsTS(TAPE_STYLE)
-}
-
-
-object GuidePictureVideoVideoPreviewDemo : PageDemo("$DIR/video-preview", Format.PNG, pageGuides = true) {
-    override fun credits() = listOf(TAPE_SPREADSHEET.parseCreditsCS())
 }
 
 
