@@ -8,6 +8,7 @@ import com.formdev.flatlaf.FlatIconColors
 import com.formdev.flatlaf.FlatSystemProperties
 import com.formdev.flatlaf.util.HSLColor
 import com.formdev.flatlaf.util.SystemInfo
+import com.formdev.flatlaf.util.UIScale
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.DeckLink
 import com.loadingbyte.cinecred.ui.UIFactory
@@ -297,7 +298,10 @@ Locale: ${Locale.getDefault().toLanguageTag()}
 
     private fun sendReport(header: String) {
         val win = FocusManager.getCurrentKeyboardFocusManager().activeWindow
-        val s = getSystemScaleFactor(
+        // We can't use our own version of getSystemScaleFactor(), as that is defined in Common.kt, which loads a lot of
+        // other classes if it wasn't yet initialized. That loading messes with our startup sequence and crashes the
+        // program again before we can even open this error window.
+        val s = UIScale.getSystemScaleFactor(
             win?.graphicsConfiguration
                 ?: GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration
         )

@@ -978,13 +978,12 @@ private fun TapeStyle.toEmbedded(styling: Styling): DeferredImage.EmbeddedTape? 
 
 private fun TapeStyle.createEmbedded(styling: Styling): DeferredImage.EmbeddedTape? {
     val tap = reinterpretTape(this) ?: return null
-    val rng: OpenEndRange<Timecode>
     try {
         tap.loadMetadata()  // Make sure that if the tape's metadata fails to load, the exception is thrown here.
-        rng = tap.availableRange
     } catch (_: IllegalStateException) {
         return null
     }
+    val rng = tap.availableRange
     val fadeInTransition = styling.transitionStyles.find { it.name == fadeInTransitionStyleName }?.graph
         ?: Transition.LINEAR
     val fadeOutTransition = styling.transitionStyles.find { it.name == fadeOutTransitionStyleName }?.graph

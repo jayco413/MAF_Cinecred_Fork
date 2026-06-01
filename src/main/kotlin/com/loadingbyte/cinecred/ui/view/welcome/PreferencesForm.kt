@@ -18,6 +18,7 @@ class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
             listOf(LocaleWish.System) + TRANSLATED_LOCALES
                 .sortedWithCollator(ROOT_CASE_INSENSITIVE_COLLATOR) { it.getDisplayName(it) }
                 .map(LocaleWish::Specific),
+            widthSpec = WidthSpec.SQUEEZE,
             toString = { wish ->
                 when (wish) {
                     is LocaleWish.System -> l10n("ui.preferences.uiLocaleWishSystem")

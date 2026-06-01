@@ -721,7 +721,7 @@ class BitmapConverter(
                     if (inplace) unpremultiplyDontPutAlpha(src, dst) else unpremultiply(src, dst)
                 !promiseOpaque && srcAlpha == PREMULTIPLIED && dstAlpha == OPAQUE ->
                     unpremultiplyDontPutAlpha(src, dst)
-                !src.sharesStorageWith(dst) ->
+                !inplace ->
                     src.reinterpretedView(dst.spec).use(dst::blit)
             }
         }

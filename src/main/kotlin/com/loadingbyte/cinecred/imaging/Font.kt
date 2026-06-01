@@ -23,7 +23,6 @@ import kotlin.io.path.*
 class Font private constructor(private val hbFace: MemorySegment) {
 
     val name: String = lookupName(HB_OT_NAME_ID_FULL_NAME(), HB_LANGUAGE_INVALID())
-    val family: String = lookupName(HB_OT_NAME_ID_FONT_FAMILY(), HB_LANGUAGE_INVALID())
 
     val familyMap: Map<Locale, String>
     val subfamilyMap: Map<Locale, String>
@@ -293,7 +292,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
                     // If a FontFormatException or IOException occurs, just skip over the problematic font file.
                     .flatMap(::tryReadSystemFont)
                     // Internal macOS fonts start with a dot; we do not want to include those.
-                    .filter { !it.family.startsWith('.') && !it.name.startsWith('.') }
+                    .filter { !it.name.startsWith('.') }
                     .toList()
             } else {
                 GraphicsEnvironment.getLocalGraphicsEnvironment().allFonts

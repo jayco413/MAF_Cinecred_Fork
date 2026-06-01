@@ -322,7 +322,7 @@ class DeferredVideo private constructor(
         }
 
         private val numFrames = video.numFrames
-        private val progressiveVideo = video.copy(
+        private val progressiveVideo = video.copy(  // Freezes the DeferredVideo instance.
             fpsScaling = if (userSpec.scan == Bitmap.Scan.PROGRESSIVE) 1 else 2,
             roundShifts = randomAccessDraftMode
         )

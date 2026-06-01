@@ -27,6 +27,8 @@ import java.util.*
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JComponent
 import javax.swing.UIManager
 import kotlin.io.path.*
@@ -53,9 +55,11 @@ val USER_AGENT =
 
 val LOGGER: Logger = LoggerFactory.getLogger("Cinecred")
 val CLEANER: Cleaner = Cleaner.create()
-val GLOBAL_THREAD_POOL: ExecutorService = Executors.newCachedThreadPool { runnable ->
-    Thread(runnable, "GlobalThreadPool").apply { isDaemon = true }
-}
+val GLOBAL_THREAD_POOL: ExecutorService = Executors.newCachedThreadPool(object : ThreadFactory {
+    private val ctr = AtomicInteger(1)
+    override fun newThread(r: Runnable) =
+        Thread(r, "GlobalThreadPool-${ctr.getAndIncrement()}").apply { isDaemon = true }
+})
 
 
 enum class Severity { INFO, WARN, MIGRATE, ERROR }
@@ -154,8 +158,8 @@ fun execProcess(
     logger: Logger = LoggerFactory.getLogger(cmd[0])
 ) {
     val process = ProcessBuilder(cmd).apply { env?.let(environment()::putAll) }.start()
-    GLOBAL_THREAD_POOL.submit { process.inputReader().lines().forEach { logger.info(it) } }
-    GLOBAL_THREAD_POOL.submit { process.errorReader().lines().forEach { logger.error(it) } }
+    GLOBAL_THREAD_POOL.submit { process.inputReader().use { it.lines().forEach(logger::info) } }
+    GLOBAL_THREAD_POOL.submit { process.errorReader().use { it.lines().forEach(logger::error) } }
     if (stdin != null)
         process.outputWriter().use { it.write(stdin) }
     val exitCode = process.waitFor()

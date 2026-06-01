@@ -616,8 +616,9 @@ private fun basicEmbeddedTape(style: TapeStyle, width: Int?, height: Int?) =
                 style.cropLeftPx, style.cropRightPx, style.cropTopPx, style.cropBottomPx
             )
         }
-    } catch (_: RuntimeException) {
-        // Catches IllegalStateException and IllegalArgumentException.
+    } catch (_: IllegalArgumentException) {
+        null
+    } catch (_: IllegalStateException) {
         null
     }
 

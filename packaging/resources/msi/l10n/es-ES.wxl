@@ -4,6 +4,6 @@
   <String Id="Slogan">@SLOGAN_ES@</String>
   <String Id="ShortcutDlgTitle">{\WixUI_Font_Title}Accesos directos</String>
   <String Id="ShortcutDlgDescription">Seleccione los accesos directos que desea crear.</String>
-  <String Id="ShortcutDlgDesktop">Crear un acceso directo al escritorio</String>
-  <String Id="ShortcutDlgStartMenu">Crear un acceso directo al menú Inicio</String>
+  <String Id="ShortcutDlgDesktop">Crear un acceso directo en el escritorio</String>
+  <String Id="ShortcutDlgStartMenu">Crear un acceso directo en el menú Inicio</String>
 </WixLocalization>

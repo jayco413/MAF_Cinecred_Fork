@@ -202,7 +202,7 @@ class ToolbarDockable(private val toolbarCtrl: ToolbarCtrlComms, playbackCtrl: P
                 []
         """
         val row2 = JPanel(MigLayout("insets 0", row2Cols)).apply {
-            add(runtimeDescLabel, "wmin min(pref,60)")
+            add(runtimeDescLabel, "wmin min(pref,50)")
             add(runtimeLabel)
             add(JSeparator(JSeparator.VERTICAL), "growy, wmin pref")
             add(windowLayoutsButton)

@@ -79,7 +79,7 @@ sealed interface Picture : AutoCloseable {
         val bitmap: Bitmap
     ) : Picture {
 
-        private val nonBlankBoundaryPointsCache = DisposableCache<Rectangle, DoubleArray>()
+        private val nonBlankBoundaryPointsCache = lazy { DisposableCache<Rectangle, DoubleArray>() }
 
         init {
             val pixFmtCode = bitmap.spec.representation.pixelFormat.code
@@ -108,7 +108,8 @@ sealed interface Picture : AutoCloseable {
             } catch (_: IllegalStateException) {
                 // If the bitmap is used right now, let the GC collect and close it later.
             }
-            nonBlankBoundaryPointsCache.close()
+            if (nonBlankBoundaryPointsCache.isInitialized())
+                nonBlankBoundaryPointsCache.value.close()
         }
 
         override fun nonBlankBounds(crop: Rectangle2D?, transform: AffineTransform?): Rectangle2D? {
@@ -119,7 +120,7 @@ sealed interface Picture : AutoCloseable {
             if (!bitmap.spec.representation.pixelFormat.hasAlpha)
                 return Rectangle(crop.width, crop.height).transformedBy(transform).bounds
 
-            val boundaryPoints = nonBlankBoundaryPointsCache.get(crop) {
+            val boundaryPoints = nonBlankBoundaryPointsCache.value.get(crop) {
                 val array = findBoundaryPoints(bitmap, crop)
                 SizedValue(array, array.size * 8L)
             }

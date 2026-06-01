@@ -147,6 +147,7 @@ private class WindowLayoutListPreference(override val key: String) :
 
     private fun parseTreesString(str: String): List<DockingFrame.Tree> {
         val trees = mutableListOf<DockingFrame.Tree>()
+        require(str.startsWith("v1 "))
         var idx = str.indexOf(' ') + 1
         while (idx < str.lastIndex) {
             idx += 2

@@ -315,6 +315,7 @@ class Tape private constructor(
     /** Also closes all tapes created via [dependentReinterpretedTape]. */
     override fun close() {
         reinterpretedTapes.getAll().forEach(Tape::close)
+        reinterpretedTapes.close()
         frameCache.close()
         fileSeqPreviewCache?.close()
         containerPreviewCache?.close()
@@ -552,7 +553,7 @@ class Tape private constructor(
 
 
     private interface PreviewCache<I : Any> : AutoCloseable {
-        /** The returned future fails with a [ClosedException] if the cache is closed. */
+        /** The returned future fails with an [IllegalStateException] if the cache is closed. */
         fun getItem(point: Int): CompletableFuture<I>
     }
 

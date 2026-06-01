@@ -346,7 +346,10 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     }
 
 
-    /** @throws IllegalStateException */
+    /**
+     * @throws IllegalArgumentException
+     * @throws IllegalStateException
+     */
     class EmbeddedTape(
         /** Note: Accessing the metadata of this tape is guaranteed to not throw exceptions. */
         val tape: Tape,

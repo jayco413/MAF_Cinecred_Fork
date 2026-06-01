@@ -135,8 +135,10 @@ class Bitmap private constructor(
             return true
         }
 
+    /** Returns whether this bitmap shares any portion of memory with the other bitmap. */
     fun sharesStorageWith(other: Bitmap): Boolean =
-        bufferSegment != null && bufferSegment == other.bufferSegment
+        bufferSegment != null && other.bufferSegment != null &&
+                bufferSegment.asOverlappingSlice(other.bufferSegment).isPresent
 
     /** Copies the bitmap object but shares the data. The new object can be [close]d without closing this one. */
     fun view(): Bitmap = reinterpretedView(spec)

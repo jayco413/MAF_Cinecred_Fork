@@ -410,7 +410,7 @@ class ProjectController(
         // Remove automatically added styles that aren't used anymore.
         for (idx in styles.lastIndex downTo 0) {
             val style = styles[idx]
-            if (style.volatile && style !in usedStyles) {
+            if (style.volatile && usedStyles.none { it === style }) {
                 if (updatedStyles == null)
                     updatedStyles = styles.toMutableList()
                 updatedStyles.removeAt(idx)
