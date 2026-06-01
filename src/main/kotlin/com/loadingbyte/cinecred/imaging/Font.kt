@@ -17,10 +17,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.*
-import kotlin.io.path.Path
-import kotlin.io.path.exists
-import kotlin.io.path.isRegularFile
-import kotlin.io.path.listDirectoryEntries
+import kotlin.io.path.*
 
 
 class Font private constructor(private val hbFace: MemorySegment) {
@@ -190,34 +187,53 @@ class Font private constructor(private val hbFace: MemorySegment) {
     companion object {
 
         /** @throws Exception */
-        fun read(file: Path): List<Font> {
+        fun read(file: Path, mmap: Boolean): List<Font> {
             // Note: We use shared arenas because the cleaner thread will call the close() method.
             val arena = Arena.ofShared()
+            var tmpFile: Path? = null
 
             val hbBlob: MemorySegment
             try {
-                // Read the file into an off-heap MemorySegment. Note that we don't mmap the file, because the user might
-                // change it under us.
+                // If the file is empty, return early to avoid edge cases.
+                if (file.fileSize() == 0L) {
+                    arena.close()
+                    return emptyList()
+                }
+
+                // If the file is not on the OS file system, and instead in, e.g., a ZIP file, but we should memory-map
+                // it, copy it to a temporary file first.
+                if (mmap && file.fileSystem.provider().scheme != "file") {
+                    tmpFile = createTempFile(tmpDir)
+                    file.copyTo(tmpFile, overwrite = true)
+                }
+
+                // Read the file into an off-heap MemorySegment.
                 val seg: MemorySegment
-                FileChannel.open(file, StandardOpenOption.READ).use { fc ->
-                    seg = arena.allocate(fc.size())
-                    val buf = seg.asByteBuffer()
-                    while (fc.read(buf) > 0);
+                FileChannel.open(tmpFile ?: file, StandardOpenOption.READ).use { fc ->
+                    if (mmap)
+                        seg = fc.map(FileChannel.MapMode.READ_ONLY, 0, fc.size(), arena)
+                    else {
+                        seg = arena.allocate(fc.size())
+                        val buf = seg.asByteBuffer()
+                        while (fc.read(buf) > 0);
+                    }
                 }
 
                 // Create a blob that wraps the file data. When the blob's reference count reaches zero, free the data.
                 val destroyBlobFunc = hb_destroy_func_t.allocate({
                     try {
                         arena.close()
+                        tmpFile?.deleteIfExists()
                     } catch (t: Throwable) {
                         // We have to catch all exceptions because if one escapes, a segfault happens.
                         runCatching { LOGGER.error("Cannot close native memory resource scope", t) }
                     }
                 }, arena)
-                hbBlob =
-                    hb_blob_create(seg, seg.byteSize().toInt(), HB_MEMORY_MODE_WRITABLE(), NULL, destroyBlobFunc)
+                val mode = if (mmap) HB_MEMORY_MODE_READONLY() else HB_MEMORY_MODE_WRITABLE()
+                hbBlob = hb_blob_create(seg, seg.byteSize().toInt(), mode, NULL, destroyBlobFunc)
             } catch (t: Throwable) {
                 arena.close()
+                tmpFile?.deleteIfExists()
                 throw t
             }
 
@@ -239,9 +255,21 @@ class Font private constructor(private val hbFace: MemorySegment) {
             return fonts
         }
 
+        private val tmpDir by lazy {
+            val tmpDir = createTempDirectory("cinecred-fonts")
+            Runtime.getRuntime().addShutdownHook(Thread({
+                try {
+                    tmpDir.toFile().deleteRecursively()
+                } catch (_: Exception) {
+                    // Ignore
+                }
+            }, "FontFileDeleter"))
+            tmpDir
+        }
+
         // Load the fonts that are bundled with this program.
         val BUNDLED: List<Font> = useResourcePath("/fonts") { fontsDir ->
-            fontsDir.listDirectoryEntries().flatMap(::read)
+            fontsDir.listDirectoryEntries().flatMap { file -> read(file, mmap = true) }
         }
 
         // Load the fonts that are present on the system. We only want to include TrueType/OpenType fonts, because:
@@ -276,7 +304,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
 
         private fun tryReadSystemFont(file: Path) =
             try {
-                read(file)
+                read(file, mmap = true)
             } catch (_: Exception) {
                 LOGGER.warn("Skipping system font '{}' because it cannot be read.", file)
                 emptyList()

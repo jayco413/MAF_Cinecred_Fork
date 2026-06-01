@@ -282,7 +282,8 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
                 reloadOrRemoveAuxFileOrDirLater(fileOrDir, MODIFY, attempt + 1)
             else {
                 val newFonts = try {
-                    Font.read(fileOrDir)
+                    // Don't memory-map project fonts because the user might modify the font files in unexpected ways.
+                    Font.read(fileOrDir, mmap = false)
                 } catch (e: Exception) {
                     LOGGER.error("Font '{}' cannot be read.", fileOrDir.name, e)
                     emptyList()

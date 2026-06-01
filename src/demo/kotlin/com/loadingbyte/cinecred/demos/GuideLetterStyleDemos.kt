@@ -58,7 +58,7 @@ object GuideLetterStyleVariationsDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::variations.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        val font = useResourcePath("/demoFonts/RobotoFlex-ASCII.ttf", Font::read).single()
+        val font = useResourcePath("/demoFonts/RobotoFlex-ASCII.ttf") { Font.read(it, mmap = true) }.single()
         this += PRESET_LETTER_STYLE.copy(name = "Demo", font = FontRef(font))
         for (step in 0..100)
             this += last().copy(variations = FontVariations(last().variations.put("wght", 400.0 + step * 5)))

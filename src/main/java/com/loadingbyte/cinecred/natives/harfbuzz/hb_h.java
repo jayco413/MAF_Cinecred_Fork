@@ -594,6 +594,15 @@ public class hb_h extends hb_h$shared {
     public static int HB_SCRIPT_INVALID() {
         return HB_SCRIPT_INVALID;
     }
+    private static final int HB_MEMORY_MODE_READONLY = (int)1L;
+    /**
+     * {@snippet lang=c :
+     * enum <anonymous>.HB_MEMORY_MODE_READONLY = 1
+     * }
+     */
+    public static int HB_MEMORY_MODE_READONLY() {
+        return HB_MEMORY_MODE_READONLY;
+    }
     private static final int HB_MEMORY_MODE_WRITABLE = (int)2L;
     /**
      * {@snippet lang=c :

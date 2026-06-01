@@ -200,6 +200,7 @@ abstract class Jextract : DefaultTask() {
             "HB_DIRECTION_RTL",
             "HB_FEATURE_GLOBAL_END",
             "HB_FEATURE_GLOBAL_START",
+            "HB_MEMORY_MODE_READONLY",
             "HB_MEMORY_MODE_WRITABLE",
             "HB_SCRIPT_ARABIC",
             "HB_SCRIPT_ARMENIAN",
