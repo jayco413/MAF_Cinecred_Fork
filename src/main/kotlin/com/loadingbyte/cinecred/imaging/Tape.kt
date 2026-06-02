@@ -274,16 +274,15 @@ class Tape private constructor(
     }
 
     /**
-     * The returned future resolves to null when the timecode is out of bounds, and may fail with any exception.
      * The returned picture must neither be closed nor modified by the caller. However, this class can close it at any
      * point, hence callers should consider creating a view.
      */
-    fun getPreviewFrame(timecode: Timecode): CompletableFuture<Picture.Raster?> {
+    fun getPreviewFrame(timecode: Timecode): CompletableFuture<Picture.Raster> {
         if (timecode !in availableRange)
-            return CompletableFuture.completedFuture(null)
+            return CompletableFuture.failedFuture(IndexOutOfBoundsException("Timecode $timecode is out of bounds."))
 
         if (fileSeq) {
-            return fileSeqPreviewCache!!.getItem((timecode as Timecode.Frames).frames).thenApply { it.getOrNull() }
+            return fileSeqPreviewCache!!.getItem((timecode as Timecode.Frames).frames).thenApply { opt -> opt.get() }
         } else {
             val previewFrame = getContainerPreviewFrame(timecode, (timecode as Timecode.Clock).seconds)
             // For video files, start loading in the next second if it's not already loaded to ensure fluid playback.
@@ -293,7 +292,7 @@ class Tape private constructor(
         }
     }
 
-    private fun getContainerPreviewFrame(timecode: Timecode, curSeconds: Int): CompletableFuture<Picture.Raster?> =
+    private fun getContainerPreviewFrame(timecode: Timecode, curSeconds: Int): CompletableFuture<Picture.Raster> =
         containerPreviewCache!!.getItem(curSeconds).thenCompose { item ->
             val idx = item.binarySearchBy(timecode, selector = RasterPictureAndClock::clock)
             when {

@@ -743,7 +743,7 @@ class DeferredVideo private constructor(
                         try {
                             source = Source.PREVIEW
                             previewTape = embeddedTape.tape
-                            origSpec = previewTape.getPreviewFrame(resp.timecode /* random */).get()!!.bitmap.spec
+                            origSpec = previewTape.getPreviewFrame(resp.timecode /* random */).get().bitmap.spec
                             val tapeRes = previewTape.spec.resolution
                             val tapeCrop = embeddedTape.crop
                             val cropMulX = origSpec.resolution.widthPx / tapeRes.widthPx.toDouble()
@@ -907,7 +907,7 @@ class DeferredVideo private constructor(
                     Source.PREVIEW -> try {
                         // For previews, create a view immediately because preview bitmaps might be closed at any time.
                         // If the bitmap is already closed, the exception is caught and the missing bitmap is used.
-                        previewTape.getPreviewFrame(timecode).get()!!.bitmap.view()
+                        previewTape.getPreviewFrame(timecode).get().bitmap.view()
                     } catch (_: Exception) {
                         // Also create a view here since the code below expects to be able to close origBitmap if the
                         // source is PREVIEW.
