@@ -219,13 +219,17 @@ class ProjectController(
     // END OF INITIALIZATION PROCEDURE
 
     private fun process(input: Input) {
+        // Execute the reading and drawing in another thread to not block the UI thread.
+        processingJobSlot.submit { doneProcessing(runProcessing(input)) }
+    }
+
+    private fun runProcessing(input: Input): ProcessingResult {
         val (creditsWorkbooks, _, projectFonts, pictureLoaders, tapes, origStyling) = input
         // If something hasn't been initialized yet, abort reading and drawing the credits.
         if (projectFonts == null || pictureLoaders == null || tapes == null || origStyling == null)
-            return doneProcessing(input, emptyList(), emptyList(), null, null)
+            return ProcessingResult(input, emptyList(), emptyList(), null, null)
 
-        // Execute the reading and drawing in another thread to not block the UI thread.
-        processingJobSlot.submit {
+        try {
             var styling: Styling = origStyling
 
             // Update references to auxiliary files (fonts, pictures, and tapes) in the styling.
@@ -253,7 +257,7 @@ class ProjectController(
             val earlyConstraintViolations = verifyConstraints(styling)
             if (earlyConstraintViolations.any { it.severity == ERROR }) {
                 val error = ParserMsg(null, null, null, null, null, ERROR, l10n("ui.edit.stylingError"))
-                return@submit doneProcessing(input, listOf(error), earlyConstraintViolations, styling, null)
+                return ProcessingResult(input, listOf(error), earlyConstraintViolations, styling, null)
             }
 
             // Parse each credits workbook.
@@ -368,7 +372,12 @@ class ProjectController(
             val project = Project(styling, creditsBooks.toPersistentList())
             val drawnProject = DrawnProject(project, drawnCreditsBooks.toPersistentList())
 
-            doneProcessing(input, log, constraintViolations, styling, drawnProject)
+            return ProcessingResult(input, log, constraintViolations, styling, drawnProject)
+        } catch (e: Exception) {
+            // If an error occurs during processing, inform the user in the log instead of crashing the program.
+            LOGGER.error("Could not process and draw the project '{}'.", projectDir, e)
+            val error = ParserMsg(null, null, null, null, null, ERROR, e.userNotification)
+            return ProcessingResult(input, listOf(error), emptyList(), null, null)
         }
     }
 
@@ -452,13 +461,16 @@ class ProjectController(
         return clearedStyles?.toPersistentList()
     }
 
-    private fun doneProcessing(
-        input: Input,
-        processingLog: List<ParserMsg>,
-        constraintViolations: List<ConstraintViolation>,
-        styling: Styling?,
-        drawnProject: DrawnProject?
-    ) {
+    private data class ProcessingResult(
+        val input: Input,
+        val processingLog: List<ParserMsg>,
+        val constraintViolations: List<ConstraintViolation>,
+        val styling: Styling?,
+        val drawnProject: DrawnProject?
+    )
+
+    private fun doneProcessing(processingResult: ProcessingResult) {
+        val (input, processingLog, constraintViolations, styling, drawnProject) = processingResult
         SwingUtilities.invokeLater {
             val logCmp = compareByDescending(ParserMsg::severity)
                 .thenComparingInt { msg -> input.creditsWorkbooks.indexOfFirst { it.fileName == msg.fileName } }
