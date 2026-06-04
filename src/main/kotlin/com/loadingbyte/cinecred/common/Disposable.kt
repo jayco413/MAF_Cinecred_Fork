@@ -98,6 +98,9 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
 }
 
 
+fun disposableBytes(): Long = DisposableTracker.bytes()
+
+
 private object DisposableTracker {
 
     // We want to limit memory-tracked objects to use at most 20% of the available memory.
@@ -107,6 +110,9 @@ private object DisposableTracker {
     private val lock = ReentrantLock()
     private val map = LinkedHashMap<Any, CompletableFuture<SizedValue<*>>>(16, 0.75f, true)
     private var curBytes = 0L
+
+    fun bytes(): Long =
+        lock.withLock { curBytes }
 
     fun get(key: Any): CompletableFuture<*>? =
         lock.withLock {

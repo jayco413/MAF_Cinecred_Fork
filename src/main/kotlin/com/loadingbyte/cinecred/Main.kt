@@ -17,6 +17,8 @@ import com.loadingbyte.cinecred.ui.comms.MasterCtrlComms
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
 import com.loadingbyte.cinecred.ui.helper.*
 import com.oracle.si.Singleton
+import de.siegmar.fastcsv.reader.CsvReader
+import de.siegmar.fastcsv.reader.StringArrayHandler
 import net.miginfocom.layout.PlatformDefaults
 import net.miginfocom.swing.MigLayout
 import org.bytedeco.ffmpeg.avutil.LogCallback
@@ -33,6 +35,7 @@ import java.awt.event.MouseEvent
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
 import java.lang.foreign.ValueLayout.JAVA_INT
+import java.lang.management.ManagementFactory
 import java.net.URI
 import java.net.URLEncoder
 import java.util.*
@@ -265,11 +268,11 @@ private fun openUI(args: Array<String>) {
 private object UncaughtHandler : Thread.UncaughtExceptionHandler {
 
     override fun uncaughtException(t: Thread, e: Throwable) {
+        if (hasCrashed.getAndSet(true))
+            return
         // Immediately collect contextual information before we do anything else.
         val header = collectReportHeader()
         LOGGER.error("Uncaught exception. Will terminate the program.", e)
-        if (hasCrashed.getAndSet(true))
-            return
         SwingUtilities.invokeLater {
             sendReport(header)
             // Once all frames have been disposed, no more non-daemon threads are running and hence Java will terminate.
@@ -279,22 +282,37 @@ private object UncaughtHandler : Thread.UncaughtExceptionHandler {
     }
 
     private fun collectReportHeader(): String {
-        val rt = Runtime.getRuntime()
-        val freeMem = rt.freeMemory()
-        val totalMem = rt.totalMemory()
-        val maxMem = rt.maxMemory()
-        val mb = 1024 * 1024
+        val heap = ManagementFactory.getMemoryMXBean().heapMemoryUsage
+
+        var rss: Long? = null
+        val pid = ProcessHandle.current().pid()
+        if (SystemInfo.isWindows) {
+            val process = ProcessBuilder(listOf("tasklist", "/fo", "csv", "/nh", "/fi", "pid eq $pid")).start()
+            if (process.waitFor() == 0)
+                rss = CsvReader.builder().build(StringArrayHandler.of(), process.inputReader())
+                    .use { it.firstOrNull()?.getOrNull(4) }
+                    ?.removeSuffix(" K")?.replace(".", "")?.replace(",", "")?.toLongOrNull()?.times(1024)
+        } else {
+            val process = ProcessBuilder(listOf("ps", "-o", "rss=", "-p", pid.toString())).start()
+            if (process.waitFor() == 0)
+                rss = process.inputReader().use { it.readText() }.trim().toLongOrNull()?.times(1024)
+        }
+
         return """---- SYSTEM INFO ----
 Cinecred: $VERSION
 JVM: ${System.getProperty("java.vm.vendor")} ${System.getProperty("java.vm.name")} ${System.getProperty("java.vm.version")}
 OS: ${System.getProperty("os.name")} ${System.getProperty("os.arch")} ${System.getProperty("os.version")}
-Memory: Used ${(totalMem - freeMem) / mb} MB, Reserved ${totalMem / mb} MB, Max ${maxMem / mb} MB
-Cores: ${rt.availableProcessors()}
+RSS: ${if (rss == null) "?" else mb(rss)} MB
+Heap: Used ${mb(heap.used)} MB, Committed ${mb(heap.committed)} MB, Max ${mb(heap.max)} MB
+Disposable: ${mb(disposableBytes())} MB
+Cores: ${ManagementFactory.getOperatingSystemMXBean().availableProcessors}
 Locale: ${Locale.getDefault().toLanguageTag()}
 
 ---- LOG ----
 """
     }
+
+    private fun mb(bytes: Long) = roundingDiv(bytes, 1024 * 1024)
 
     private fun sendReport(header: String) {
         val win = FocusManager.getCurrentKeyboardFocusManager().activeWindow
