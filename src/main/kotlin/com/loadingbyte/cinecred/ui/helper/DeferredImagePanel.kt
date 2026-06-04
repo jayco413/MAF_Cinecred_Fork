@@ -67,9 +67,9 @@ class DeferredImagePanel(
     var isPresented: Boolean = true
 
     fun setImageAndGroundingAndLayers(image: DeferredImage?, grounding: Color4f, layers: List<Layer>) {
+        val image = if (image != null && image.width != 0.0 && image.height.resolve() != 0.0) image else null
         val imageChanged = image !== _image
         if (!imageChanged && _grounding == grounding && _layers == layers) return
-        if (imageChanged) require(image == null || image.width != 0.0 && image.height.resolve() != 0.0)
         _image = image
         _grounding = grounding
         _layers = layers
@@ -232,27 +232,29 @@ class DeferredImagePanel(
             val reZone = viewportHeight
             if (!materializedStartY.isNaN())
                 if (field < materializedStartY + reZone && materializedStartY > 0.1 ||
-                    field > materializedStopY - reZone && materializedStopY < image!!.height.resolve() - 0.1
+                    field > materializedStopY - reZone && materializedStopY < imageHeight - 0.1
                 ) rematerialize(contentChanged = false)
         }
 
     // In image coordinates:
-    private val viewportWidth get() = image!!.width / max(1.0, zoom)
+    private val imageWidth get() = image?.width ?: 0.0
+    private val imageHeight get() = image?.height?.resolve() ?: 0.0
+    private val viewportWidth get() = imageWidth / max(1.0, zoom)
     private val viewportHeight
-        get() = min(image!!.height.resolve(), canvas.height.also { require(it != 0) } / imageScaling)
+        get() = min(imageHeight, canvas.height.also { require(it != 0) } / imageScaling)
     private val viewportStartX get() = viewportCenterX - viewportWidth / 2.0
     private val viewportStartY get() = viewportCenterY - viewportHeight / 2.0
     private val viewportStopY get() = viewportCenterY + viewportHeight / 2.0
     private val minViewportCenterX get() = viewportWidth / 2.0
-    private val maxViewportCenterX get() = image!!.width - minViewportCenterX
+    private val maxViewportCenterX get() = imageWidth - minViewportCenterX
     private val minViewportCenterY get() = viewportHeight / 2.0
-    private val maxViewportCenterY get() = image!!.height.resolve() - minViewportCenterY
+    private val maxViewportCenterY get() = imageHeight - minViewportCenterY
 
     // The image scaling maps from deferred image coordinates to canvas coordinates as they are used by Swing.
     // These canvas coordinates are however fake if system scaling is enabled in a HiDPI context. Hence, to find out
     // how large the materialized image should be, we need to compensate for that using the physical image scaling.
     private val imageScaling
-        get() = zoom * canvas.width.also { require(it != 0) } / image!!.width
+        get() = zoom * canvas.width.also { require(it != 0) } / imageWidth
     private val physicalImageScaling
         // Safeguard in case the graphics object is not yet ready or has already been discarded; this happens sometimes.
         get() = imageScaling * ((canvas.graphics as Graphics2D?)?.let(::getSystemScaleFactor) ?: 1.0)
@@ -344,7 +346,7 @@ class DeferredImagePanel(
         // Abort if the canvas was disposed already.
         val bitmapJ2DBridge = BitmapJ2DBridge(canvas.graphicsConfiguration.colorModel ?: return)
         // Capture these variables.
-        val image = this.image!!
+        val image = this.image ?: return
         val grounding = this.grounding
         val layers = this.layers
         val contentVersion = this.contentVersion
@@ -426,7 +428,7 @@ class DeferredImagePanel(
         // Abort if the canvas was disposed already.
         val bitmapJ2DBridge = BitmapJ2DBridge(canvas.graphicsConfiguration.colorModel ?: return)
         // Capture these variables.
-        val image = this.image!!
+        val image = this.image ?: return
         val grounding = this.grounding
         val layers = this.layers
         val contentVersion = this.contentVersion
