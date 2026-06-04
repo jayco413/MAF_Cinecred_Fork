@@ -22,7 +22,7 @@ import kotlin.io.path.*
 
 class Font private constructor(private val hbFace: MemorySegment) {
 
-    val name: String = lookupName(HB_OT_NAME_ID_FULL_NAME(), HB_LANGUAGE_INVALID())
+    val name: String
 
     val familyMap: Map<Locale, String>
     val subfamilyMap: Map<Locale, String>
@@ -37,7 +37,9 @@ class Font private constructor(private val hbFace: MemorySegment) {
     init {
         CLEANER.register(this, FontCleanerAction(hbFace))
 
-        require(name.isNotBlank()) { "Font has no standard name." }
+        name = lookupName(HB_OT_NAME_ID_FULL_NAME(), HB_LANGUAGE_INVALID())
+            ?: lookupName(HB_OT_NAME_ID_POSTSCRIPT_NAME(), HB_LANGUAGE_INVALID())
+                    ?: throw IllegalArgumentException("Font has no standard name.")
 
         // Prepare the standard name maps, and a lookup from name ID to name map.
         familyMap = HashMap()
@@ -93,8 +95,11 @@ class Font private constructor(private val hbFace: MemorySegment) {
             val hbNameEntry = hb_ot_name_entry_t.asSlice(hbNameEntries, idx)
             val nameId = hb_ot_name_entry_t.name_id(hbNameEntry)
             val language = hb_ot_name_entry_t.language(hbNameEntry)
-            nameMaps[nameId]
-                ?.put(Locale.forLanguageTag(hb_language_to_string(language).getString(0)), lookupName(nameId, language))
+            nameMaps[nameId]?.let { nameMap ->
+                lookupName(nameId, language)?.let { name ->
+                    nameMap[Locale.forLanguageTag(hb_language_to_string(language).getString(0))] = name
+                }
+            }
         }
 
         // Fill the supported features set.
@@ -113,15 +118,15 @@ class Font private constructor(private val hbFace: MemorySegment) {
         }
     }
 
-    private fun lookupName(nameId: Int, language: MemorySegment): String {
+    private fun lookupName(nameId: Int, language: MemorySegment): String? {
         Arena.ofConfined().use { arena ->
             val len = hb_ot_name_get_utf8(hbFace, nameId, language, NULL, NULL)
             if (len == 0)
-                return ""
+                return null
             val cSize = arena.allocateFrom(JAVA_INT, len + 1 /* account for null terminator */)
             val cStr = arena.allocate(len + 1L)
             hb_ot_name_get_utf8(hbFace, nameId, language, cSize, cStr)
-            return cStr.getString(0)
+            return cStr.getString(0).ifBlank { null }
         }
     }
 
@@ -185,7 +190,6 @@ class Font private constructor(private val hbFace: MemorySegment) {
 
     companion object {
 
-        /** @throws Exception */
         fun read(file: Path, mmap: Boolean): List<Font> {
             // Note: We use shared arenas because the cleaner thread will call the close() method.
             val arena = Arena.ofShared()
@@ -230,10 +234,11 @@ class Font private constructor(private val hbFace: MemorySegment) {
                 }, arena)
                 val mode = if (mmap) HB_MEMORY_MODE_READONLY() else HB_MEMORY_MODE_WRITABLE()
                 hbBlob = hb_blob_create(seg, seg.byteSize().toInt(), mode, NULL, destroyBlobFunc)
-            } catch (t: Throwable) {
+            } catch (e: Exception) {
+                LOGGER.error("Font file '{}' cannot be read.", file, e)
                 arena.close()
                 tmpFile?.deleteIfExists()
-                throw t
+                return emptyList()
             }
 
             // Create fonts from the blob. Notice that each new font increments the blob's reference count.
@@ -242,7 +247,12 @@ class Font private constructor(private val hbFace: MemorySegment) {
                 for (idx in 0..<hb_face_count(hbBlob)) {
                     val hbFace = hb_face_create_or_fail(hbBlob, idx)
                     if (hbFace != NULL)
-                        add(Font(hbFace))
+                        try {
+                            add(Font(hbFace))
+                        } catch (e: Exception) {
+                            // Note: Font's cleaner will destroy hbFace.
+                            LOGGER.error("Font #{} in file '{}' cannot be read.", idx + 1, file, e)
+                        }
                 }
             }
 
@@ -290,7 +300,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
                     .filter(Path::isRegularFile)
                     // The createFonts() method can only successfully read TrueType/OpenType fonts, which is desired.
                     // If a FontFormatException or IOException occurs, just skip over the problematic font file.
-                    .flatMap(::tryReadSystemFont)
+                    .flatMap { file -> read(file, mmap = true) }
                     // Internal macOS fonts start with a dot; we do not want to include those.
                     .filter { !it.name.startsWith('.') }
                     .toList()
@@ -298,15 +308,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
                 GraphicsEnvironment.getLocalGraphicsEnvironment().allFonts
                     .filter(java.awt.Font::isTTFOrOTF)
                     .mapTo(HashSet(), java.awt.Font::getFontFile)
-                    .flatMap(::tryReadSystemFont)
-            }
-
-        private fun tryReadSystemFont(file: Path) =
-            try {
-                read(file, mmap = true)
-            } catch (_: Exception) {
-                LOGGER.warn("Skipping system font '{}' because it cannot be read.", file)
-                emptyList()
+                    .flatMap { file -> read(file, mmap = true) }
             }
 
         private val nameToBundled = BUNDLED.associateBy(Font::name)

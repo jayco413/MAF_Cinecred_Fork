@@ -2797,6 +2797,15 @@ public class hb_h extends hb_h$shared {
     public static int HB_OT_NAME_ID_FULL_NAME() {
         return HB_OT_NAME_ID_FULL_NAME;
     }
+    private static final int HB_OT_NAME_ID_POSTSCRIPT_NAME = (int)6L;
+    /**
+     * {@snippet lang=c :
+     * enum <anonymous>.HB_OT_NAME_ID_POSTSCRIPT_NAME = 6
+     * }
+     */
+    public static int HB_OT_NAME_ID_POSTSCRIPT_NAME() {
+        return HB_OT_NAME_ID_POSTSCRIPT_NAME;
+    }
     private static final int HB_OT_NAME_ID_TYPOGRAPHIC_FAMILY = (int)16L;
     /**
      * {@snippet lang=c :

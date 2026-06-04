@@ -281,13 +281,8 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
             if (isFileLocked(fileOrDir, attempt))
                 reloadOrRemoveAuxFileOrDirLater(fileOrDir, MODIFY, attempt + 1)
             else {
-                val newFonts = try {
-                    // Don't memory-map project fonts because the user might modify the font files in unexpected ways.
-                    Font.read(fileOrDir, mmap = false)
-                } catch (e: Exception) {
-                    LOGGER.error("Font '{}' cannot be read.", fileOrDir.name, e)
-                    emptyList()
-                }
+                // Don't memory-map project fonts because the user might modify the font files in unexpected ways.
+                val newFonts = Font.read(fileOrDir, mmap = false)
                 if (newFonts.isNotEmpty()) {
                     projectFonts[fileOrDir] = newFonts
                     projectFontsChanged = true

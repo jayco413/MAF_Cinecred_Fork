@@ -273,6 +273,7 @@ abstract class Jextract : DefaultTask() {
             "HB_OT_NAME_ID_FONT_FAMILY",
             "HB_OT_NAME_ID_FONT_SUBFAMILY",
             "HB_OT_NAME_ID_FULL_NAME",
+            "HB_OT_NAME_ID_POSTSCRIPT_NAME",
             "HB_OT_NAME_ID_TYPOGRAPHIC_FAMILY",
             "HB_OT_NAME_ID_TYPOGRAPHIC_SUBFAMILY",
             "HB_OT_NAME_ID_SAMPLE_TEXT",
