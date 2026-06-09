@@ -12,7 +12,6 @@ import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.MemorySegment.NULL
 import java.lang.foreign.ValueLayout.*
-import java.lang.ref.WeakReference
 import java.nio.channels.FileChannel
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
@@ -33,6 +32,8 @@ class Font private constructor(private val hbFace: MemorySegment) {
 
     val axes: List<Axis>
     val supportedFeatures: Set<String>
+
+    private val caseCache = DisposableCache<CaseKey, Case>()
 
     init {
         CLEANER.register(this, FontCleanerAction(hbFace))
@@ -181,7 +182,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
 
     fun case(size: Double = 12.0, variations: Set<Variation> = emptySet()): Case =
         // We cache cases to make it extremely cheap to obtain them, and also keep their internal glyph cache alive.
-        caseCache.get(CaseKey(this, size, variations)) {
+        caseCache.get(CaseKey(size, variations)) {
             // Just assume that each case occupies 2KB of RAM. That's quite a low estimate, but most cases never build
             // up costly structures like a large glyph cache.
             SizedValue(Case(this, size, variations, 0), 2048)
@@ -324,8 +325,6 @@ class Font private constructor(private val hbFace: MemorySegment) {
         const val CAPITAL_SPACING_FEATURE = "cpsp"
         val MANAGED_FEATURES = LIGATURES_FEATURES +
                 setOf(KERNING_FEATURE, SMALL_CAPS_FEATURE, PETITE_CAPS_FEATURE, CAPITAL_SPACING_FEATURE)
-
-        private val caseCache = DisposableCache<CaseKey, Case>()
 
         private fun isValidTag(tag: String): Boolean =
             tag.length == 4 && tag.all { it.code in 0..255 }
@@ -658,21 +657,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
     }
 
 
-    private class CaseKey(font: Font, private val size: Double, private val variations: Set<Variation>) {
-
-        private val font = WeakReference(font)
-        private val hashCode = 31 * (31 * size.hashCode() + variations.hashCode()) + font.hashCode()
-
-        // If the font is GCed, the key objects with that font just stop being equals to anything. That's not a problem,
-        // because if a font is GCed, nobody will ever access its cached cases again, and they will eventually be
-        // removed from the cache when it's cleared.
-        override fun equals(other: Any?) = this === other ||
-                other is CaseKey && size == other.size && variations == other.variations &&
-                font.get().let { it != null && it == other.font.get() }
-
-        override fun hashCode() = hashCode
-
-    }
+    private data class CaseKey(private val size: Double, private val variations: Set<Variation>)
 
 
     // Use a static classes to absolutely ensure that no unwanted references leak into these objects.

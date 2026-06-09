@@ -107,7 +107,10 @@ class Tape private constructor(
 
     private val reinterpretedTapes = DisposableCache<Reinterpretation, Tape>()
 
-    /** The returned tape is "dependent" because it will be closed when this parent tape is closed. */
+    /**
+     * @return A tape that is "dependent" because it will be closed when this parent tape is closed.
+     * @throws IllegalStateException If this tape is already closed.
+     */
     fun dependentReinterpretedTape(
         range: Bitmap.Range,
         colorSpace: ColorSpace,

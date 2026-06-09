@@ -1072,7 +1072,11 @@ private fun reinterpretTape(style: TapeStyle): Tape? {
     )
         return tape
     else
-        return tape.dependentReinterpretedTape(range, colorSpace, yuvCoefficients, alpha, scan, content)
+        try {
+            return tape.dependentReinterpretedTape(range, colorSpace, yuvCoefficients, alpha, scan, content)
+        } catch (_: IllegalStateException) {
+            return null
+        }
 }
 
 private fun coerceTimecode(tc: Timecode?, tape: Tape, styling: Styling): Timecode? = when {

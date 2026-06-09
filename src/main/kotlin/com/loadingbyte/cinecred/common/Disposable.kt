@@ -52,18 +52,23 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
     // The key set is only accessed or modified when the MemoryTracker lock is held, hence we don't need more locking.
     private val trackerKeys = Collections.newSetFromMap(WeakHashMap<TrackerKey, Boolean>())
     private val cleanable = CLEANER.register(this, CleanerAction(trackerKeys))
+    @Volatile private var closed = false
 
     @Suppress("UNCHECKED_CAST")
     fun getAsync(key: K): CompletableFuture<V>? =
         DisposableTracker.get(TrackerKey(cacheId, key)) as CompletableFuture<V>?
 
+    /** @throws IllegalStateException If the cache is closed. */
     inline fun get(key: K, crossinline compute: () -> SizedValue<V>): V =
         getAsync(key) { CompletableFuture.completedFuture(compute()) }.get()
 
+    /** @return A future that fails with an [IllegalStateException] if the cache is closed. */
     fun getAsync(key: K, compute: () -> CompletableFuture<SizedValue<V>>): CompletableFuture<V> {
         val trackerKey = TrackerKey(cacheId, key)
         var computeFuture: CompletableFuture<SizedValue<*>>? = null
         val getFuture = DisposableTracker.cache(trackerKey) {
+            if (closed)
+                return CompletableFuture.failedFuture(IllegalStateException("The disposable cache is already closed."))
             trackerKeys += trackerKey
             CompletableFuture<SizedValue<*>>().also { computeFuture = it }
         }
@@ -84,6 +89,7 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
         DisposableTracker.getAll(trackerKeys) as List<CompletableFuture<V>>
 
     override fun close() {
+        closed = true
         cleanable.clean()
     }
 
@@ -134,7 +140,7 @@ private object DisposableTracker {
         }.forEach { sv -> sv.destroy?.run() }
     }
 
-    fun cache(key: Any, compute: () -> CompletableFuture<SizedValue<*>>): CompletableFuture<*> {
+    inline fun cache(key: Any, compute: () -> CompletableFuture<SizedValue<*>>): CompletableFuture<*> {
         val future: CompletableFuture<SizedValue<*>>
         var evictedFuture: CompletableFuture<List<SizedValue<*>>>? = null
         lock.withLock {
