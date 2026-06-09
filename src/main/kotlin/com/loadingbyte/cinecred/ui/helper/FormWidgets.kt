@@ -2090,7 +2090,15 @@ class SimpleListWidget<E : Any>(
 
         if (!fixedSize) {
             val delBtn = JButton(TRASH_ICON)
-            delBtn.addActionListener { userDel(delBtns.indexOfFirst { it === delBtn }) }
+            delBtn.addActionListener {
+                val idx = delBtns.indexOfFirst { it === delBtn }
+                // If we didn't reassign the focus manually, some random component would gain it once delBtn is hidden.
+                if (elementCount == 1)
+                    components[0].requestFocusInWindow()
+                else if (idx == elementCount - 1)
+                    delBtns[idx - 1].requestFocusInWindow()
+                userDel(idx)
+            }
             panel.add(delBtn, "aligny top, gapleft 6, gaptop 1" + firstConstr.also { firstConstr = "" })
             delBtns.add(delBtn)
         }
@@ -2183,6 +2191,7 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
 
         val nameWidget: TextWidget
         val advancedBtn: JToggleButton
+        val delBtn: JButton
 
         init {
             putClientProperty(STYLE, "background: @componentBackground")
@@ -2202,9 +2211,13 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
             // By default, advancedBtn is not selected, so inform the wrapped widget about that.
             toggleAdvanced(widget, false)
 
-            val delBtn = JButton(l10n("ui.form.layerDelete"), TRASH_ICON)
+            delBtn = JButton(l10n("ui.form.layerDelete"), TRASH_ICON)
             delBtn.putClientProperty(BUTTON_TYPE, BUTTON_TYPE_TOOLBAR_BUTTON)
-            delBtn.addActionListener { userDel(idx) }
+            delBtn.addActionListener {
+                // If we didn't reassign the focus manually, some random component would gain it once delBtn is hidden.
+                (if (elementCount == 1) addButtons[0] else layerPanels[max(0, idx - 1)].delBtn).requestFocusInWindow()
+                userDel(idx)
+            }
 
             val widgetPanel = JPanel(MigLayout()).apply { border = FlatBorder() }
             for ((comp, constr) in widget.components.zip(widget.constraints))
@@ -2345,7 +2358,10 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
         init {
             preferredSize = Dimension(0, 32)
             border = null
-            addActionListener { userAdd(addAtIdx) }
+            addActionListener {
+                userAdd(addAtIdx)
+                addButtons[addAtIdx + 1].requestFocusInWindow()
+            }
 
             // Add a transfer handler for dropping.
             transferHandler = AddButtonTransferHandler(addAtIdx)
