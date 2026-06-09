@@ -199,12 +199,12 @@ private fun generateFmtStrFonts(style: LetterStyle): TextContext.Fonts? {
     when (style.smallCaps) {
         SmallCaps.OFF -> {}
         SmallCaps.SMALL_CAPS ->
-            if (SMALL_CAPS_FEATURE in font.supportedFeatures)
+            if (font.facets.any { it.tag == SMALL_CAPS_FEATURE })
                 features.add(Font.Feature(SMALL_CAPS_FEATURE, 1))
             else
                 fakeSCScaling = baseFontCase.xHeight / baseFontCase.capHeight * 1.1
         SmallCaps.PETITE_CAPS ->
-            if (PETITE_CAPS_FEATURE in font.supportedFeatures)
+            if (font.facets.any { it.tag == PETITE_CAPS_FEATURE })
                 features.add(Font.Feature(PETITE_CAPS_FEATURE, 1))
             else
                 fakeSCScaling = baseFontCase.xHeight / baseFontCase.capHeight

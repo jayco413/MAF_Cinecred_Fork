@@ -259,14 +259,13 @@ private val LETTER_STYLE_CONSTRAINTS: List<StyleConstraint<LetterStyle, *>> = li
         val font = style.font.font ?: return@JudgeConstr true
         when (style.smallCaps) {
             SmallCaps.OFF -> true
-            SmallCaps.SMALL_CAPS -> SMALL_CAPS_FEATURE in font.supportedFeatures
-            SmallCaps.PETITE_CAPS -> PETITE_CAPS_FEATURE in font.supportedFeatures
+            SmallCaps.SMALL_CAPS -> font.facets.any { it.tag == SMALL_CAPS_FEATURE }
+            SmallCaps.PETITE_CAPS -> font.facets.any { it.tag == PETITE_CAPS_FEATURE }
         }
     },
     DoubleConstr(ERROR, LetterStyle::superscriptScaling.st(), min = 0.0, minInclusive = false),
     FontFeatureConstr(WARN, LetterStyle::features.st()) { _, style ->
-        val font = style.font.font ?: return@FontFeatureConstr Collections.emptySet()
-        HashSet(font.supportedFeatures).apply { removeAll(MANAGED_FEATURES) }
+        style.font.font?.facets?.filter { it.tag !in MANAGED_FEATURES } ?: emptyList()
     },
     StyleNameConstr(
         WARN, LetterStyle::inheritLayersFromStyle.st(),
@@ -590,7 +589,7 @@ class FontVariationsConstr<S : Style>(
 class FontFeatureConstr<S : Style>(
     val severity: Severity,
     setting: StyleSetting<S, FontFeature>,
-    val getAvailableTags: (Styling, S) -> Set<String>
+    val getAvailableFacets: (Styling, S) -> List<Font.Facet>
 ) : StyleConstraint<S, StyleSetting<S, FontFeature>>(setting)
 
 
@@ -819,7 +818,7 @@ fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
                     }
                 }
                 is FontFeatureConstr -> {
-                    val availableTags = cst.getAvailableTags(styling, style)
+                    val availableTags = cst.getAvailableFacets(styling, style).mapTo(HashSet()) { it.tag }
                     forEachRelevantSetting(cst, ignoreSettings) { st ->
                         val remainingTags = HashSet(availableTags)
                         st.extractSubjects(style).forEachIndexed { idx, feat ->

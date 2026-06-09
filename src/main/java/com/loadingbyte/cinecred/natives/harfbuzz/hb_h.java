@@ -2833,6 +2833,15 @@ public class hb_h extends hb_h$shared {
     public static int HB_OT_NAME_ID_SAMPLE_TEXT() {
         return HB_OT_NAME_ID_SAMPLE_TEXT;
     }
+    private static final int HB_OT_NAME_ID_INVALID = (int)65535L;
+    /**
+     * {@snippet lang=c :
+     * enum <anonymous>.HB_OT_NAME_ID_INVALID = 65535
+     * }
+     */
+    public static int HB_OT_NAME_ID_INVALID() {
+        return HB_OT_NAME_ID_INVALID;
+    }
 
     private static class hb_ot_name_list_names {
         public static final FunctionDescriptor DESC = FunctionDescriptor.of(
@@ -3016,6 +3025,73 @@ public class hb_h extends hb_h$shared {
                 traceDowncall("hb_ot_layout_table_get_feature_tags", face, table_tag, start_offset, feature_count, feature_tags);
             }
             return (int)mh$.invokeExact(face, table_tag, start_offset, feature_count, feature_tags);
+        } catch (Error | RuntimeException ex) {
+           throw ex;
+        } catch (Throwable ex$) {
+           throw new AssertionError("should not reach here", ex$);
+        }
+    }
+
+    private static class hb_ot_layout_feature_get_name_ids {
+        public static final FunctionDescriptor DESC = FunctionDescriptor.of(
+            hb_h.C_INT,
+            hb_h.C_POINTER,
+            hb_h.C_INT,
+            hb_h.C_INT,
+            hb_h.C_POINTER,
+            hb_h.C_POINTER,
+            hb_h.C_POINTER,
+            hb_h.C_POINTER,
+            hb_h.C_POINTER
+        );
+
+        public static final MemorySegment ADDR = SYMBOL_LOOKUP.findOrThrow("hb_ot_layout_feature_get_name_ids");
+
+        public static final MethodHandle HANDLE = Linker.nativeLinker().downcallHandle(ADDR, DESC);
+    }
+
+    /**
+     * Function descriptor for:
+     * {@snippet lang=c :
+     * extern hb_bool_t hb_ot_layout_feature_get_name_ids(hb_face_t *face, hb_tag_t table_tag, unsigned int feature_index, hb_ot_name_id_t *label_id, hb_ot_name_id_t *tooltip_id, hb_ot_name_id_t *sample_id, unsigned int *num_named_parameters, hb_ot_name_id_t *first_param_id)
+     * }
+     */
+    public static FunctionDescriptor hb_ot_layout_feature_get_name_ids$descriptor() {
+        return hb_ot_layout_feature_get_name_ids.DESC;
+    }
+
+    /**
+     * Downcall method handle for:
+     * {@snippet lang=c :
+     * extern hb_bool_t hb_ot_layout_feature_get_name_ids(hb_face_t *face, hb_tag_t table_tag, unsigned int feature_index, hb_ot_name_id_t *label_id, hb_ot_name_id_t *tooltip_id, hb_ot_name_id_t *sample_id, unsigned int *num_named_parameters, hb_ot_name_id_t *first_param_id)
+     * }
+     */
+    public static MethodHandle hb_ot_layout_feature_get_name_ids$handle() {
+        return hb_ot_layout_feature_get_name_ids.HANDLE;
+    }
+
+    /**
+     * Address for:
+     * {@snippet lang=c :
+     * extern hb_bool_t hb_ot_layout_feature_get_name_ids(hb_face_t *face, hb_tag_t table_tag, unsigned int feature_index, hb_ot_name_id_t *label_id, hb_ot_name_id_t *tooltip_id, hb_ot_name_id_t *sample_id, unsigned int *num_named_parameters, hb_ot_name_id_t *first_param_id)
+     * }
+     */
+    public static MemorySegment hb_ot_layout_feature_get_name_ids$address() {
+        return hb_ot_layout_feature_get_name_ids.ADDR;
+    }
+
+    /**
+     * {@snippet lang=c :
+     * extern hb_bool_t hb_ot_layout_feature_get_name_ids(hb_face_t *face, hb_tag_t table_tag, unsigned int feature_index, hb_ot_name_id_t *label_id, hb_ot_name_id_t *tooltip_id, hb_ot_name_id_t *sample_id, unsigned int *num_named_parameters, hb_ot_name_id_t *first_param_id)
+     * }
+     */
+    public static int hb_ot_layout_feature_get_name_ids(MemorySegment face, int table_tag, int feature_index, MemorySegment label_id, MemorySegment tooltip_id, MemorySegment sample_id, MemorySegment num_named_parameters, MemorySegment first_param_id) {
+        var mh$ = hb_ot_layout_feature_get_name_ids.HANDLE;
+        try {
+            if (TRACE_DOWNCALLS) {
+                traceDowncall("hb_ot_layout_feature_get_name_ids", face, table_tag, feature_index, label_id, tooltip_id, sample_id, num_named_parameters, first_param_id);
+            }
+            return (int)mh$.invokeExact(face, table_tag, feature_index, label_id, tooltip_id, sample_id, num_named_parameters, first_param_id);
         } catch (Error | RuntimeException ex) {
            throw ex;
         } catch (Throwable ex$) {

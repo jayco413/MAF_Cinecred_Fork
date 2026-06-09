@@ -537,14 +537,11 @@ class StyleForm<S : Style>(
             widget.applyConfigurator(configurator)
     }
 
-    fun setChoices(setting: StyleSetting<*, *>, choices: List<Any>, unique: Boolean = false) {
-        val remaining = if (unique) choices.toMutableList() else choices
+    fun setChoices(setting: StyleSetting<*, *>, choices: List<Any>) {
         valueWidgets[setting]!!.applyConfigurator { widget ->
             if (widget is Choice<*>) {
                 @Suppress("UNCHECKED_CAST")
-                (widget as Choice<Any>).items = remaining
-                if (unique)
-                    (remaining as MutableList).remove(widget.value)
+                (widget as Choice<Any>).items = choices
             }
         }
     }
@@ -591,6 +588,17 @@ class StyleForm<S : Style>(
         valueWidgets.getValue(setting).applyConfigurator { widget ->
             if (widget is FontVariationsWidget)
                 widget.axes = axes
+        }
+    }
+
+    fun setFontFacets(setting: StyleSetting<S, *>, facets: List<Font.Facet>) {
+        val remaining = facets.toMutableList()
+        valueWidgets[setting]!!.applyConfigurator { widget ->
+            if (widget is FontFeatureWidget) {
+                widget.facets = remaining
+                val tag = widget.value.tag
+                remaining.removeIf { it.tag == tag }
+            }
         }
     }
 

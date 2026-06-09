@@ -152,10 +152,9 @@ class StyleFormAdjuster(
                     curForm.setFontAxes(setting, availableAxes)
             }
             is FontFeatureConstr -> {
-                val availableTags =
-                    constr.getAvailableTags(styling, curStyle).sortedWithCollator(caseInsensitiveCollator())
+                val availableFacets = constr.getAvailableFacets(styling, curStyle)
                 for (setting in constr.settings)
-                    curForm.setChoices(setting, availableTags, unique = true)
+                    curForm.setFontFacets(setting, availableFacets)
             }
             is TapeSliceConstr -> {
                 val fps = constr.getFPS(styling, curStyle)

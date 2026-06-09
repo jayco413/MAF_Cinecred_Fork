@@ -66,6 +66,7 @@ Cinecred Changelog
 
 - The preview indicator for embedded videos is now high-res and less obnoxious.
 - The color picker now allows dragging the brightness even when in HDR mode.
+- Font features now show their human-readable name if available.
 - The video preview now updates the duration when switching between sheets.
 - The video preview no longer retains an afterimage upon exiting full screen.
 - In the video preview, fades and transparent embedded videos now play smoothly.

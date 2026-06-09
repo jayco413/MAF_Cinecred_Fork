@@ -1523,13 +1523,7 @@ class FontVariationsWidget : Form.AbstractWidget<FontVariations>(), Form.RowMana
                     val label = try {
                         l10n("ui.form.fontAxis.${axis.tag}")
                     } catch (_: MissingResourceException) {
-                        if (axis.nameMap.keys.isNotEmpty()) {
-                            val nameLocale = closestLocale(Locale.getDefault(), axis.nameMap.keys)
-                                ?: closestLocale(Locale.US, axis.nameMap.keys)
-                                ?: axis.nameMap.keys.first()
-                            axis.nameMap[nameLocale]
-                        } else
-                            axis.tag
+                        lookupFontLabel(axis.nameMap) ?: axis.tag
                     }
                     labelComps[idx].apply { text = label; toolTipText = label }
                     withoutChangeListeners {
@@ -1615,37 +1609,56 @@ class FontVariationsWidget : Form.AbstractWidget<FontVariations>(), Form.RowMana
 
 class FontFeatureWidget : Form.AbstractWidget<FontFeature>() {
 
-    private val tagWidget = InconsistentComboBoxWidget(
-        String::class.java, emptyList(),
-        // Clip the string because ellipsis would take up the majority of the space in a label as narrow as this one.
-        toString = ::noEllipsisLabel,
-        widthSpec = WidthSpec.LITTLE
-    )
-    private val valWidget = ScrubberWidget(
-        Scrubber.NumericScheme(Int::class.javaObjectType), Scrubber.NumberLimiter(min = 0),
-        widthSpec = WidthSpec.TINIER
-    )
-
-    init {
-        // When a wrapped widget changes, notify this widget's change listeners that that widget has changed.
-        tagWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
-        valWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
+    private val cb = JComboBox<FacetWrapper>().apply {
+        addItemListener { e -> if (e.stateChange == ItemEvent.SELECTED) notifyChangeListeners() }
+    }
+    private val scrubber = Scrubber(Scrubber.NumericScheme(Int::class.javaObjectType)).apply {
+        limiter = Scrubber.NumberLimiter(min = 0)
+        addValueListener { notifyChangeListeners() }
     }
 
-    override val components: List<JComponent> = tagWidget.components + JLabel("=") + valWidget.components
-    override val constraints = tagWidget.constraints + listOf("") + valWidget.constraints
+    override val components = listOf<JComponent>(cb, JLabel("="), scrubber)
+    override val constraints = listOf("hmin $STD_HEIGHT, wmax 200", "", "hmin $STD_HEIGHT, ${WidthSpec.TINIER.mig}")
 
-    override var value: FontFeature
-        get() = FontFeature(tagWidget.value, valWidget.value)
-        set(value) {
-            tagWidget.value = value.tag
-            valWidget.value = value.value
+    var facets: List<Font.Facet> = listOf()
+        set(items) {
+            if (field == items)
+                return
+            field = items
+            val sortedItems = items.sortedWithCollator(caseInsensitiveCollator(), Font.Facet::tag)
+                .sortedBy { facet -> facet.nameMap.isEmpty() }
+            val oldSelectedTag = selectedTag
+            cb.model = DefaultComboBoxModel(sortedItems.mapTo(Vector()) { FacetWrapper(it.tag, it.nameMap) }).apply {
+                selectedItem = if (oldSelectedTag.isNullOrEmpty()) null else
+                    FacetWrapper(oldSelectedTag, items.find { it.tag == oldSelectedTag }?.nameMap)
+            }
+            if (selectedTag != oldSelectedTag)
+                notifyChangeListeners()
         }
 
-    override fun applyConfigurator(configurator: (Form.Widget<*>) -> Unit) {
-        configurator(this)
-        tagWidget.applyConfigurator(configurator)
-        valWidget.applyConfigurator(configurator)
+    override var value: FontFeature
+        get() = FontFeature(selectedTag ?: "", scrubber.value)
+        set(value) {
+            if (this.value == value)
+                return
+            withoutChangeListeners {
+                val facet = facets.find { it.tag == value.tag }
+                cb.isEditable = facet == null
+                cb.selectedItem = FacetWrapper(value.tag, facet?.nameMap)
+                cb.isEditable = false
+                scrubber.value = value.value
+            }
+            notifyChangeListeners()
+        }
+
+    private val selectedTag: String?
+        get() = (cb.selectedItem as FacetWrapper?)?.item
+
+
+    private class FacetWrapper(override val item: String, private val nameMap: Map<Locale, String>?) : ComboBoxWrapper {
+        override fun toString() = nameMap?.let(::lookupFontLabel) ?: item
+        override fun hashCode() = item.hashCode()
+        override fun equals(other: Any?) = this === other || other is FacetWrapper && item == other.item
     }
 
 }
@@ -2576,6 +2589,15 @@ private fun String.removeAnySuffix(suffixes: List<String>, ignoreCase: Boolean =
             return dropLast(suffix.length)
     return this
 }
+
+
+private fun lookupFontLabel(labels: Map<Locale, String>): String? =
+    if (labels.isEmpty()) null else {
+        val nameLocale = closestLocale(Locale.getDefault(), labels.keys)
+            ?: closestLocale(Locale.US, labels.keys)
+            ?: labels.keys.first()
+        labels[nameLocale]
+    }
 
 
 /**

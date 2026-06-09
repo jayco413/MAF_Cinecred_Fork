@@ -305,10 +305,8 @@ private val LETTER_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<LetterStyl
     )
 )
 
-private fun supportsNot(style: LetterStyle, feat: String): Boolean {
-    val font = style.font.font
-    return if (font == null) false else feat !in font.supportedFeatures
-}
+private fun supportsNot(style: LetterStyle, feat: String): Boolean =
+    style.font.font?.facets?.none { it.tag == feat } ?: false
 
 
 private val LAYER_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Layer>> = listOf(

@@ -31,7 +31,7 @@ class Font private constructor(private val hbFace: MemorySegment) {
     val sampleTextMap: Map<Locale, String>
 
     val axes: List<Axis>
-    val supportedFeatures: Set<String>
+    val facets: List<Facet>
 
     private val caseCache = DisposableCache<CaseKey, Case>()
 
@@ -85,6 +85,35 @@ class Font private constructor(private val hbFace: MemorySegment) {
             }
         }
 
+        // Fill the facets (= features) list.
+        val facetMap = LinkedHashMap<String, Facet>()
+        Arena.ofConfined().use { arena ->
+            for (tableTag in intArrayOf(HB_OT_TAG_GSUB(), HB_OT_TAG_GPOS())) {
+                val count = hb_ot_layout_table_get_feature_tags(hbFace, tableTag, 0, NULL, NULL)
+                if (count == 0)
+                    continue
+                val cCount = arena.allocateFrom(JAVA_INT, count)
+                var cTags = arena.allocate(JAVA_INT, count.toLong())
+                hb_ot_layout_table_get_feature_tags(hbFace, tableTag, 0, cCount, cTags)
+                val cI = arena.allocate(JAVA_INT)
+                for (idx in 0..<cCount.get(JAVA_INT, 0)) {
+                    val tag = code2tag(cTags.getAtIndex(JAVA_INT, idx.toLong()))
+                    facetMap.computeIfAbsent(tag) {
+                        var facetNameMap = emptyMap<Locale, String>()
+                        if (hb_ot_layout_feature_get_name_ids(hbFace, tableTag, idx, cI, NULL, NULL, NULL, NULL) != 0) {
+                            val nameId = cI.get(JAVA_INT, 0)
+                            if (nameId != HB_OT_NAME_ID_INVALID()) {
+                                facetNameMap = HashMap<Locale, String>()
+                                nameMaps[nameId] = facetNameMap
+                            }
+                        }
+                        Facet(tag, facetNameMap)
+                    }
+                }
+            }
+        }
+        facets = facetMap.values.toList()
+
         // Fill the name maps.
         val hbNameEntries: MemorySegment
         val numNameEntries = Arena.ofConfined().use { arena ->
@@ -100,21 +129,6 @@ class Font private constructor(private val hbFace: MemorySegment) {
                 lookupName(nameId, language)?.let { name ->
                     nameMap[Locale.forLanguageTag(hb_language_to_string(language).getString(0))] = name
                 }
-            }
-        }
-
-        // Fill the supported features set.
-        supportedFeatures = HashSet()
-        Arena.ofConfined().use { arena ->
-            for (tableTag in intArrayOf(HB_OT_TAG_GSUB(), HB_OT_TAG_GPOS())) {
-                val count = hb_ot_layout_table_get_feature_tags(hbFace, tableTag, 0, NULL, NULL)
-                if (count == 0)
-                    continue
-                val cCount = arena.allocateFrom(JAVA_INT, count)
-                var cTags = arena.allocate(JAVA_INT, count.toLong())
-                hb_ot_layout_table_get_feature_tags(hbFace, tableTag, 0, cCount, cTags)
-                for (idx in 0L..<cCount.get(JAVA_INT, 0))
-                    supportedFeatures += code2tag(cTags.getAtIndex(JAVA_INT, idx))
             }
         }
     }
@@ -344,6 +358,11 @@ class Font private constructor(private val hbFace: MemorySegment) {
         val defaultValue: Double,
         val minValue: Double,
         val maxValue: Double
+    )
+
+    class Facet(
+        val tag: String,
+        val nameMap: Map<Locale, String>
     )
 
 
