@@ -32,8 +32,6 @@ class PlaybackCtrl : PlaybackCtrlComms {
 
     private val views = mutableListOf<PlaybackViewComms>()
 
-    private val materializationCacheAWT = DeferredImage.CanvasMaterializationCache()
-    private val materializationCacheDeckLink = DeferredImage.CanvasMaterializationCache()
     private val setupAWTJobSlot = JobSlot()
     private val setupDeckLinkJobSlot = JobSlot()
     private val displayNowAWTJobSlot = JobSlot()
@@ -183,7 +181,7 @@ class PlaybackCtrl : PlaybackCtrlComms {
                 val scaledVideo = video.copy(resolutionScaling = awtFrameSourceScaling)
                 val bitmapJ2DBridge = BitmapJ2DBridge(nativeCM)
                 FrameSource(
-                    materializationCacheAWT, scaledVideo, global.grounding, scaledVideo.resolution,
+                    scaledVideo, global.grounding, scaledVideo.resolution,
                     bitmapJ2DBridge.nativeRepresentation, Bitmap.Scan.PROGRESSIVE, blendInUserColorSpace = true,
                     frameIdx, bitmapJ2DBridge::toNativeImage
                 )
@@ -235,7 +233,7 @@ class PlaybackCtrl : PlaybackCtrlComms {
                 val (vw, vh) = video.resolution
                 val scaledVideo = video.copy(resolutionScaling = min(mw / vw.toDouble(), mh / vh.toDouble()))
                 FrameSource(
-                    materializationCacheDeckLink, scaledVideo, global.grounding, activeMode.resolution,
+                    scaledVideo, global.grounding, activeMode.resolution,
                     DeckLink.compatibleRepresentation(depth!!, colorSpace), activeMode.scan,
                     blendInUserColorSpace = false, frameIdx
                 ) { it }
@@ -568,7 +566,6 @@ class PlaybackCtrl : PlaybackCtrlComms {
 
     /** This class is thread-safe. */
     private class FrameSource<F : Any>(
-        materializationCache: DeferredImage.CanvasMaterializationCache,
         video: DeferredVideo,
         grounding: Color4f,
         private val resolution: Resolution,
@@ -588,7 +585,7 @@ class PlaybackCtrl : PlaybackCtrlComms {
             val spec = Bitmap.Spec(video.resolution, representation, scan, content)
             videoBackend = DeferredVideo.BitmapBackend(
                 video, listOf(STATIC), listOf(TAPES), grounding, spec,
-                cache = materializationCache, randomAccessDraftMode = true,
+                randomAccessDraftMode = true,
                 blendInUserColorSpace = blendInUserColorSpace
             )
             // Simulate materializing the currently selected frame while the FrameBuffer is being constructed in a

@@ -38,9 +38,6 @@ class PreviewDockable(private val previewCtrl: PreviewCtrlComms) :
     private val cards = CardLayout()
     private val creditsBookTabs = JTabbedPane()
 
-    private val highResCache = DeferredImage.CanvasMaterializationCache()
-    private val lowResCache = DeferredImage.CanvasMaterializationCache()
-
     private var drawnProject: DrawnProject? = null
     private var zoom = 1.0
     private var availableOverlays = emptyList<Overlay>()
@@ -134,7 +131,7 @@ class PreviewDockable(private val previewCtrl: PreviewCtrlComms) :
             val pageNumber = pageTabs.tabCount + 1
             val tabTitle = if (pageTabs.tabCount == 0) l10n("ui.edit.page", pageNumber) else pageNumber.toString()
             val imagePanel =
-                DeferredImagePanel(MIN_ZOOM, MAX_ZOOM, ZOOM_FACTOR, highResCache, lowResCache).apply {
+                DeferredImagePanel(MIN_ZOOM, MAX_ZOOM, ZOOM_FACTOR).apply {
                     zoom = this@PreviewDockable.zoom
                     zoomListeners.add(previewCtrl::sendZoomChange)
                 }

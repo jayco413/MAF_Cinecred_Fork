@@ -32,9 +32,7 @@ import kotlin.math.*
 class DeferredImagePanel(
     private val minZoom: Double,
     private val maxZoom: Double,
-    private val zoomFactor: Double,
-    private val highResCache: DeferredImage.CanvasMaterializationCache,
-    private val lowResCache: DeferredImage.CanvasMaterializationCache
+    private val zoomFactor: Double
 ) : JPanel(MigLayout("gap 0, insets 0")) {
 
     // ========== ENCAPSULATION LEAKS ==========
@@ -367,7 +365,7 @@ class DeferredImagePanel(
                 DeferredImage(matWidth.toDouble(), matHeight.toDouble().toY()).apply {
                     // If only a portion is materialized, scroll the deferred image to that portion.
                     drawDeferredImage(image, y = (-physicalStartY).toY(), universeScaling = physicalImageScaling)
-                }.materialize(canvas, highResCache, permitTapePreviews, tolerateErroneousMedia = true, layers)
+                }.materialize(canvas, cachePictures = true, permitTapePreviews, tolerateErroneousMedia = true, layers)
             }
             SwingUtilities.invokeLater {
                 if (this.materializedContentVersion > contentVersion)
@@ -440,9 +438,9 @@ class DeferredImagePanel(
             val scaling = matWidth / image.width
             val matHeight = max(1, ceil(scaling * imageHeight).toInt())
             val materialized = drawToBufferedImage(matWidth, matHeight, grounding, bitmapJ2DBridge) { canvas ->
-                image.copy(universeScaling = scaling).materialize(
-                    canvas, lowResCache, DeferredImage.PermitTapePreviews(), tolerateErroneousMedia = true, layers
-                )
+                val permitTapePreview = DeferredImage.PermitTapePreviews()
+                image.copy(universeScaling = scaling)
+                    .materialize(canvas, cachePictures = true, permitTapePreview, tolerateErroneousMedia = true, layers)
             }
             SwingUtilities.invokeLater {
                 if (this.lowResMaterializedContentVersion > contentVersion)

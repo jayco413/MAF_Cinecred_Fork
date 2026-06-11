@@ -120,17 +120,14 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
      */
     fun materialize(
         canvas: Canvas,
-        cache: CanvasMaterializationCache?,
+        cachePictures: Boolean,
         permitTapePreviews: PermitTapePreviews?,
         tolerateErroneousMedia: Boolean,
         layers: List<Layer>
     ) {
         require(canvas.bitmap != null) { "To materialize to an SVG or PDF, use the specialized methods." }
         val backend = CanvasBackend(
-            canvas,
-            cache as CanvasMaterializationCacheImpl?,
-            permitTapePreviews as PermitTapePreviewsImpl?,
-            tolerateErroneousMedia
+            canvas, cachePictures, permitTapePreviews as PermitTapePreviewsImpl?, tolerateErroneousMedia
         )
         // If only a portion of the deferred image is materialized, cull the rest to improve performance.
         // Notice that because the culling rect is aligned with the pixel grid, we correctly include all content
@@ -442,25 +439,6 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
     }
 
 
-    sealed interface CanvasMaterializationCache {
-        companion object {
-            operator fun invoke(): CanvasMaterializationCache = CanvasMaterializationCacheImpl()
-        }
-    }
-
-    private class CanvasMaterializationCacheImpl : CanvasMaterializationCache {
-        private val prepPics =
-            Collections.synchronizedMap(WeakHashMap<Picture, DisposableReference<Canvas.PreparedBitmap>>())
-        // It is vital that this method removes the prepared bitmap and doesn't just retrieve it, because if thread A
-        // has it while thread B replaces it with put...(), the bitmap could be closed while thread A is still using it.
-        fun popPreparedPicture(picture: Picture): Canvas.PreparedBitmap? = prepPics.remove(picture)?.plunder()
-        fun putPreparedPicture(picture: Picture, prepared: Canvas.PreparedBitmap) {
-            val ref = DisposableReference(prepared, prepared.bitmap?.bytes ?: 0, destroy = { prepared.bitmap?.close() })
-            prepPics.put(picture, ref)?.close()
-        }
-    }
-
-
     sealed interface PermitTapePreviews {
         val usedPreviewThumbnails: Boolean
         fun loadFullThumbnailsAndThen(action: Runnable)
@@ -704,7 +682,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
     private class CanvasBackend(
         private val canvas: Canvas,
-        private val cache: CanvasMaterializationCacheImpl?,
+        private val cachePictures: Boolean,
         permitTapePreviews: PermitTapePreviewsImpl?,
         private val tolerateErroneousMedia: Boolean
     ) : TapeThumbnailBackend(permitTapePreviews, tolerateErroneousMedia) {
@@ -767,36 +745,23 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         ) {
             val pic = embeddedPic.picture
             val transform = AffineTransform().apply {
-                // If we cache rendered vector graphics, we want to reuse them as often as possible. By aligning
+                // If we cache rendered pictures, we want to reuse them as often as possible. By aligning
                 // them with the pixel grid, they will always be reusable unless the scaling changes.
-                if (cache != null && pic is Picture.Vector)
+                if (cachePictures)
                     translate(round(x), round(y))
                 else
                     translate(x, y)
                 scale(scaling)
                 concatenate(embeddedPic.transform)
             }
-
-            val cached = cache?.popPreparedPicture(pic)
-            var prep: Canvas.PreparedBitmap? = null
             try {
-                prep = pic.prepareAsBitmap(canvas, embeddedPic.crop, if (draft) null else transform, cached)
+                pic.drawTo(canvas, embeddedPic.crop, nearestNeighbor = draft, transform, cache = cachePictures)
             } catch (e: Exception) {
                 if (!tolerateErroneousMedia)
                     throw e
                 materializeMissingMedia(embeddedPic.crop.width, embeddedPic.crop.height, transform)
                 return
-            } finally {
-                if (cached?.bitmap != prep?.bitmap)
-                    cached?.bitmap?.close()
             }
-            canvas.drawImage(
-                prep.bitmap ?: return, prep.promiseOpaque, promiseClamped = true, nearestNeighbor = draft,
-                transform = if (draft) transform else prep.transform
-            )
-            // Put the bitmap into the cache only after we're done drawing, because as soon as it's in there, it could
-            // be closed by another thread.
-            cache?.putPreparedPicture(pic, prep)
         }
 
     }
@@ -1501,7 +1466,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                     colorSpace = ColorSpace.SRGB
                     val tr = AffineTransform.getScaleInstance(maxRes.widthPx / pic.width, maxRes.heightPx / pic.height)
                     Bitmap.allocate(Bitmap.Spec(maxRes, Canvas.compatibleRepresentation(colorSpace))).use { canvasBmp ->
-                        Canvas.forBitmap(canvasBmp.zero()).use { canvas -> pic.drawTo(canvas, tr) }
+                        Canvas.forBitmap(canvasBmp.zero()).use { canvas -> pic.drawTo(canvas, transform = tr) }
                         bitmap = Picture.Raster.convert(canvasBmp).bitmap
                     }
                 }

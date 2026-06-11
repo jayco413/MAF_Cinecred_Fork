@@ -310,7 +310,6 @@ class DeferredVideo private constructor(
         private val grounding: Color4f?,
         private val userSpec: Bitmap.Spec,
         private val canvasCeiling: Float? = 1f,
-        private val cache: DeferredImage.CanvasMaterializationCache? = null,
         private val randomAccessDraftMode: Boolean = false,
         private val blendInUserColorSpace: Boolean = false
     ) : AutoCloseable {
@@ -546,7 +545,8 @@ class DeferredVideo private constructor(
             val shiftedSrc = if (y == 0.0) defImg else
                 DeferredImage(canvas.width, canvas.height.toY()).apply { drawDeferredImage(defImg, y = y.toY()) }
             shiftedSrc.materialize(
-                canvas, cache, permitTapePreviews = null, tolerateErroneousMedia = randomAccessDraftMode, staticLayers
+                canvas, cachePictures = randomAccessDraftMode, permitTapePreviews = null,
+                tolerateErroneousMedia = randomAccessDraftMode, staticLayers
             )
         }
 

@@ -140,6 +140,10 @@ class Bitmap private constructor(
         bufferSegment != null && other.bufferSegment != null &&
                 bufferSegment.asOverlappingSlice(other.bufferSegment).isPresent
 
+    /** Returns an object that identifies the content of this bitmap, irrespective of the bitmap object's identity. */
+    fun key(): Any =
+        Pair(spec, planeSegments.toList())
+
     /** Copies the bitmap object but shares the data. The new object can be [close]d without closing this one. */
     fun view(): Bitmap = reinterpretedView(spec)
 

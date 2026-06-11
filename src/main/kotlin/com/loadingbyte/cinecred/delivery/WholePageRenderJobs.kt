@@ -100,8 +100,8 @@ class WholePageSequenceRenderJob private constructor(
                         Canvas.forBitmap(bitmap, ceiling).use { canvas ->
                             if (ground) canvas.fill(Canvas.Shader.Solid(global.grounding)) else bitmap.zero()
                             pageDefImage.materialize(
-                                canvas, cache = null, permitTapePreviews = null, tolerateErroneousMedia = false,
-                                layers = listOf(STATIC, TAPES)
+                                canvas, cachePictures = false, permitTapePreviews = null,
+                                tolerateErroneousMedia = false, layers = listOf(STATIC, TAPES)
                             )
                         }
                         if (!matte)

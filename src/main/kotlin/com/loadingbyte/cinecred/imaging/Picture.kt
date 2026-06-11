@@ -54,13 +54,19 @@ sealed interface Picture : AutoCloseable {
     val width: Double
     val height: Double
 
-    /** @throws Exception */
-    fun drawTo(canvas: Canvas, transform: AffineTransform? = null, clip: List<Shape> = emptyList())
-
-    /** @throws Exception */
-    fun prepareAsBitmap(
-        canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-    ): Canvas.PreparedBitmap
+    /**
+     * @param crop Crops the picture to this rectangle prior to any processing.
+     * @param nearestNeighbor Only has an effect for raster pictures.
+     * @throws Exception
+     */
+    fun drawTo(
+        canvas: Canvas,
+        crop: Rectangle2D? = null,
+        nearestNeighbor: Boolean = false,
+        transform: AffineTransform? = null,
+        clip: List<Shape> = emptyList(),
+        cache: Boolean = false
+    )
 
     /**
      * @return If null, the picture is fully blank.
@@ -79,6 +85,7 @@ sealed interface Picture : AutoCloseable {
         val bitmap: Bitmap
     ) : Picture {
 
+        private val canvasCache = Canvas.Cache()
         private val nonBlankBoundaryPointsCache = lazy { DisposableCache<Rectangle, DoubleArray>() }
 
         init {
@@ -90,16 +97,28 @@ sealed interface Picture : AutoCloseable {
         override val width get() = bitmap.spec.resolution.widthPx.toDouble()
         override val height get() = bitmap.spec.resolution.heightPx.toDouble()
 
-        override fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
-            bitmap.requireNotClosed { canvas.drawImage(bitmap, transform = transform, clip = clip) }
-        }
-
-        override fun prepareAsBitmap(
-            canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = bitmap.requireNotClosed {
-            val crop = (crop as? Rectangle)
-                ?: crop?.run { Rectangle(x.roundToInt(), y.roundToInt(), width.roundToInt(), height.roundToInt()) }
-            canvas.prepareBitmap(bitmap, crop = crop, transform = transform, cached = cached)
+        override fun drawTo(
+            canvas: Canvas,
+            crop: Rectangle2D?,
+            nearestNeighbor: Boolean,
+            transform: AffineTransform?,
+            clip: List<Shape>,
+            cache: Boolean
+        ) {
+            val cropped = if (crop == null) bitmap.view() else {
+                val c = bitmap.spec.resolution.let { Rectangle(it.widthPx, it.heightPx) }.intersection(
+                    (crop as? Rectangle) ?: Rectangle(
+                        crop.x.roundToInt(), crop.y.roundToInt(), crop.width.roundToInt(), crop.height.roundToInt()
+                    )
+                )
+                bitmap.view(c.x, c.y, c.width, c.height, 1)
+            }
+            cropped.use {
+                canvas.drawImage(
+                    cropped, nearestNeighbor = nearestNeighbor, transform = transform, clip = clip,
+                    cache = if (cache) canvasCache else null
+                )
+            }
         }
 
         override fun close() {
@@ -108,6 +127,7 @@ sealed interface Picture : AutoCloseable {
             } catch (_: IllegalStateException) {
                 // If the bitmap is used right now, let the GC collect and close it later.
             }
+            canvasCache.close()
             if (nonBlankBoundaryPointsCache.isInitialized())
                 nonBlankBoundaryPointsCache.value.close()
         }
@@ -161,10 +181,35 @@ sealed interface Picture : AutoCloseable {
 
     sealed class Vector : Picture {
 
+        private val canvasCache = Canvas.Cache()
         @Volatile private var roughNonBlankBounds: Optional<Rectangle2D>? = null
         private val nonBlankBoundaryPointsCache = DisposableCache<Rectangle2D, DoubleArray>()
 
+        override fun drawTo(
+            canvas: Canvas,
+            crop: Rectangle2D?,
+            nearestNeighbor: Boolean,
+            transform: AffineTransform?,
+            clip: List<Shape>,
+            cache: Boolean
+        ) {
+            var transform = transform
+            var clip = clip
+            val cache = if (cache) canvasCache else null
+            if (crop != null) {
+                transform = AffineTransform.getTranslateInstance(-crop.x, -crop.y)
+                    .apply { transform?.let(::preConcatenate) }
+                clip = clip + crop.transformedBy(transform)
+            }
+            doDrawTo(canvas, transform, clip, cache)
+        }
+
+        protected abstract fun doDrawTo(
+            canvas: Canvas, transform: AffineTransform?, clip: List<Shape>, cache: Canvas.Cache?
+        )
+
         override fun close() {
+            canvasCache.close()
             nonBlankBoundaryPointsCache.close()
         }
 
@@ -218,18 +263,11 @@ sealed interface Picture : AutoCloseable {
 
         private val lock = ReentrantLock()
 
-        override fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
+        override fun doDrawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>, cache: Canvas.Cache?) {
             lock.withLock {
                 check(src.handle.scope().isAlive) { "SVG is already closed." }
-                canvas.drawSVG(src, transform, clip)
+                canvas.drawSVG(src, transform, clip, cache)
             }
-        }
-
-        override fun prepareAsBitmap(
-            canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = lock.withLock {
-            check(src.handle.scope().isAlive) { "SVG is already closed." }
-            canvas.prepareSVGAsBitmap(src, crop, transform, cached)
         }
 
         fun import(importer: Document): Element =
@@ -381,18 +419,11 @@ sealed interface Picture : AutoCloseable {
 
         private val lock = ReentrantLock()
 
-        override fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
+        override fun doDrawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>, cache: Canvas.Cache?) {
             lock.withLock {
                 check(!doc.document.isClosed) { "PDF document is already closed." }
-                canvas.drawPDF(doc, transform, clip)
+                canvas.drawPDF(doc, transform, clip, cache)
             }
-        }
-
-        override fun prepareAsBitmap(
-            canvas: Canvas, crop: Rectangle2D?, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = lock.withLock {
-            check(!doc.document.isClosed) { "PDF document is already closed." }
-            canvas.preparePDFAsBitmap(doc, crop, transform, cached)
         }
 
         /** @throws Exception */
