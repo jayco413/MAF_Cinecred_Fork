@@ -48,6 +48,9 @@ inline fun <R> IntArray.flatMapToSequence(crossinline transform: (Int) -> Iterab
     sequence { for (e in this@flatMapToSequence) yieldAll(transform(e)) }
 
 
+inline fun DoubleArray.mapToFloatArray(transform: (Double) -> Float): FloatArray =
+    FloatArray(size) { i -> transform(this[i]) }
+
 inline fun DoubleArray.mapToArray(transform: (Double) -> Double): DoubleArray =
     DoubleArray(size) { i -> transform(this[i]) }
 

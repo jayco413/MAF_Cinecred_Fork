@@ -1,6 +1,7 @@
 package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.flatMapToSequence
+import com.loadingbyte.cinecred.common.mapToFloatArray
 import com.loadingbyte.cinecred.common.transformedBy
 import java.awt.BasicStroke
 import java.awt.Shape
@@ -299,7 +300,8 @@ class FormattedString private constructor(
         val dashed = if (shape.dashPatternPx == null || shape.dashPatternPx.isEmpty()) null else
             BasicStroke(
                 shape.heightPx.toFloat(), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f,
-                shape.dashPatternPx.toFloatArray(), 0f
+                // Restrict the minimum size of a dash to prevent the Area computation below from crashing.
+                shape.dashPatternPx.mapToFloatArray { it.toFloat().coerceAtLeast(0.5f) }, 0f
             ).createStrokedShape(Line2D.Double(x, shape.offsetPx, x + w, shape.offsetPx))
 
         if (dashed != null && (shape.cornerJoin == BasicStroke.JOIN_MITER || r == 0.0))
