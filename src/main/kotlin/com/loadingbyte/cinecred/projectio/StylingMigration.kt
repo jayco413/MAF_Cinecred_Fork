@@ -383,6 +383,17 @@ fun migrateStylingFrom181(ctx: StylingReaderContext, rawStyling: RawStyling) {
                 "FIRST" -> contentStyle["${prefix}VJustifyBodyFragment"] = "FIRST_ROW_FIRST_LINE"
                 "LAST" -> contentStyle["${prefix}VJustifyBodyFragment"] = "LAST_ROW_FIRST_LINE"
             }
+
+    // 1.8.1 -> 1.9.0: Angles must now be mod 360.
+    for (letterStyle in rawStyling.letterStyles)
+        (letterStyle["layers"] as? List<*>)?.forEach { layer ->
+            if (layer is MutableMap<*, *>) {
+                @Suppress("UNCHECKED_CAST")
+                layer as MutableMap<String, Any>
+                for (key in arrayOf("gradientAngleDeg", "offsetAngleDeg"))
+                    (layer[key] as? Number)?.toDouble()?.let { if (it !in 0.0..<360.0) layer[key] = it.mod(360.0) }
+            }
+        }
 }
 
 

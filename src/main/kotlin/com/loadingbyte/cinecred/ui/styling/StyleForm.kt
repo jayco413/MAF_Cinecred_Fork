@@ -243,8 +243,7 @@ class StyleForm<S : Style>(
             )
         else when (setting.type) {
             Int::class.javaPrimitiveType, Int::class.javaObjectType -> {
-                val limiter = Scrubber.NumberLimiter(intConstr?.min, intConstr?.max, intConstr?.atom)
-                val sensitivity = numberWidgetSpec?.sensitivity
+                val limiter = Scrubber.NumberLimiter(intConstr?.min, intConstr?.max, intConstr?.atom, intConstr?.mod)
                 if (siblingOrdinalConstr != null) {
                     // See makeListWidget() for a comment on why we need an inconsistent widget for sibling ordinals.
                     InconsistentComboBoxWidget(Int::class.javaObjectType, items = emptyList(), widthSpec = widthSpec)
@@ -252,17 +251,24 @@ class StyleForm<S : Style>(
                     val scheme = Scrubber.FramesAsTimecodeScheme(FPS(1, 1), TimecodeFormat.entries[0])
                     TimecodeWidget(scheme, limiter, widthSpec)
                 } else {
-                    val scheme = Scrubber.NumericScheme(Int::class.javaObjectType, unit = unitWidgetSpec?.unit)
-                    ScrubberWidget(scheme, limiter, sensitivity, widthSpec)
+                    // StyleFormAdjuster needs NumberWidgetSpecs to automatically adjust the sensitivity.
+                    requireNotNull(numberWidgetSpec?.sensitivity) { "$setting misses sensitivity WidgetSpec." }
+                    val unit = unitWidgetSpec?.unit
+                    val softAtom = numberWidgetSpec.softAtom as Int?
+                    val scheme = Scrubber.NumericScheme(Int::class.javaObjectType, unit = unit, softAtom = softAtom)
+                    ScrubberWidget(scheme, limiter, widthSpec = widthSpec)
                 }
             }
             Double::class.javaPrimitiveType, Double::class.javaObjectType -> {
+                // StyleFormAdjuster needs NumberWidgetSpecs to automatically adjust the sensitivity.
+                requireNotNull(numberWidgetSpec?.sensitivity) { "$setting misses sensitivity WidgetSpec." }
                 val min = doubleConstr?.let { if (it.minInclusive) it.min else it.min?.plus(0.001) }
                 val max = doubleConstr?.let { if (it.maxInclusive) it.max else it.max?.minus(0.001) }
-                val limiter = Scrubber.NumberLimiter(min, max)
-                val sensitivity = numberWidgetSpec?.sensitivity
-                val scheme = Scrubber.NumericScheme(Double::class.javaObjectType, unit = unitWidgetSpec?.unit)
-                ScrubberWidget(scheme, limiter, sensitivity, widthSpec)
+                val limiter = Scrubber.NumberLimiter(min, max, doubleConstr?.atom, doubleConstr?.mod)
+                val unit = unitWidgetSpec?.unit
+                val softAtom = numberWidgetSpec.softAtom as Double?
+                val scheme = Scrubber.NumericScheme(Double::class.javaObjectType, unit = unit, softAtom = softAtom)
+                ScrubberWidget(scheme, limiter, widthSpec = widthSpec)
             }
             Boolean::class.javaPrimitiveType, Boolean::class.javaObjectType -> when {
                 toggleButtonGroupWidgetSpec != null -> makeToggleButtonGroupWidget(

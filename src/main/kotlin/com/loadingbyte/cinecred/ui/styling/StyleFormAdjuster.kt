@@ -8,6 +8,7 @@ import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.ui.helper.FontFamilies
 import com.loadingbyte.cinecred.ui.helper.Form
+import com.loadingbyte.cinecred.ui.helper.ScrubberWidget
 import java.util.*
 import javax.swing.Icon
 
@@ -183,6 +184,13 @@ class StyleFormAdjuster(
         }
 
         for (spec in getStyleWidgetSpecs(curStyle.javaClass)) when (spec) {
+            is NumberWidgetSpec<S, *> -> {
+                for (setting in spec.settings)
+                    (curForm.getWidgetFor(setting) as? ScrubberWidget)?.sensitivity =
+                        requireNotNull(spec.sensitivity) { "$setting misses sensitivity WidgetSpec." } *
+                                // This is a simple heuristic that adapts the sensitivity of scrubbers for pixel values.
+                                if (setting.name.endsWith("Px")) (styling.global.resolution.k / 2).toDouble() else 1.0
+            }
             is ToggleButtonGroupWidgetSpec<S, *> -> {
                 fun <SUBJ : Any> makeToIcon(spec: ToggleButtonGroupWidgetSpec<S, SUBJ>): ((SUBJ) -> Icon)? =
                     spec.getDynIcon?.let { return fun(item: SUBJ) = it(styling, curStyle, item) }

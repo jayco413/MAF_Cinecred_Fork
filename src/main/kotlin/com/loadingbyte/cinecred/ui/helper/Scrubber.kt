@@ -158,6 +158,16 @@ class Scrubber<T : Any>(scheme: Scheme<T>) : JFormattedTextField() {
             else -> throw IllegalArgumentException()
         }.let { @Suppress("UNCHECKED_CAST") (it as N) }
 
+        private fun <N : Number> N.mod2(other: N): N = when (this) {
+            is Byte -> this.mod(other as Byte)
+            is Short -> this.mod(other as Short)
+            is Int -> this.mod(other as Int)
+            is Long -> this.mod(other as Long)
+            is Float -> this.mod(other as Float)
+            is Double -> this.mod(other as Double)
+            else -> throw IllegalArgumentException()
+        }.let { @Suppress("UNCHECKED_CAST") (it as N) }
+
         private fun <N : Number> Class<N>.convert(n: Number): N = when (this) {
             Byte::class.javaObjectType -> n.toByte()
             Short::class.javaObjectType -> n.toShort()
@@ -176,6 +186,7 @@ class Scrubber<T : Any>(scheme: Scheme<T>) : JFormattedTextField() {
         val precision: Int = 3,
         val unit: String? = null,
         val multiplier: T? = null,
+        val softAtom: T? = null,
         val logStep: Boolean = false
     ) : Scheme<T> {
 
@@ -202,7 +213,7 @@ class Scrubber<T : Any>(scheme: Scheme<T>) : JFormattedTextField() {
             when (logStep) {
                 false -> value + valueClass.convert(steps).let { if (multiplier == null) it else it / multiplier }
                 true -> value * valueClass.convert(10.0.pow(steps))
-            }
+            }.let { if (softAtom == null) it else valueClass.convert((it / softAtom).toLong()) * softAtom }
 
         private class Formatter<T : Number>(
             private val scrubber: Scrubber<T>,
@@ -366,7 +377,12 @@ class Scrubber<T : Any>(scheme: Scheme<T>) : JFormattedTextField() {
     }
 
 
-    data class NumberLimiter<T : Number>(val min: T? = null, val max: T? = null, val atom: T? = null) : Limiter<T> {
+    data class NumberLimiter<T : Number>(
+        val min: T? = null,
+        val max: T? = null,
+        val atom: T? = null,
+        val mod: T? = null
+    ) : Limiter<T> {
 
         override fun coerce(value: T): T {
             @Suppress("UNCHECKED_CAST")
@@ -377,7 +393,9 @@ class Scrubber<T : Any>(scheme: Scheme<T>) : JFormattedTextField() {
                 max != null && value > max -> value = max
             }
             if (atom != null)
-                value = value / atom * atom
+                value = value.javaClass.convert((value / atom).toLong()) * atom
+            if (mod != null)
+                value = value.mod2(mod)
             return value
         }
 

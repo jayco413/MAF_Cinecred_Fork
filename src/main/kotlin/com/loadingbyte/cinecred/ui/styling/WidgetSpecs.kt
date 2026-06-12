@@ -28,6 +28,7 @@ fun <S : Style> getStyleWidgetSpecs(styleClass: Class<S>): List<StyleWidgetSpec<
 
 private val GLOBAL_WIDGET_SPECS: List<StyleWidgetSpec<Global, *>> = listOf(
     UnitWidgetSpec(Global::unitVGapPx.st(), unit = "px"),
+    NumberWidgetSpec(Global::unitVGapPx.st(), sensitivity = 0.1),
     LabelWidgetSpec(Global::resolution.st(), labelL10nKey = "resolution"),
     TimecodeWidgetSpec(
         Global::runtimeFrames.st(),
@@ -59,6 +60,7 @@ private val PAGE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<PageStyle, *>> = listO
         PageStyle::cardFadeOutFrames.st(), PageStyle::cardFadeOutTransitionStyleName.st(),
         unionName = "cardFadeOut", settingIcons = listOf(null, TRANSITION_ICON)
     ),
+    NumberWidgetSpec(PageStyle::scrollPxPerFrame.st(), sensitivity = 0.02, softAtom = 1.0),
     LabelWidgetSpec(
         PageStyle::scrollRuntimeFrames.st(),
         labelL10nKey = "ui.styling.global.runtimeFrames", descL10nKey = "ui.styling.global.runtimeFrames.desc"
@@ -93,6 +95,8 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     ),
     WidthWidgetSpec(ContentStyle::vMarginTopPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::vMarginBottomPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::vMarginTopPx.st(), sensitivity = 0.1),
+    NumberWidgetSpec(ContentStyle::vMarginBottomPx.st(), sensitivity = 0.1),
     UnionWidgetSpec(
         ContentStyle::vMarginTopPx.st(), ContentStyle::vMarginBottomPx.st(),
         unionName = "vMarginPx", settingIcons = listOf(GUILLEMET_UP_ICON, GUILLEMET_DOWN_ICON)
@@ -112,6 +116,8 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     ToggleButtonGroupWidgetSpec(ContentStyle::gridStructure.st(), ICON),
     WidthWidgetSpec(ContentStyle::gridForceColWidthPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::gridForceRowHeightPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::gridForceColWidthPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(ContentStyle::gridForceRowHeightPx.st(), sensitivity = 0.2),
     ToggleButtonGroupWidgetSpec(ContentStyle::gridHarmonizeColWidths.st(), ICON),
     WidthWidgetSpec(ContentStyle::gridHarmonizeColWidthsAcrossStyles.st(), WidthSpec.SQUEEZE),
     ToggleButtonGroupWidgetSpec(ContentStyle::gridHarmonizeColUnderoccupancy.st(), ICON),
@@ -134,11 +140,15 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
         ContentStyle::gridTextVJustifyFragments.st(), ContentStyle::gridTextVJustify.st(),
         unionName = "gridTextVJustify"
     ),
+    NumberWidgetSpec(ContentStyle::gridRowGapPx.st(), sensitivity = 0.2),
+    NumberWidgetSpec(ContentStyle::gridColGapPx.st(), sensitivity = 0.2),
     ToggleButtonGroupWidgetSpec(ContentStyle::flowDirection.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::flowRowHJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::flowSquareCells.st(), ICON, ::flowSquareCellsIcon),
     WidthWidgetSpec(ContentStyle::flowForceCellWidthPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::flowForceCellHeightPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::flowForceCellWidthPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(ContentStyle::flowForceCellHeightPx.st(), sensitivity = 0.2),
     ToggleButtonGroupWidgetSpec(ContentStyle::flowHarmonizeCellWidth.st(), ICON),
     WidthWidgetSpec(ContentStyle::flowHarmonizeCellWidthAcrossStyles.st(), WidthSpec.SQUEEZE),
     ToggleButtonGroupWidgetSpec(ContentStyle::flowHarmonizeCellHeight.st(), ICON),
@@ -159,12 +169,17 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     ),
     NumberWidgetSpec(ContentStyle::flowRowWidthPx.st(), sensitivity = 1.0),
     LabelWidgetSpec(ContentStyle::flowRowGapPx.st(), labelL10nKey = "ui.styling.content.gridRowGapPx"),
+    NumberWidgetSpec(ContentStyle::flowRowGapPx.st(), sensitivity = 0.2),
+    NumberWidgetSpec(ContentStyle::flowCellHGapPx.st(), sensitivity = 0.2),
     WidthWidgetSpec(ContentStyle::flowSeparator.st(), WidthSpec.NARROW),
     ToggleButtonGroupWidgetSpec(ContentStyle::flowSeparatorVJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::paragraphsLineHJustify.st(), ICON),
     NumberWidgetSpec(ContentStyle::paragraphsLineWidthPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(ContentStyle::paragraphsParaGapPx.st(), sensitivity = 0.2),
+    NumberWidgetSpec(ContentStyle::paragraphsLineGapPx.st(), sensitivity = 0.2),
     NewSectionWidgetSpec(ContentStyle::hasHead.st()),
     WidthWidgetSpec(ContentStyle::headForceWidthPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::headForceWidthPx.st(), sensitivity = 1.0),
     ToggleButtonGroupWidgetSpec(ContentStyle::headHarmonizeWidth.st(), ICON),
     WidthWidgetSpec(ContentStyle::headHarmonizeWidthAcrossStyles.st(), WidthSpec.SQUEEZE),
     UnionWidgetSpec(ContentStyle::headHarmonizeWidth.st(), ContentStyle::headHarmonizeWidthAcrossStyles.st()),
@@ -179,6 +194,7 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
         settingIcons = listOf(null, ARROW_LEFT_RIGHT_ICON, null),
         settingGaps = listOf("3", "unrel")
     ),
+    NumberWidgetSpec(ContentStyle::headGapPx.st(), sensitivity = 0.2),
     WidthWidgetSpec(ContentStyle::headLeader.st(), WidthSpec.NARROW),
     ToggleButtonGroupWidgetSpec(ContentStyle::headLeaderHJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::headLeaderVJustify.st(), ICON),
@@ -189,6 +205,9 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     WidthWidgetSpec(ContentStyle::headLeaderMarginLeftPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::headLeaderMarginRightPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::headLeaderSpacingPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::headLeaderMarginLeftPx.st(), sensitivity = 0.1),
+    NumberWidgetSpec(ContentStyle::headLeaderMarginRightPx.st(), sensitivity = 0.1),
+    NumberWidgetSpec(ContentStyle::headLeaderSpacingPx.st(), sensitivity = 0.1),
     UnionWidgetSpec(
         ContentStyle::headLeaderMarginLeftPx.st(), ContentStyle::headLeaderMarginRightPx.st(),
         ContentStyle::headLeaderSpacingPx.st(),
@@ -197,6 +216,7 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     ),
     NewSectionWidgetSpec(ContentStyle::hasTail.st()),
     WidthWidgetSpec(ContentStyle::tailForceWidthPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::tailForceWidthPx.st(), sensitivity = 1.0),
     ToggleButtonGroupWidgetSpec(ContentStyle::tailHarmonizeWidth.st(), ICON),
     WidthWidgetSpec(ContentStyle::tailHarmonizeWidthAcrossStyles.st(), WidthSpec.SQUEEZE),
     UnionWidgetSpec(ContentStyle::tailHarmonizeWidth.st(), ContentStyle::tailHarmonizeWidthAcrossStyles.st()),
@@ -211,6 +231,7 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
         settingIcons = listOf(null, ARROW_LEFT_RIGHT_ICON, null),
         settingGaps = listOf("3", "unrel")
     ),
+    NumberWidgetSpec(ContentStyle::tailGapPx.st(), sensitivity = 0.2),
     WidthWidgetSpec(ContentStyle::tailLeader.st(), WidthSpec.NARROW),
     ToggleButtonGroupWidgetSpec(ContentStyle::tailLeaderHJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::tailLeaderVJustify.st(), ICON),
@@ -221,6 +242,9 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     WidthWidgetSpec(ContentStyle::tailLeaderMarginLeftPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::tailLeaderMarginRightPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(ContentStyle::tailLeaderSpacingPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(ContentStyle::tailLeaderMarginLeftPx.st(), sensitivity = 0.1),
+    NumberWidgetSpec(ContentStyle::tailLeaderMarginRightPx.st(), sensitivity = 0.1),
+    NumberWidgetSpec(ContentStyle::tailLeaderSpacingPx.st(), sensitivity = 0.1),
     UnionWidgetSpec(
         ContentStyle::tailLeaderMarginLeftPx.st(), ContentStyle::tailLeaderMarginRightPx.st(),
         ContentStyle::tailLeaderSpacingPx.st(),
@@ -238,6 +262,7 @@ private val LETTER_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<LetterStyle, *>> = l
     ),
     UnitWidgetSpec(LetterStyle::trackingEm.st(), unit = "em"),
     WidthWidgetSpec(LetterStyle::heightPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(LetterStyle::heightPx.st(), sensitivity = 0.1),
     UnionWidgetSpec(
         LetterStyle::heightPx.st(),
         unionLabelL10nKey = "height",
@@ -245,6 +270,8 @@ private val LETTER_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<LetterStyle, *>> = l
     ),
     WidthWidgetSpec(LetterStyle::leadingTopRh.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(LetterStyle::leadingBottomRh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(LetterStyle::leadingTopRh.st(), sensitivity = 0.1),
+    NumberWidgetSpec(LetterStyle::leadingBottomRh.st(), sensitivity = 0.1),
     MultiplierWidgetSpec(
         LetterStyle::leadingTopRh.st(), LetterStyle::leadingBottomRh.st(),
         getMultiplier = { _, style -> style.heightPx }
@@ -263,9 +290,11 @@ private val LETTER_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<LetterStyle, *>> = l
     ToggleButtonGroupWidgetSpec(LetterStyle::smallCaps.st(), ICON),
     ToggleButtonGroupWidgetSpec(LetterStyle::superscript.st(), ICON),
     WidthWidgetSpec(LetterStyle::superscriptScaling.st(), WidthSpec.TINY),
-    NumberWidgetSpec(LetterStyle::superscriptScaling.st(), sensitivity = 0.002),
     WidthWidgetSpec(LetterStyle::superscriptHOffsetRfh.st(), WidthSpec.TINY),
     WidthWidgetSpec(LetterStyle::superscriptVOffsetRfh.st(), WidthSpec.TINY),
+    NumberWidgetSpec(LetterStyle::superscriptScaling.st(), sensitivity = 0.002),
+    NumberWidgetSpec(LetterStyle::superscriptHOffsetRfh.st(), sensitivity = 0.1),
+    NumberWidgetSpec(LetterStyle::superscriptVOffsetRfh.st(), sensitivity = 0.1),
     MultiplierWidgetSpec(
         LetterStyle::superscriptHOffsetRfh.st(), LetterStyle::superscriptVOffsetRfh.st(),
         getMultiplier = { _, style -> style.heightPx * (1.0 - style.leadingTopRh - style.leadingBottomRh) }
@@ -326,8 +355,11 @@ private val LAYER_WIDGET_SPECS: List<StyleWidgetSpec<Layer, *>> = listOf(
     WidthWidgetSpec(Layer::color1.st(), WidthSpec.TINIER),
     WidthWidgetSpec(Layer::color2.st(), WidthSpec.TINIER),
     WidthWidgetSpec(Layer::gradientAngleDeg.st(), WidthSpec.TINY),
+    NumberWidgetSpec(Layer::gradientAngleDeg.st(), sensitivity = 1.0),
     WidthWidgetSpec(Layer::gradientExtentRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::gradientExtentRfh.st(), sensitivity = 1.0),
     WidthWidgetSpec(Layer::gradientShiftRfh.st(), WidthSpec.TINY),
+    NumberWidgetSpec(Layer::gradientShiftRfh.st(), sensitivity = 0.5),
     UnionWidgetSpec(
         Layer::coloring.st(), Layer::color1.st(), Layer::color2.st(),
         Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
@@ -337,6 +369,8 @@ private val LAYER_WIDGET_SPECS: List<StyleWidgetSpec<Layer, *>> = listOf(
     ToggleButtonGroupWidgetSpec(Layer::stripePreset.st(), ICON),
     WidthWidgetSpec(Layer::stripeHeightRfh.st(), WidthSpec.TINY),
     WidthWidgetSpec(Layer::stripeOffsetRfh.st(), WidthSpec.TINY),
+    NumberWidgetSpec(Layer::stripeHeightRfh.st(), sensitivity = 0.1),
+    NumberWidgetSpec(Layer::stripeOffsetRfh.st(), sensitivity = 0.1),
     UnionWidgetSpec(
         Layer::stripePreset.st(), Layer::stripeHeightRfh.st(), Layer::stripeOffsetRfh.st(),
         settingIcons = listOf(null, SIZE_HEIGHT_ICON, ARROW_UP_DOWN_ICON)
@@ -345,6 +379,10 @@ private val LAYER_WIDGET_SPECS: List<StyleWidgetSpec<Layer, *>> = listOf(
     WidthWidgetSpec(Layer::stripeWidenRightRfh.st(), WidthSpec.TINY),
     WidthWidgetSpec(Layer::stripeWidenTopRfh.st(), WidthSpec.TINY),
     WidthWidgetSpec(Layer::stripeWidenBottomRfh.st(), WidthSpec.TINY),
+    NumberWidgetSpec(Layer::stripeWidenLeftRfh.st(), sensitivity = 0.2),
+    NumberWidgetSpec(Layer::stripeWidenRightRfh.st(), sensitivity = 0.2),
+    NumberWidgetSpec(Layer::stripeWidenTopRfh.st(), sensitivity = 0.2),
+    NumberWidgetSpec(Layer::stripeWidenBottomRfh.st(), sensitivity = 0.2),
     UnionWidgetSpec(
         Layer::stripeWidenLeftRfh.st(), Layer::stripeWidenRightRfh.st(),
         Layer::stripeWidenTopRfh.st(), Layer::stripeWidenBottomRfh.st(),
@@ -353,23 +391,31 @@ private val LAYER_WIDGET_SPECS: List<StyleWidgetSpec<Layer, *>> = listOf(
     ),
     ToggleButtonGroupWidgetSpec(Layer::stripeCornerJoin.st(), ICON),
     WidthWidgetSpec(Layer::stripeCornerRadiusRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::stripeCornerRadiusRfh.st(), sensitivity = 0.1),
     UnionWidgetSpec(Layer::stripeCornerJoin.st(), Layer::stripeCornerRadiusRfh.st(), settingLabels = listOf(1)),
     WidthWidgetSpec(Layer::stripeDashPatternRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::stripeDashPatternRfh.st(), sensitivity = 0.05),
     SimpleListWidgetSpec(
         Layer::stripeDashPatternRfh.st(),
         newElement = 0.1, newElementIsLastElement = true, elementsPerRow = 2
     ),
     WidthWidgetSpec(Layer::dilationRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::dilationRfh.st(), sensitivity = 0.02),
     ToggleButtonGroupWidgetSpec(Layer::dilationJoin.st(), ICON),
     UnionWidgetSpec(Layer::dilationRfh.st(), Layer::dilationJoin.st(), unionName = "dilation"),
     WidthWidgetSpec(Layer::contourThicknessRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::contourThicknessRfh.st(), sensitivity = 0.02),
     ToggleButtonGroupWidgetSpec(Layer::contourJoin.st(), ICON),
     UnionWidgetSpec(Layer::contour.st(), Layer::contourThicknessRfh.st(), Layer::contourJoin.st()),
     ToggleButtonGroupWidgetSpec(Layer::offsetCoordinateSystem.st(), ICON),
     WidthWidgetSpec(Layer::hOffsetRfh.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(Layer::vOffsetRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::hOffsetRfh.st(), sensitivity = 0.1),
+    NumberWidgetSpec(Layer::vOffsetRfh.st(), sensitivity = 0.1),
     WidthWidgetSpec(Layer::offsetAngleDeg.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::offsetAngleDeg.st(), sensitivity = 1.0),
     WidthWidgetSpec(Layer::offsetDistanceRfh.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(Layer::offsetDistanceRfh.st(), sensitivity = 0.1),
     UnionWidgetSpec(
         Layer::hOffsetRfh.st(), Layer::vOffsetRfh.st(),
         Layer::offsetAngleDeg.st(), Layer::offsetDistanceRfh.st(),
@@ -416,6 +462,8 @@ private val PICTURE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<PictureStyle, *>> =
     UnitWidgetSpec(PictureStyle::rotationDeg.st(), unit = "°"),
     WidthWidgetSpec(PictureStyle::widthPx.st(), WidthSpec.NARROW),
     WidthWidgetSpec(PictureStyle::heightPx.st(), WidthSpec.NARROW),
+    NumberWidgetSpec(PictureStyle::widthPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(PictureStyle::heightPx.st(), sensitivity = 1.0),
     UnionWidgetSpec(
         PictureStyle::widthPx.st(), PictureStyle::heightPx.st(),
         unionLabelL10nKey = "resolution", settingIcons = listOf(SIZE_WIDTH_ICON, SIZE_HEIGHT_ICON)
@@ -430,6 +478,10 @@ private val PICTURE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<PictureStyle, *>> =
     WidthWidgetSpec(PictureStyle::cropRightPx.st(), WidthSpec.TINY),
     WidthWidgetSpec(PictureStyle::cropTopPx.st(), WidthSpec.TINY),
     WidthWidgetSpec(PictureStyle::cropBottomPx.st(), WidthSpec.TINY),
+    NumberWidgetSpec(PictureStyle::cropLeftPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(PictureStyle::cropRightPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(PictureStyle::cropTopPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(PictureStyle::cropBottomPx.st(), sensitivity = 1.0),
     UnionWidgetSpec(
         PictureStyle::cropLeftPx.st(), PictureStyle::cropRightPx.st(),
         PictureStyle::cropTopPx.st(), PictureStyle::cropBottomPx.st(),
@@ -466,6 +518,8 @@ private val TAPE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<TapeStyle, *>> = listO
     UnitWidgetSpec(TapeStyle::rotationDeg.st(), unit = "°"),
     WidthWidgetSpec(TapeStyle::widthPx.st(), WidthSpec.LITTLE),
     WidthWidgetSpec(TapeStyle::heightPx.st(), WidthSpec.LITTLE),
+    NumberWidgetSpec(TapeStyle::widthPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(TapeStyle::heightPx.st(), sensitivity = 1.0),
     UnionWidgetSpec(
         TapeStyle::widthPx.st(), TapeStyle::heightPx.st(),
         unionLabelL10nKey = "resolution", settingIcons = listOf(SIZE_WIDTH_ICON, SIZE_HEIGHT_ICON)
@@ -480,6 +534,10 @@ private val TAPE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<TapeStyle, *>> = listO
     WidthWidgetSpec(TapeStyle::cropRightPx.st(), WidthSpec.TINY),
     WidthWidgetSpec(TapeStyle::cropTopPx.st(), WidthSpec.TINY),
     WidthWidgetSpec(TapeStyle::cropBottomPx.st(), WidthSpec.TINY),
+    NumberWidgetSpec(TapeStyle::cropLeftPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(TapeStyle::cropRightPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(TapeStyle::cropTopPx.st(), sensitivity = 1.0),
+    NumberWidgetSpec(TapeStyle::cropBottomPx.st(), sensitivity = 1.0),
     UnionWidgetSpec(
         TapeStyle::cropLeftPx.st(), TapeStyle::cropRightPx.st(),
         TapeStyle::cropTopPx.st(), TapeStyle::cropBottomPx.st(),
@@ -658,6 +716,7 @@ class WidthWidgetSpec<S : Style>(
 class NumberWidgetSpec<S : Style, SUBJ : Number>(
     setting: StyleSetting<S, SUBJ>,
     val sensitivity: Double? = null,
+    val softAtom: SUBJ? = null,
     val toString: ((SUBJ) -> String)? = null
 ) : StyleWidgetSpec<S, StyleSetting<S, SUBJ>>(setting)
 

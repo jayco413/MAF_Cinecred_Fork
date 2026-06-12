@@ -296,7 +296,7 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
             layer.shape == LayerShape.CLONE && layer.cloneLayers.contains(ord) || layer.clearingLayers.contains(ord)
         }
     },
-    DoubleConstr(ERROR, Layer::gradientAngleDeg.st(), min = -90.0, max = 90.0),
+    DoubleConstr(ERROR, Layer::gradientAngleDeg.st(), mod = 360.0),
     DoubleConstr(ERROR, Layer::gradientExtentRfh.st(), min = 0.0),
     DoubleConstr(ERROR, Layer::stripeHeightRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::stripeCornerRadiusRfh.st(), min = 0.0, minInclusive = false),
@@ -313,6 +313,7 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
     MinSizeConstr(WARN, Layer::cloneLayers.st(), minSize = 1),
     DoubleConstr(ERROR, Layer::dilationRfh.st(), min = 0.0),
     DoubleConstr(ERROR, Layer::contourThicknessRfh.st(), min = 0.0, minInclusive = false),
+    DoubleConstr(ERROR, Layer::offsetAngleDeg.st(), mod = 360.0),
     DynChoiceConstr(WARN, Layer::anchor.st()) { _, style ->
         if (style.shape == LayerShape.CLONE && style.cloneLayers.size >= 2) EnumSet.allOf(LayerAnchor::class.java)
         else EnumSet.of(LayerAnchor.INDIVIDUAL, LayerAnchor.GLOBAL)
@@ -402,7 +403,8 @@ private val PICTURE_STYLE_CONSTRAINTS: List<StyleConstraint<PictureStyle, *>> = 
         } catch (_: IllegalStateException) {
             true
         }
-    }
+    },
+    DoubleConstr(ERROR, PictureStyle::rotationDeg.st(), mod = 360.0)
 )
 
 
@@ -434,7 +436,7 @@ private val TAPE_STYLE_CONSTRAINTS: List<StyleConstraint<TapeStyle, *>> = listOf
             true
         }
     },
-    IntConstr(ERROR, TapeStyle::rotationDeg.st(), atom = 90),
+    IntConstr(ERROR, TapeStyle::rotationDeg.st(), atom = 90, mod = 360),
     TapeSliceConstr(
         WARN, TapeStyle::slice.st(),
         getFPS = { styling, style ->
@@ -500,7 +502,8 @@ class IntConstr<S : Style>(
     setting: StyleSetting<S, Int>,
     val min: Int? = null,
     val max: Int? = null,
-    val atom: Int? = null
+    val atom: Int? = null,
+    val mod: Int? = null
 ) : StyleConstraint<S, StyleSetting<S, Int>>(setting)
 
 
@@ -510,7 +513,9 @@ class DoubleConstr<S : Style>(
     val min: Double? = null,
     val minInclusive: Boolean = true,
     val max: Double? = null,
-    val maxInclusive: Boolean = true
+    val maxInclusive: Boolean = true,
+    val atom: Double? = null,
+    val mod: Double? = null
 ) : StyleConstraint<S, StyleSetting<S, Double>>(setting)
 
 
@@ -674,17 +679,24 @@ fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
                         val min = cst.min
                         val max = cst.max
                         val atom = cst.atom
+                        val mod = cst.mod
                         if (min != null && value < min)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberGTE", min))
                         if (max != null && value > max)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLTE", max))
                         if (atom != null && value % atom != 0)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberMod", atom))
+                        if (mod != null && value < 0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberGTE", 0))
+                        if (mod != null && value >= mod)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLT", mod))
                     }
                 is DoubleConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, value ->
                         val min = cst.min
                         val max = cst.max
+                        val atom = cst.atom
+                        val mod = cst.mod
                         if (!value.isFinite())
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberFinite"))
                         if (min != null && cst.minInclusive && value < min)
@@ -695,6 +707,12 @@ fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLTE", max))
                         if (max != null && !cst.maxInclusive && value >= max)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLT", max))
+                        if (atom != null && value % atom != 0.0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberMod", atom))
+                        if (mod != null && value < 0.0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberGTE", 0.0))
+                        if (mod != null && value >= mod)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLT", mod))
                     }
                 is FixedChoiceConstr<S, *> ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, value ->

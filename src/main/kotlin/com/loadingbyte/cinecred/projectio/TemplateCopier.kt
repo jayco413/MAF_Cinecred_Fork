@@ -34,11 +34,7 @@ class Template(
     val fps: FPS,
     val timecodeFormat: TimecodeFormat,
     val sample: Boolean
-) {
-    // We use a heuristic to determine by how much to scale all sizes in the template:
-    // For image widths < 3000, we scale by 1. For image widths >= 3000 and < 5000, we scale by 2. And so on...
-    val scale: Int = max(1, (resolution.widthPx + 1000) / 2000)
-}
+)
 
 
 private fun tryCopyTemplate(
@@ -139,7 +135,8 @@ private fun fillIn(string: String, template: Template): String = string
             "subsequentGapFrames" -> template.fps.run { numerator / denominator }.toString()
             "cardRuntimeFrames" -> template.fps.run { 5 * numerator / denominator }.toString()
             "cardFadeFrames" -> template.fps.run { numerator / (2 * denominator) }.toString()
-            "scrollPxPerFrame" -> max(1, template.fps.run { 78 * denominator / numerator } * template.scale).toString()
+            "scrollPxPerFrame" ->
+                max(1, template.fps.run { 78 * denominator / numerator } * template.resolution.k / 2).toString()
             "projectIO.credits.table.headDesc" -> {
                 val styleKw = l10n("projectIO.credits.table.style", template.locale)
                 val stylePlaceholder = "[${l10n("ui.styling.letter.name", template.locale)}]"
@@ -227,7 +224,7 @@ private fun fillIn(string: String, template: Template): String = string
     }
     .replace(SCALING_REGEX) { match ->
         val num = match.groups[1]!!.value
-        (num.toInt() * template.scale).toString()
+        (num.toInt() * template.resolution.k / 2).toString()
     }
     .replace(TIMECODE_REGEX) { match ->
         val num = match.groups[1]!!.value

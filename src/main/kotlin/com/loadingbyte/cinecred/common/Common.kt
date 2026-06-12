@@ -34,6 +34,7 @@ import javax.swing.UIManager
 import kotlin.io.path.*
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 
 
@@ -68,6 +69,10 @@ enum class Severity { INFO, WARN, MIGRATE, ERROR }
 data class Resolution(val widthPx: Int, val heightPx: Int) {
 
     override fun toString() = "${widthPx}x${heightPx}"
+
+    /** Returns whether the resolution's width is closest to 1k, 2k, 3k, 4k, and so on. Never returns less than 1k. */
+    val k: Int
+        get() = max(1, roundingDiv(widthPx, 1024))
 
     companion object {
         fun fromString(str: String): Resolution {
