@@ -37,19 +37,17 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                 require(colors.size % numComps == 0)
                 val w = colors.size / numComps
                 val alp = if (alpha) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
-                var srcBitmap: Bitmap? = null
-                var dstBitmap: Bitmap? = null
-                var converter: BitmapConverter? = null
-                val cachedRef = bmpConvCache.remove(dst)
+                var cachedRef = bmpConvCache.remove(dst)
                 val cached = cachedRef?.get()
-                if (cached != null) {
+                val srcBitmap: Bitmap?
+                val dstBitmap: Bitmap?
+                val converter: BitmapConverter?
+                if (cached != null && cached.first.spec.run { resolution.widthPx == w && representation.alpha == alp }) {
                     srcBitmap = cached.first
                     dstBitmap = cached.second
                     converter = cached.third
-                }
-                if (srcBitmap == null || dstBitmap == null || converter == null ||
-                    srcBitmap.spec.resolution.widthPx != w || srcBitmap.spec.representation.alpha != alp
-                ) {
+                } else {
+                    cached?.run { first.close(); second.close(); third.close() }
                     val res = Resolution(w, 1)
                     val pixelFormat = Bitmap.PixelFormat.of(if (alpha) AV_PIX_FMT_RGBAF32 else AV_PIX_FMT_RGBF32)
                     val srcSpec = Bitmap.Spec(res, Bitmap.Representation(pixelFormat, this, alp))
@@ -57,16 +55,14 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                     srcBitmap = Bitmap.allocate(srcSpec)
                     dstBitmap = Bitmap.allocate(dstSpec)
                     converter = BitmapConverter(srcSpec, dstSpec)
+                    // As the BitmapConverter is usually just a SKCMS stage, we can ignore its byte size.
+                    cachedRef =
+                        DisposableReference(Triple(srcBitmap, dstBitmap, converter), srcBitmap.bytes + dstBitmap.bytes)
                 }
                 srcBitmap.put(colors, colors.size)
                 converter.convert(srcBitmap, dstBitmap)
                 dstBitmap.get(colors, colors.size)
-                bmpConvCache.put(
-                    dst,
-                    // As the BitmapConverter is usually just a SKCMS stage, we can ignore its size.
-                    if (cached != null) cachedRef else
-                        DisposableReference(Triple(srcBitmap, dstBitmap, converter), srcBitmap.bytes + dstBitmap.bytes)
-                )?.getAndClose()?.run { first.close(); second.close(); third.close() }
+                bmpConvCache.put(dst, cachedRef)?.getAndClose()?.run { first.close(); second.close(); third.close() }
             }
         if (clamp)
             for (i in colors.indices)
