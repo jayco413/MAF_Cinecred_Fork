@@ -60,7 +60,7 @@ class Bitmap private constructor(
     // These MemorySegments are not only useful for accessing the bitmap, they hopefully also make the garbage
     // collector aware that this object holds a large chunk of off-heap memory, so when it looks for non-reachable
     // or soft-reachable objects to free under memory pressure, it actually considers this one.
-    private val bufferSegment = frame.buf(0)?.let { buf ->
+    private val bufferSegment = frame.buf(0).let { buf ->
         MemorySegment.ofAddress(buf.data().address()).reinterpret(buf.size(), arena, null)
     }
     private val planeSegments = Array(spec.representation.pixelFormat.planes) { plane ->
@@ -110,7 +110,7 @@ class Bitmap private constructor(
 
     /** Returns the total number of bytes occupied by the picture data, excluding the [AVFrame]. */
     val bytes: Long
-        get() = planeSegments.sumOf(MemorySegment::byteSize)
+        get() = bufferSegment.byteSize()
 
     /**
      * Returns whether each plane of the bitmap starts at a [BYTE_ALIGNMENT]-aligned position and has a linesize that is
@@ -253,7 +253,7 @@ class Bitmap private constructor(
     }
 
     fun zero(): Bitmap {
-        checkNotNull(bufferSegment) { "Cannot zero a bitmap that wraps a custom memory segment." }.fill(0)
+        bufferSegment.fill(0)
         return this
     }
 
@@ -556,20 +556,6 @@ class Bitmap private constructor(
             require(!frame.isNull) { "Cannot create a bitmap from a null frame." }
             applySpecToFrame(spec, frame)
             return Bitmap(spec, frame)
-        }
-
-        /**
-         * Wraps the given [MemorySegment] into a bitmap, but doesn't make it memory-managed. When the memory is freed,
-         * make sure to also close the bitmap, or otherwise access to it will result in a segfault.
-         */
-        fun wrap(spec: Spec, plane: MemorySegment, linesize: Int): Bitmap {
-            require(plane.address() != 0L) { "Cannot create a bitmap from a null pointer." }
-            return allocateWithoutBufAndSetup(spec) { frame ->
-                frame.data(0, BytePointer().position(plane.address()))
-                frame.linesize(0, linesize)
-                // Note: It is important to leave frame.buf empty! Otherwise, we've observed that FFmpeg does
-                // unpredictable things and tries to free the memory even though it really shouldn't!
-            }
         }
 
         /**
