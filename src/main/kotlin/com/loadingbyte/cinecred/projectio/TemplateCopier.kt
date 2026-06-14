@@ -207,13 +207,13 @@ private fun fillIn(string: String, template: Template): String = string
                     locale = template.locale
                 )
             "projectIO.credits.table.pageGapDesc" -> {
-                val melt = l10n("projectIO.credits.table.melt", template.locale)
+                val fuse = l10n("projectIO.credits.table.melt", template.locale)
                 val linear = l10n("project.template.transitionStyleLinear", template.locale)
                 l10n(
                     key,
-                    l10nQuoted(melt, template.locale),
+                    l10nQuoted(fuse, template.locale),
                     l10nEnumQuoted(
-                        "00:04:56:23", "-00:04:56:23", melt, "$melt 00:00:02:00 $linear",
+                        "00:04:56:23", "-00:04:56:23", fuse, "$fuse 00:00:02:00 $linear",
                         locale = template.locale
                     ),
                     locale = template.locale

@@ -161,7 +161,7 @@ private class CreditsReader(
     val stageCompounds = mutableListOf<Compound>()
     var stageRuntimeFrames: Int? = null
     var stageRuntimeGroupName: String? = null
-    var stageMeltWithNext = false
+    var stageFuseWithNext = false
     var stageTransitionAfterFrames = 0
     var stageTransitionAfterStyle: TransitionStyle? = null
 
@@ -194,8 +194,8 @@ private class CreditsReader(
     // Keep track where the runtime of stages has been declared, for use in the construction of RuntimeGroupSources.
     var nextStageRuntimeFramesDeclaredRow = 0
     var stageRuntimeFramesDeclaredRow = 0
-    // Keep track where the melting of stages has been declared, for use in an error message.
-    var stageMeltDeclaredRow = 0
+    // Keep track where the fusion of stages has been declared, for use in an error message.
+    var stageFuseDeclaredRow = 0
     // Keep track where the current head and tail have been declared. This is used by an error message.
     var blockHeadDeclaredRow = 0
     var blockTailDeclaredRow = 0
@@ -456,12 +456,12 @@ private class CreditsReader(
 
         table.getString(row, "pageGap")?.let { str ->
             fun illFormattedPageGapMsg(): String {
-                val melt = l10n(MELT_KW.key)
+                val fuse = l10n(FUSE_KW.key)
                 return l10n(
                     "projectIO.credits.illFormattedPageGap",
                     "<i>$timecodeFormatLabel</i>", l10nQuoted(sampleTimecode), l10nQuoted("-$sampleTimecode"),
-                    "<i>$melt</i>", l10nQuoted(melt),
-                    l10nQuoted("$melt $sampleTimecode ${l10n("project.template.transitionStyleLinear")}")
+                    "<i>$fuse</i>", l10nQuoted(fuse),
+                    l10nQuoted("$fuse $sampleTimecode ${l10n("project.template.transitionStyleLinear")}")
                 )
             }
 
@@ -472,11 +472,16 @@ private class CreditsReader(
 
             if (!table.isEmpty(row, "pageStyle"))
                 table.log(row, "pageGap", WARN, l10n("projectIO.credits.pageGapInNewPageRow"))
-            else if (pageGapAfterFrames != null || stageMeltWithNext)
+            else if (pageGapAfterFrames != null || stageFuseWithNext)
                 table.log(row, "pageGap", WARN, l10n("projectIO.credits.pageGapAlreadySet"))
-            else if (str.substringBefore(' ') in MELT_KW) {
-                stageMeltWithNext = true
-                stageMeltDeclaredRow = row
+            else if (str.substringBefore(' ').let {
+                    if (ROOT_CASE_INSENSITIVE_COLLATOR.equals(it, "Melt")) {
+                        table.logMigrationPut(row, "pageGap", l10n(FUSE_KW.key, Locale.ENGLISH) + str.substring(4))
+                        true
+                    } else it in FUSE_KW
+                }) {
+                stageFuseWithNext = true
+                stageFuseDeclaredRow = row
                 val parts = str.split(' ', limit = 3)
                 when (parts.size) {
                     2 -> table.log(row, "pageGap", WARN, illFormattedPageGapMsg())
@@ -694,27 +699,27 @@ private class CreditsReader(
                 val currStyle = stageStyle
                 val nextStyle = nextStageStyle!!
                 var isLastOnPage = when {
-                    stageMeltWithNext ->
+                    stageFuseWithNext ->
                         if (currStyle?.behavior == nextStyle.behavior) {
                             val msg = l10n("projectIO.credits.cannotMeltSameBehavior")
-                            table.log(stageMeltDeclaredRow, "pageGap", WARN, msg)
+                            table.log(stageFuseDeclaredRow, "pageGap", WARN, msg)
                             true
                         } else false
                     // If no page gap has been declared and the two adjacent page styles still have the legacy melting
-                    // flag set, we also want to melt the stages.
+                    // flag set, we also want to fuse the stages.
                     pageGapAfterFrames == null -> {
                         val c = currStyle?.behavior == PageBehavior.SCROLL && currStyle.scrollMeltWithNext
                         val n = nextStyle.behavior == PageBehavior.SCROLL && nextStyle.scrollMeltWithPrev
                         if ((c || n) && currStyle?.behavior != nextStyle.behavior) {
                             val msd = if (c) MigrationDataSource(currStyle, PageStyle::scrollMeltWithNext.st())
                             else MigrationDataSource(nextStyle, PageStyle::scrollMeltWithPrev.st())
-                            table.logMigrationPut(row - 1, "pageGap", l10n(MELT_KW.key), msd)
+                            table.logMigrationPut(row - 1, "pageGap", l10n(FUSE_KW.key), msd)
                             false
                         } else true
                     }
                     else -> true
                 }
-                stageMeltWithNext = false
+                stageFuseWithNext = false
                 concludeStage(vGap)
                 // If the last stage was dropped (probably because it was an empty card stage) and we would now be left
                 // with two back-to-back scroll stages, also conclude the page; but do it silently, to not confuse the
@@ -723,7 +728,7 @@ private class CreditsReader(
                     pageStages.lastOrNull()?.style?.behavior == PageBehavior.SCROLL
                 ) isLastOnPage = true
                 if (isLastOnPage) {
-                    // If, after all attempted melting, the page only consists of a single empty scroll stage, it will
+                    // If, after all attempted fusions, the page only consists of a single empty scroll stage, it will
                     // be discarded. Warn the user about that.
                     if (pageStages.size == 1 && pageStages[0].compounds.isEmpty() && currStyle?.behavior == PageBehavior.SCROLL)
                         table.log(currStageDeclRow, "pageStyle", WARN, l10n("projectIO.credits.emptyScrollPage"))
@@ -1029,7 +1034,7 @@ private class CreditsReader(
 
     companion object {
 
-        val MELT_KW = Keyword("projectIO.credits.table.melt")
+        val FUSE_KW = Keyword("projectIO.credits.table.melt")
         val BELOW_KW = Keyword("projectIO.credits.table.below")
         val ABOVE_KW = Keyword("projectIO.credits.table.above")
         val HOOK_KW = Keyword("projectIO.credits.table.hook")

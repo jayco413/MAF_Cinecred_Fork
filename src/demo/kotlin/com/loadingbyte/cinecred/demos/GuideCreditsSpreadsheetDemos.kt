@@ -24,9 +24,9 @@ val GUIDE_CREDITS_SPREADSHEET_DEMOS
         GuideCreditsSpreadsheetSpinePositionParallelDemo,
         GuideCreditsSpreadsheetSpinePositionHookDemo,
         GuideCreditsSpreadsheetPageGapFadeIntoScrollDemo,
-        GuideCreditsSpreadsheetPageGapMeltDemo,
-        GuideCreditsSpreadsheetPageGapMeltHardDemo,
-        GuideCreditsSpreadsheetPageGapMeltSmoothDemo,
+        GuideCreditsSpreadsheetPageGapFuseDemo,
+        GuideCreditsSpreadsheetPageGapFuseHardDemo,
+        GuideCreditsSpreadsheetPageGapFuseSmoothDemo,
         GuideCreditsSpreadsheetPageGapScrollAwayDemo,
         GuideCreditsSpreadsheetBreakHarmonizationDemo
     )
@@ -182,8 +182,8 @@ object GuideCreditsSpreadsheetPageGapFadeIntoScrollDemo : VideoDemo(
 }
 
 
-object GuideCreditsSpreadsheetPageGapMeltDemo : PageDemo(
-    "$DIR/page-gap-melt", Format.STEP_GIF, pageWidth = 700, pageGuides = true
+object GuideCreditsSpreadsheetPageGapFuseDemo : PageDemo(
+    "$DIR/page-gap-fuse", Format.STEP_GIF, pageWidth = 700, pageGuides = true
 ) {
     override val isLocaleSensitive get() = false
     override fun credits() = listOf(TOP.parseCreditsCS(resolution = RES), (TOP + BOT).parseCreditsCS(resolution = RES))
@@ -194,31 +194,31 @@ object GuideCreditsSpreadsheetPageGapMeltDemo : PageDemo(
 2nd AC,Charly Clapper,,,,,
     """
     private const val BOT = """
-,,,5,,,Melt
+,,,5,,,Fuse
 ,Copyright © 2023,,,Blurb,Card,
     """
 }
 
 
-object GuideCreditsSpreadsheetPageGapMeltHardDemo : VideoDemo("$DIR/page-gap-melt-hard", Format.VIDEO_GIF) {
+object GuideCreditsSpreadsheetPageGapFuseHardDemo : VideoDemo("$DIR/page-gap-fuse-hard", Format.VIDEO_GIF) {
     override val isLocaleSensitive get() = false
     override fun credits() = """
 @Head,@Body,@Tail,@Vertical Gap,@Content Style,@Page Style,@Page Runtime,@Page Gap
 1st AC,Paul Puller,,,Gutter,Scroll,,
 2nd AC,Charly Clapper,,,,,,
-,,,5,,,,Melt
+,,,5,,,,Fuse
 ,Copyright © 2023,,,Blurb,Card,00:00:03:00,
         """.parseCreditsPS()
 }
 
 
-object GuideCreditsSpreadsheetPageGapMeltSmoothDemo : VideoDemo("$DIR/page-gap-melt-smooth", Format.VIDEO_GIF) {
+object GuideCreditsSpreadsheetPageGapFuseSmoothDemo : VideoDemo("$DIR/page-gap-fuse-smooth", Format.VIDEO_GIF) {
     override val isLocaleSensitive get() = false
     override fun credits() = """
 @Head,@Body,@Tail,@Vertical Gap,@Content Style,@Page Style,@Page Runtime,@Page Gap
 1st AC,Paul Puller,,,Gutter,Scroll,,
 2nd AC,Charly Clapper,,,,,,
-,,,5,,,,Melt 00:00:02:00 Linear
+,,,5,,,,Fuse 00:00:02:00 Linear
 ,Copyright © 2023,,,Blurb,Card,00:00:03:00,
         """.parseCreditsPS()
 }
@@ -232,7 +232,7 @@ object GuideCreditsSpreadsheetPageGapScrollAwayDemo : VideoDemo("$DIR/page-gap-s
 2nd AC,Charly Clapper,,,,
 ,,,,,-00:00:03:00
 ,,,Scroll,,
-,,,,,Melt
+,,,,,Fuse
 ,Copyright © 2023,Blurb,Card,00:00:03:00,
         """.parseCreditsPS()
 }

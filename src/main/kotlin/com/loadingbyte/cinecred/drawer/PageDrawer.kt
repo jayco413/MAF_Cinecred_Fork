@@ -112,7 +112,7 @@ private fun layoutStages(
     //   - If it's a scroll stage:
     //       - The y coordinates in the overall page image that are at the center of the screen when the scrolling of
     //         this stage starts respectively stops, and if necessary the points where the speed ramps start and stop.
-    //       - Recall that scroll stages can scroll into melted card stages. As such, these coordinates can lie inside
+    //       - Recall that scroll stages can scroll into fused card stages. As such, these coordinates can lie inside
     //         of card stages. For some purposes however, we need the portion of the scrolled height which is truly
     //         occupied by the scroll stage.
     //       - The number of frames that make up the scroll, split into the steady and ramp components.
@@ -130,12 +130,12 @@ private fun layoutStages(
                 val scrollStartY = when (prevStageBehavior) {
                     CARD -> stageRanges[stageIdx - 1].top + drawnStages.getValue(prevStage).middleYInImage!!
                     null -> topY - resolution.heightPx / 2.0
-                    SCROLL -> throw IllegalStateException("Scroll stages can't be melted back to back.")
+                    SCROLL -> throw IllegalStateException("Scroll stages can't be fused back to back.")
                 }
                 val scrollStopY = when (nextStageBehavior) {
                     CARD -> stageRanges[stageIdx + 1].top + drawnStages.getValue(nextStage).middleYInImage!!
                     null -> botY + resolution.heightPx / 2.0
-                    SCROLL -> throw IllegalStateException("Scroll stages can't be melted back to back.")
+                    SCROLL -> throw IllegalStateException("Scroll stages can't be fused back to back.")
                 }
                 // Find the height of the start/stop speed ramps if those are configured.
                 var startRampHeight = 0.0
@@ -159,7 +159,7 @@ private fun layoutStages(
                     stopRampHeight -= stopRampHeight / rampHeights * fix
                 }
                 // Find the portion of the scrolled height which really belongs to the scroll stage itself. If you are
-                // confused, recall that scroll stages can scroll into melted card stages.
+                // confused, recall that scroll stages can scroll into fused card stages.
                 val ownedScrollStartY = if (prevStageBehavior == CARD) topY else scrollStartY
                 val ownedScrollStopY = if (nextStageBehavior == CARD) botY else scrollStopY
                 val ownedScrollHeight = ownedScrollStopY - ownedScrollStartY
@@ -297,7 +297,7 @@ private fun matchRuntime(
     shrinkGroups: Set<RuntimeGroup>,
     expandGroups: Set<RuntimeGroup>
 ): Triple<MutableMap<Stage, DrawnStage>, MutableList<RuntimeGroup?>, Int> {
-    // Naturally, we do not modify the vertical gaps of standalone cards. Further, we only adjust the gaps of a melted
+    // Naturally, we do not modify the vertical gaps of standalone cards. Further, we only adjust the gaps of a fused
     // card if it either borders exactly one scroll stage (in which case it is basically treated exactly the same as the
     // scroll stage) or if it borders two scroll stages which both need to shrink or both need to expand (in which case
     // the card will shrink/expand as far as the more modest of the two scroll stages).
@@ -310,9 +310,9 @@ private fun matchRuntime(
                 operator fun Iterable<RuntimeGroup>.contains(stage: Stage) = any { stage in it.stages }
                 val prevStage = page.stages.getOrNull(cardIdx - 1)
                 val nextStage = page.stages.getOrNull(cardIdx + 1)
-                if (// Case 1: The card is standalone and not melted with any scroll stage.
+                if (// Case 1: The card is standalone and not fused with any scroll stage.
                     prevStage == null && nextStage == null ||
-                    // Case 2: The card is melted on both sides, and the scrolls on both sides must neither both shrink
+                    // Case 2: The card is fused on both sides, and the scrolls on both sides must neither both shrink
                     //         nor both expand.
                     prevStage != null && nextStage != null &&
                     (prevStage !in shrinkGroups || nextStage !in shrinkGroups) &&
@@ -511,9 +511,9 @@ private fun drawPage(
             )
             // If the card is an intermediate stage, also draw arrows that indicate that the card is intermediate.
             if (stageIdx != 0)
-                pageImage.drawMeltedCardArrowGuide(resolution, cardTopY)
+                pageImage.drawFusedCardArrowGuide(resolution, cardTopY)
             if (stageIdx != page.stages.lastIndex)
-                pageImage.drawMeltedCardArrowGuide(resolution, cardBotY)
+                pageImage.drawFusedCardArrowGuide(resolution, cardBotY)
             drawFrames(stage.cardRuntimeFrames, y = cardTopY + framesMargin)
         } else if (stageLayout.info is DrawnStageInfo.Scroll) {
             val y = when (val prevStageInfo = page.stages.getOrNull(stageIdx - 1)?.let(stageLayouts::getValue)?.info) {
@@ -531,7 +531,7 @@ private fun drawPage(
 }
 
 
-private fun DeferredImage.drawMeltedCardArrowGuide(resolution: Resolution, y: Y) {
+private fun DeferredImage.drawFusedCardArrowGuide(resolution: Resolution, y: Y) {
     val s = resolution.widthPx / 100.0
     val triangle = Path2D.Double().apply {
         moveTo(-0.5 * s, -0.45 * s)
