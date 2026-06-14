@@ -41,6 +41,8 @@ class VideoReader(
 
     class Frame(val bitmap: Bitmap, val timecode: Timecode)
 
+    private val closureProtector = ClosureProtector()
+
     private val fileSeq = fileOrPattern.pathString.contains(Regex("%[0-9]*d"))
     private val filename = fileOrPattern.name
 
@@ -186,7 +188,10 @@ class VideoReader(
     }
 
     /** Reads the next frame from the video, or returns null if the video has come to an end. */
-    fun read(): Frame? {
+    fun read(): Frame? =
+        closureProtector.requireNotClosed { readFrame() }
+
+    private fun readFrame(): Frame? {
         // For file sequences, setup can be aborted early, in which case the goal is to return null here.
         if (fileSeq && ic == null)
             return null
@@ -263,6 +268,7 @@ class VideoReader(
     }
 
     override fun close() {
+        closureProtector.close()
         pkt.letIfNonNull(::av_packet_free)
         pkt = null
         dec.letIfNonNull(::avcodec_free_context)

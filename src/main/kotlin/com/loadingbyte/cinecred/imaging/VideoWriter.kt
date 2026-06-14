@@ -36,6 +36,8 @@ class VideoWriter(
     muxerOptions: Map<String, String>
 ) : AutoCloseable {
 
+    private val closureProtector = ClosureProtector()
+
     private var oc: AVFormatContext? = null
     private var st: AVStream? = null
     private var enc: AVCodecContext? = null
@@ -177,7 +179,7 @@ class VideoWriter(
     /** Writes the next frame to the video. */
     fun write(bitmap: Bitmap) {
         require(bitmap.spec == spec)
-        bitmap.requireNotClosed { writeFrame(bitmap.frame) }
+        closureProtector.requireNotClosed { bitmap.requireNotClosed { writeFrame(bitmap.frame) } }
     }
 
     /** Encodes one video frame and sends it to the muxer. */
@@ -231,6 +233,8 @@ class VideoWriter(
     }
 
     private fun release() {
+        closureProtector.close()
+
         enc.letIfNonNull(::avcodec_free_context)
         enc = null
 
