@@ -240,8 +240,14 @@ class Font private constructor(private val hbFace: MemorySegment) {
                 // Create a blob that wraps the file data. When the blob's reference count reaches zero, free the data.
                 val destroyBlobFunc = hb_destroy_func_t.allocate({
                     try {
-                        arena.close()
-                        tmpFile?.deleteIfExists()
+                        // We have observed very rare segfaults during the Arena.close() call, which in turn calls
+                        // Unsafe.freeMemory0() and then some native JVM functions. We don't know why this is happening,
+                        // but to reduce the chance of it happening again, we now close the arena in a normal Java
+                        // thread and not the upcall from HarfBuzz itself.
+                        GLOBAL_THREAD_POOL.submit(throwableAwareTask {
+                            arena.close()
+                            tmpFile?.deleteIfExists()
+                        })
                     } catch (t: Throwable) {
                         // We have to catch all exceptions because if one escapes, a segfault happens.
                         runCatching { LOGGER.error("Cannot close native memory resource scope", t) }
