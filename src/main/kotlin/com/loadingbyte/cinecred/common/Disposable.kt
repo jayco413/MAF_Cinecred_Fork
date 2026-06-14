@@ -1,7 +1,7 @@
 package com.loadingbyte.cinecred.common
 
 import java.lang.management.ManagementFactory
-import java.util.*
+import java.lang.ref.WeakReference
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -14,21 +14,18 @@ class DisposableReference<V : Any>(sizedValue: SizedValue<V>) : AutoCloseable {
 
     private val trackerKey = Any()
     private val cleanable = CLEANER.register(this, CleanerAction(trackerKey))
+    private var value: V? = sizedValue.value
 
     init {
-        DisposableTracker.put(trackerKey, sizedValue)
+        DisposableTracker.put(trackerKey, Disposable(sizedValue, DisposeAction(WeakReference(this))))
     }
 
     constructor(value: V, bytes: Long, destroy: Runnable? = null) : this(SizedValue(value, bytes, destroy))
 
-    @Suppress("UNCHECKED_CAST")
-    fun get(): V? =
-        DisposableTracker.get(trackerKey)?.get() as V?
-
-    /** Retrieves the value, clears the reference, and prevents the value from being auto-destroyed in the future. */
-    @Suppress("UNCHECKED_CAST")
-    fun plunder(): V? =
-        DisposableTracker.remove(trackerKey, destroy = false)?.get() as V?
+    fun get(): V? {
+        DisposableTracker.keepAlive(trackerKey)
+        return value
+    }
 
     override fun close() {
         cleanable.clean()
@@ -37,9 +34,15 @@ class DisposableReference<V : Any>(sizedValue: SizedValue<V>) : AutoCloseable {
     fun getAndClose(): V? =
         get().also { close() }
 
+    private class DisposeAction(private val ref: WeakReference<DisposableReference<*>>) : Runnable {
+        override fun run() {
+            ref.get()?.value = null
+        }
+    }
+
     private class CleanerAction(private val trackerKey: Any) : Runnable {
         override fun run() {
-            DisposableTracker.remove(trackerKey, destroy = true)
+            DisposableTracker.remove(trackerKey)
         }
     }
 
@@ -48,15 +51,20 @@ class DisposableReference<V : Any>(sizedValue: SizedValue<V>) : AutoCloseable {
 
 class DisposableCache<K : Any, V : Any> : AutoCloseable {
 
+    private val lock = ReentrantLock()
     private val cacheId = Any()
-    // The key set is only accessed or modified when the MemoryTracker lock is held, hence we don't need more locking.
-    private val trackerKeys = Collections.newSetFromMap(WeakHashMap<TrackerKey, Boolean>())
+    // We have to separate "trackerKeys" from "futures" to avoid the cleaner holding a strong reference to the cached
+    // values, which would lead to memory leaks if the cached values in turn hold a strong reference to the cache.
+    // For example, this is the case for Font.Case.
+    private val trackerKeys = HashSet<TrackerKey>()
     private val cleanable = CLEANER.register(this, CleanerAction(trackerKeys))
-    @Volatile private var closed = false
+    private val futures = HashMap<K, CompletableFuture<V>>()
+    private var closed = false
 
-    @Suppress("UNCHECKED_CAST")
-    fun getAsync(key: K): CompletableFuture<V>? =
-        DisposableTracker.get(TrackerKey(cacheId, key)) as CompletableFuture<V>?
+    fun getAsync(key: K): CompletableFuture<V>? {
+        DisposableTracker.keepAlive(TrackerKey(cacheId, key))
+        return lock.withLock { futures[key] }
+    }
 
     /** @throws IllegalStateException If the cache is closed. */
     inline fun get(key: K, crossinline compute: () -> SizedValue<V>): V =
@@ -65,38 +73,70 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
     /** @return A future that fails with an [IllegalStateException] if the cache is closed. */
     fun getAsync(key: K, compute: () -> CompletableFuture<SizedValue<V>>): CompletableFuture<V> {
         val trackerKey = TrackerKey(cacheId, key)
-        var computeFuture: CompletableFuture<SizedValue<*>>? = null
-        val getFuture = DisposableTracker.cache(trackerKey) {
+        val newFuture: CompletableFuture<V>
+        lock.withLock {
             if (closed)
                 return CompletableFuture.failedFuture(IllegalStateException("The disposable cache is already closed."))
-            trackerKeys += trackerKey
-            CompletableFuture<SizedValue<*>>().also { computeFuture = it }
-        }
-        // Run the user-provided compute function outside the cache lambda to not block the lock for too long.
-        if (computeFuture != null)
-            compute().whenComplete { v, t ->
-                if (t != null) computeFuture.completeExceptionally(t) else computeFuture.complete(v)
+            futures[key]?.let { future ->
+                DisposableTracker.keepAlive(trackerKey)
+                return future
             }
-        @Suppress("UNCHECKED_CAST")
-        return getFuture as CompletableFuture<V>
+            newFuture = CompletableFuture<V>()
+            futures[key] = newFuture
+            trackerKeys.add(trackerKey)
+        }
+        compute().whenComplete { v, t ->
+            val isClosed = lock.withLock {
+                if (!closed && t == null)
+                    DisposableTracker.put(trackerKey, Disposable(v, DisposeAction(WeakReference(this), trackerKey)))
+                closed
+            }
+            when {
+                isClosed -> {
+                    v?.destroy?.run()
+                    newFuture.completeExceptionally(IllegalStateException("The disposable cache is already closed."))
+                }
+                t != null -> newFuture.completeExceptionally(t)
+                else -> newFuture.complete(v.value)
+            }
+        }
+        return newFuture
     }
 
     fun getAll(): List<V> =
         getAllAsync().map(CompletableFuture<V>::get)
 
-    @Suppress("UNCHECKED_CAST")
     fun getAllAsync(): List<CompletableFuture<V>> =
-        DisposableTracker.getAll(trackerKeys) as List<CompletableFuture<V>>
+        lock.withLock {
+            DisposableTracker.keepAllAlive(trackerKeys)
+            futures.values.toMutableList()
+        }
 
     override fun close() {
-        closed = true
+        lock.withLock { closed = true }
         cleanable.clean()
     }
 
-    private data class TrackerKey(private val cacheId: Any, private val cacheKey: Any)
+    private data class TrackerKey(private val cacheId: Any, val cacheKey: Any)
 
-    private class CleanerAction(private val trackerKeys: Iterable<TrackerKey>) : Runnable {
+    private class DisposeAction(
+        private val ref: WeakReference<DisposableCache<*, *>>,
+        private val trackerKey: TrackerKey
+    ) : Runnable {
         override fun run() {
+            ref.get()?.let { cache ->
+                cache.lock.withLock {
+                    cache.futures.remove(trackerKey.cacheKey)
+                    cache.trackerKeys.remove(trackerKey)
+                }
+            }
+        }
+    }
+
+    private class CleanerAction(private val trackerKeys: Set<TrackerKey>) : Runnable {
+        override fun run() {
+            // It should be safe to use trackerKeys without a lock because the associated DisposableCache instance,
+            // which is the only other user of the collection, is no longer reachable when this cleaner runs.
             DisposableTracker.removeAll(trackerKeys)
         }
     }
@@ -107,6 +147,21 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
 fun disposableBytes(): Long = DisposableTracker.bytes()
 
 
+private class Disposable(sizedValue: SizedValue<*>, private val dispose: Runnable) {
+
+    // Note: We must not store the entire SizedValue because that holds a reference to "value", which must never be
+    // strongly reference by DisposableTracker in order to avoid garbage collection gotchas.
+    val bytes = sizedValue.bytes
+    private val destroy = sizedValue.destroy
+
+    fun evict() {
+        destroy?.run()
+        dispose.run()
+    }
+
+}
+
+
 private object DisposableTracker {
 
     // We want to limit memory-tracked objects to use at most 20% of the available memory.
@@ -114,82 +169,52 @@ private object DisposableTracker {
         .totalMemorySize / 5
 
     private val lock = ReentrantLock()
-    private val map = LinkedHashMap<Any, CompletableFuture<SizedValue<*>>>(16, 0.75f, true)
+    private val map = LinkedHashMap<Any, Disposable>(16, 0.75f, true)
     private var curBytes = 0L
 
     fun bytes(): Long =
         lock.withLock { curBytes }
 
-    fun get(key: Any): CompletableFuture<*>? =
-        lock.withLock {
-            map[key]
-        }?.thenApply(SizedValue<*>::value)
-
-    fun getAll(keys: Iterable<Any>): List<CompletableFuture<*>> {
-        return lock.withLock {
-            keys.mapNotNull { key -> map[key]?.thenApply(SizedValue<*>::value) }
-        }
+    fun keepAlive(key: Any) {
+        lock.withLock { map[key] }
     }
 
-    fun put(key: Any, sv: SizedValue<*>) {
+    fun keepAllAlive(keys: Iterable<Any>) {
+        lock.withLock { for (key in keys) map[key] }
+    }
+
+    fun put(key: Any, disposable: Disposable) {
         lock.withLock {
-            if (map.put(key, CompletableFuture.completedFuture(sv)) != null)
+            if (map.put(key, disposable) != null)
                 throw UnsupportedOperationException("Cannot override previous mappings.")
-            curBytes += sv.bytes
-            evictIfFull()
-        }.forEach { sv -> sv.destroy?.run() }
-    }
-
-    inline fun cache(key: Any, compute: () -> CompletableFuture<SizedValue<*>>): CompletableFuture<*> {
-        val future: CompletableFuture<SizedValue<*>>
-        var evictedFuture: CompletableFuture<List<SizedValue<*>>>? = null
-        lock.withLock {
-            future = map[key] ?: compute().also { f ->
-                map[key] = f
-                evictedFuture = f.thenApply { sv ->
-                    lock.withLock {
-                        curBytes += sv.bytes
-                        evictIfFull()
-                    }
+            curBytes += disposable.bytes
+            if (curBytes > maxBytes) {
+                val evicted = mutableListOf<Disposable>()
+                val iter = map.iterator()
+                while (curBytes > maxBytes && iter.hasNext()) {
+                    val disposable = iter.next().value
+                    evicted.add(disposable)
+                    curBytes -= disposable.bytes
+                    iter.remove()
                 }
-            }
-        }
-        evictedFuture?.thenAccept { svs -> for (sv in svs) sv.destroy?.run() }
-        return future.thenApply(SizedValue<*>::value)
+                evicted
+            } else
+                emptyList()
+        }.forEach(Disposable::evict)
     }
 
-    fun remove(key: Any, destroy: Boolean): CompletableFuture<*>? =
+    fun remove(key: Any) {
         lock.withLock {
-            map.remove(key)?.also { future -> future.thenAccept { sv -> lock.withLock { curBytes -= sv.bytes } } }
-        }?.thenApply { sv -> if (destroy) sv.destroy?.run(); sv.value }
+            map.remove(key)?.also { disposable -> curBytes -= disposable.bytes }
+        }?.evict()
+    }
 
     fun removeAll(keys: Iterable<Any>) {
         lock.withLock {
             keys.mapNotNull { key ->
-                map.remove(key)?.also { future -> future.thenAccept { sv -> lock.withLock { curBytes -= sv.bytes } } }
+                map.remove(key)?.also { disposable -> curBytes -= disposable.bytes }
             }
-        }.forEach { future -> future.thenAccept { sv -> sv.destroy?.run() } }
-    }
-
-    // Note: Must be called while holding the lock.
-    private fun evictIfFull(): List<SizedValue<*>> {
-        if (curBytes > maxBytes) {
-            val evicted = mutableListOf<SizedValue<*>>()
-            val iter = map.iterator()
-            while (curBytes > maxBytes && iter.hasNext()) {
-                val future = iter.next().value
-                // Only evict completed futures. If there are actually pending futures to be evicted (highly unlikely),
-                // that will be done at a later date once they're completed.
-                if (future.isDone) {
-                    val sv = future.get()
-                    evicted += sv
-                    curBytes -= sv.bytes
-                    iter.remove()
-                }
-            }
-            return evicted
-        }
-        return emptyList()
+        }.forEach(Disposable::evict)
     }
 
 }
