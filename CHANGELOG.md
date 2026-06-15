@@ -61,6 +61,7 @@ Cinecred Changelog
 - PDF export no longer inverts vertical shearing.
 - Video export no longer sometimes misplaces vertical chroma subsamples.
 - Timeline export no longer fails upon encountering an image sequence.
+- Adding an EtherCalc account no longer fails URL verification.
 
 ### UI Fixes
 

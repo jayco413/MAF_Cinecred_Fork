@@ -503,7 +503,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
             null
         }
         return if (server == null ||
-            service != null && service.accountNeedsServer && service.isServerPlausible(server)
+            service != null && service.accountNeedsServer && !service.isServerPlausible(server)
         ) l10n("ui.preferences.accounts.configure.invalidURL") else null
     }
 
