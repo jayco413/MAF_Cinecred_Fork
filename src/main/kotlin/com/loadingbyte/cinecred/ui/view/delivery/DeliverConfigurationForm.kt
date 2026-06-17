@@ -338,7 +338,7 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
 
             // Show an error if the destination path is illegal.
             var notice = when {
-                value.fileOrDir.pathString.isBlank() -> Notice(Severity.ERROR, l10n("blank"))
+                value.fileOrDir.pathString.isBlank() -> Notice(Severity.ERROR, l10n("required"))
                 !value.fileOrDir.isAbsolute -> Notice(Severity.ERROR, l10n("ui.deliverConfig.nonAbsolutePath"))
                 else -> null
             }

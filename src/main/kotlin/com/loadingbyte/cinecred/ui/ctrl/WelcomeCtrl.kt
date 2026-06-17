@@ -490,7 +490,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     override fun preferences_configureAccount_verifyLabel(label: String) = when {
         label.isBlank() ->
-            l10n("blank")
+            l10n("required")
         SERVICES.any { service -> service.accounts.any { account -> account.id == label } } ->
             l10n("ui.preferences.accounts.configure.labelAlreadyInUse")
         else -> null
@@ -581,7 +581,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     }
 
     override fun preferences_configureOverlay_verifyName(name: String) = when {
-        name.isBlank() -> l10n("blank")
+        name.isBlank() -> l10n("required")
         OVERLAYS_PREFERENCE.get().any { overlay ->
             overlay.uuid != currentlyEditedOverlay?.uuid && overlay.label == name
         } ->
@@ -669,7 +669,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     }
 
     override fun preferences_configureDeliveryDestTemplate_verifyName(name: String) = when {
-        name.isBlank() -> l10n("blank")
+        name.isBlank() -> l10n("required")
         DELIVERY_DEST_TEMPLATES_PREFERENCE.get().any { template ->
             template.uuid != currentlyEditedDeliveryDestTemplate?.uuid && template.name == name
         } ->
@@ -679,7 +679,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     override fun preferences_configureDeliveryDestTemplate_verifyTemplateStr(templateStr: String): String? {
         if (templateStr.isBlank())
-            return l10n("blank")
+            return l10n("required")
         try {
             DeliveryDestTemplate(UUID.randomUUID(), "", templateStr)
             return null
