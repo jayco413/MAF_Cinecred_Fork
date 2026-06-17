@@ -666,7 +666,7 @@ class SpreadsheetEditorVirtualWindow(
 
     override val title = "${file.name} \u2013 " + l10nDemo("screencast.spreadsheetEditor.title")
 
-    val matrix = format.read(file, "").first.single().drop(skipRows).map { it.cells.toMutableList() }
+    val matrix = format.read(file, "").single().drop(skipRows).map { it.cells.toMutableList() }
     var rowOffset = 0
     var colWidths = intArrayOf()
 

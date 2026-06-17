@@ -7,10 +7,8 @@ import ch.rabanti.nanoxlsx4j.styles.NumberFormat.FormatNumber
 import com.formdev.flatlaf.util.SystemInfo
 import com.github.miachm.sods.Borders
 import com.loadingbyte.cinecred.common.LOGGER
-import com.loadingbyte.cinecred.common.Severity.ERROR
 import com.loadingbyte.cinecred.common.execProcess
 import com.loadingbyte.cinecred.common.l10n
-import com.loadingbyte.cinecred.common.l10nQuoted
 import de.siegmar.fastcsv.reader.CsvReader
 import de.siegmar.fastcsv.reader.StringArrayHandler
 import de.siegmar.fastcsv.writer.CsvWriter
@@ -66,7 +64,7 @@ interface SpreadsheetFormat {
     val available: Boolean get() = true
 
     /** @throws Exception */
-    fun read(file: Path, defaultName: String): Pair<List<Spreadsheet>, List<ParserMsg>>
+    fun read(file: Path, defaultName: String): List<Spreadsheet>
 
     /** @throws Exception */
     fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook)
@@ -97,11 +95,9 @@ object XlsxFormat : SpreadsheetFormat {
     override val fileExt get() = "xlsx"
     override val label get() = "Microsoft Excel 2007+"
 
-    override fun read(file: Path, defaultName: String) = readOfficeDocument(
-        file,
-        open = { ch.rabanti.nanoxlsx4j.Workbook.load(file.toString()) },
-        getNumSheets = { workbook -> workbook.worksheets.size },
-        read = { workbook, sheetIdx ->
+    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
+        val workbook = ch.rabanti.nanoxlsx4j.Workbook.load(file.toString())
+        return List(workbook.worksheets.size) { sheetIdx ->
             val sheet = workbook.worksheets[sheetIdx]
             val numRows = (sheet.lastRowNumber + 1).coerceAtMost(MAX_ROWS)
             val numCols = (sheet.lastColumnNumber + 1).coerceAtMost(MAX_COLS)
@@ -110,9 +106,8 @@ object XlsxFormat : SpreadsheetFormat {
                 if (cell.rowNumber < MAX_ROWS && cell.columnNumber < MAX_COLS)
                     cell.value?.let { matrix[cell.rowNumber][cell.columnNumber] = it.toString() }
             Spreadsheet(sheet.sheetName, matrix)
-        },
-        close = {}
-    )
+        }
+    }
 
     override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
         val numCols = spreadsheet.numColumns
@@ -168,19 +163,16 @@ object XlsFormat : SpreadsheetFormat {
     override val fileExt get() = "xls"
     override val label get() = "Microsoft Excel 97-2003"
 
-    override fun read(file: Path, defaultName: String) = readOfficeDocument(
-        file,
-        open = { jxl.Workbook.getWorkbook(file.toFile(), WorkbookSettings().apply { encoding = "ISO-8859-1" }) },
-        getNumSheets = { workbook -> workbook.numberOfSheets },
-        read = { workbook, sheetIdx ->
+    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
+        val workbook = jxl.Workbook.getWorkbook(file.toFile(), WorkbookSettings().apply { encoding = "ISO-8859-1" })
+        return List(workbook.numberOfSheets) { sheetIdx ->
             val sheet = workbook.getSheet(sheetIdx)
             val numRows = sheet.rows.coerceAtMost(MAX_ROWS)
             val numCols = sheet.columns.coerceAtMost(MAX_COLS)
             val matrix = List(numRows) { row -> List(numCols) { col -> sheet.getCell(col, row).contents } }
             Spreadsheet(sheet.name, matrix)
-        },
-        close = { workbook -> workbook.close() }
-    )
+        }
+    }
 
     override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
         val workbook = jxl.Workbook.createWorkbook(file.toFile())
@@ -236,19 +228,16 @@ object OdsFormat : SpreadsheetFormat {
     override val fileExt get() = "ods"
     override val label get() = "LibreOffice Calc"
 
-    override fun read(file: Path, defaultName: String) = readOfficeDocument(
-        file,
-        open = { com.github.miachm.sods.SpreadSheet(file.toFile()) },
-        getNumSheets = { workbook -> workbook.numSheets },
-        read = { workbook, sheetIdx ->
+    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
+        val workbook = com.github.miachm.sods.SpreadSheet(file.toFile())
+        return List(workbook.numSheets) { sheetIdx ->
             val sheet = workbook.getSheet(sheetIdx)
             val numRows = sheet.maxRows.coerceAtMost(MAX_ROWS)
             val numCols = sheet.maxColumns.coerceAtMost(MAX_COLS)
             val matrix = List(numRows) { r -> List(numCols) { c -> sheet.getRange(r, c).value?.toString() ?: "" } }
             Spreadsheet(sheet.name, matrix)
-        },
-        close = {}
-    )
+        }
+    }
 
     override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
         val numRows = spreadsheet.numRecords
@@ -309,7 +298,7 @@ object NumbersFormat : SpreadsheetFormat {
         false
     }
 
-    override fun read(file: Path, defaultName: String): Pair<List<Spreadsheet>, List<ParserMsg>> {
+    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
         if (!available)
             throw FormatUnavailableException(l10n("projectIO.spreadsheet.numbersUnavailable", ".numbers"))
         val script = """
@@ -385,9 +374,8 @@ object CsvFormat : SpreadsheetFormat {
     override val fileExt get() = "csv"
     override val label get() = l10n("projectIO.spreadsheet.csv")
 
-    override fun read(file: Path, defaultName: String): Pair<List<Spreadsheet>, List<ParserMsg>> {
-        return Pair(listOf(read(file.readText(), defaultName)), emptyList())
-    }
+    override fun read(file: Path, defaultName: String): List<Spreadsheet> =
+        listOf(read(file.readText(), defaultName))
 
     fun read(text: String, name: String): Spreadsheet {
         // Trim the character which results from the byte order mark (BOM) added by Excel.
@@ -420,29 +408,3 @@ object CsvFormat : SpreadsheetFormat {
 
 
 class FormatUnavailableException(message: String) : IOException(message)
-
-
-// Helper function to avoid duplicate code.
-private inline fun <W> readOfficeDocument(
-    file: Path,
-    open: () -> W,
-    getNumSheets: (W) -> Int,
-    read: (W, Int) -> Spreadsheet,
-    close: (W) -> Unit
-): Pair<List<Spreadsheet>, List<ParserMsg>> {
-    val log = mutableListOf<ParserMsg>()
-
-    val workbook = open()
-    try {
-        val numSheets = getNumSheets(workbook)
-
-        if (numSheets == 0) {
-            val msg = l10n("projectIO.spreadsheet.noSheet", l10nQuoted(file.name))
-            log.add(ParserMsg(file.name, null, null, null, null, ERROR, msg))
-        }
-
-        return Pair(if (numSheets == 0) emptyList() else List(numSheets) { read(workbook, it) }, log)
-    } finally {
-        close(workbook)
-    }
-}

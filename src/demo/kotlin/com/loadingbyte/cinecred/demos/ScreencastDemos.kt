@@ -61,7 +61,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         val creditsFile = projectDir.resolve("${projectDir.name}.xlsx")
         val picLineIdx: Int
         run {
-            val sheet = XlsxFormat.read(creditsFile, "").first.single()
+            val sheet = XlsxFormat.read(creditsFile, "").single()
             val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
             matrix.removeAt(0)
             val kw = l10n("projectIO.credits.table.pic")

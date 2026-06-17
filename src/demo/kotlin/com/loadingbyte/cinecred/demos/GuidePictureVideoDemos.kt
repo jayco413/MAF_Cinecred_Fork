@@ -53,7 +53,7 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
     override fun generate() {
         val creditsFile = projectDir.resolve("${projectDir.name}.xlsx")
         addProjectWindows(dockedTrees.apply { leaf(LOG).collapsed = true }, prepareProjectDir = {
-            val sheet = XlsxFormat.read(creditsFile, "").first.single()
+            val sheet = XlsxFormat.read(creditsFile, "").single()
             val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
             val firstDataRow = matrix.subList(2, matrix.size).first { row -> row[1] != "" }
             matrix.subList(3, matrix.size).clear()

@@ -171,7 +171,7 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
                         linkedCreditsWatchers.put(changedFile, service.watch(link, object : ServiceWatcher.Callbacks {
                             override fun content(spreadsheets: List<Spreadsheet>) {
                                 creditsWorkbooks[changedFile] = CreditsWorkbook(changedFile.name, link, spreadsheets)
-                                creditsLogs.remove(changedFile)
+                                updateCreditsLogBasedOnSpreadsheets(changedFile, spreadsheets)
                                 pushCreditsWorkbooks()
                             }
 
@@ -189,9 +189,9 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
                     }
                 } else {
                     val fmt = SPREADSHEET_FORMATS.first { fmt -> fmt.fileExt.equals(fileExt, ignoreCase = true) }
-                    val (spreadsheets, loadingLog) = fmt.read(changedFile, l10n("project.template.spreadsheetName"))
+                    val spreadsheets = fmt.read(changedFile, l10n("project.template.spreadsheetName"))
                     creditsWorkbooks[changedFile] = CreditsWorkbook(changedFile.name, changedFile.toUri(), spreadsheets)
-                    creditsLogs[changedFile] = loadingLog
+                    updateCreditsLogBasedOnSpreadsheets(changedFile, spreadsheets)
                     creditsWorkbooksChanged = true
                 }
             } catch (e: Exception) {
@@ -210,6 +210,14 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
             creditsWorkbooksChanged = false
             pushCreditsWorkbooks()
         }
+    }
+
+    private fun updateCreditsLogBasedOnSpreadsheets(file: Path, spreadsheets: List<Spreadsheet>) {
+        if (spreadsheets.isEmpty()) {
+            val msg = l10n("projectIO.spreadsheet.noSheet", l10nQuoted(file.name))
+            creditsLogs[file] = listOf(ParserMsg(file.name, null, null, null, null, ERROR, msg))
+        } else
+            creditsLogs.remove(file)
     }
 
     private fun pushCreditsWorkbooks() {

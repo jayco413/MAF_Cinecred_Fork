@@ -37,7 +37,7 @@ fun template(locale: Locale) =
 val TEMPLATE_SPREADSHEET: Spreadsheet by lazy {
     withDemoProjectDir { projectDir ->
         tryCopyTemplate(projectDir, template(FALLBACK_TRANSLATED_LOCALE), CsvFormat)
-        CsvFormat.read(projectDir.listDirectoryEntries().first(::hasCreditsFilename), "").first.single()
+        CsvFormat.read(projectDir.listDirectoryEntries().first(::hasCreditsFilename), "").single()
     }
 }
 
@@ -59,7 +59,7 @@ private fun loadTemplateProject(modifyCsv: (Path) -> Unit = {}): Project =
         tryCopyTemplate(projectDir, template(FALLBACK_TRANSLATED_LOCALE), CsvFormat)
         val creditsFile = projectDir.listDirectoryEntries().first(::hasCreditsFilename)
         modifyCsv(creditsFile)
-        val spreadsheet = CsvFormat.read(creditsFile, "").first.single()
+        val spreadsheet = CsvFormat.read(creditsFile, "").single()
         val pictureLoaders = buildMap {
             for (file in projectDir.walkSafely())
                 if (file.isRegularFile())
