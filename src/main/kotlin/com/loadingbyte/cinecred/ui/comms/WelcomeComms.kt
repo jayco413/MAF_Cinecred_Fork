@@ -70,8 +70,6 @@ interface WelcomeCtrlComms {
     fun preferences_configureAccount_onClickCancel()
     fun preferences_configureAccount_onClickEstablish(label: String, service: Service, server: String)
 
-    fun preferences_establishAccount_onClickCancel()
-
     fun preferences_configureOverlay_verifyName(name: String): String? // Returns an error.
     fun preferences_configureOverlay_onClickCancel()
     fun preferences_configureOverlay_onClickDoneOrApply(
@@ -119,6 +117,7 @@ interface WelcomeViewComms {
 
     fun projects_createWait_setError(error: String?)
 
+    fun preferences_getCard(): PreferencesCard
     fun preferences_setCard(card: PreferencesCard)
 
     fun preferences_start_setInitialSetup(initialSetup: Boolean, doneListener: (() -> Unit)?)
@@ -135,9 +134,10 @@ interface WelcomeViewComms {
     fun preferences_start_setDeliveryDestTemplates(templates: List<DeliveryDestTemplate>)
 
     fun preferences_configureAccount_resetForm()
-
-    fun preferences_establishAccount_setAction(authorize: Boolean)
-    fun preferences_establishAccount_setError(error: String?)
+    fun preferences_configureAccount_setFormLocked(locked: Boolean)
+    fun preferences_configureAccount_clearStatus()
+    fun preferences_configureAccount_setStatusEstablishing(authorize: Boolean)
+    fun preferences_configureAccount_setStatusFailed(authorize: Boolean, error: String)
 
     fun preferences_configureOverlay_setForm(
         type: Class<out ConfigurableOverlay>,
@@ -177,14 +177,7 @@ interface WelcomeViewComms {
 enum class WelcomeTab { PROJECTS, PREFERENCES, CHANGELOG, ABOUT, UPDATE }
 enum class ProjectsCard { START, CREATE_CONFIGURE, CREATE_WAIT }
 enum class CreditsLocation { LOCAL, SERVICE, SKIP }
-
-enum class PreferencesCard {
-    START,
-    CONFIGURE_ACCOUNT,
-    ESTABLISH_ACCOUNT,
-    CONFIGURE_OVERLAY,
-    CONFIGURE_DELIVERY_LOC_TEMPLATE
-}
+enum class PreferencesCard { START, CONFIGURE_ACCOUNT, CONFIGURE_OVERLAY, CONFIGURE_DELIVERY_LOC_TEMPLATE }
 
 
 class License(val name: String, val body: String)

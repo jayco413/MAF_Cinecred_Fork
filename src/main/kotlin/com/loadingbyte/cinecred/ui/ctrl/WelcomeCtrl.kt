@@ -105,7 +105,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     private var currentlyEditedDeliveryDestTemplate: DeliveryDestTemplate? = null
 
     private val createProjectThread = AtomicReference<Thread?>()
-    private val addAccountThread = AtomicReference<Thread?>()
+    @Volatile private var addAccountThread: Thread? = null
 
     private var withheldPrefChanges: MutableMap<Preference<*>, () -> Unit>? = null
 
@@ -280,8 +280,13 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
                 projects_createWait_onClickCancel()
                 return true
             } else if (tab == WelcomeTab.PREFERENCES) {
-                preferences_establishAccount_onClickCancel()
-                preferences_configureOverlay_onClickCancel()
+                when (welcomeView.preferences_getCard()) {
+                    PreferencesCard.START -> {}
+                    PreferencesCard.CONFIGURE_ACCOUNT -> preferences_configureAccount_onClickCancel()
+                    PreferencesCard.CONFIGURE_OVERLAY -> preferences_configureOverlay_onClickCancel()
+                    PreferencesCard.CONFIGURE_DELIVERY_LOC_TEMPLATE ->
+                        preferences_configureDeliveryDestTemplate_onClickCancel()
+                }
                 return true
             }
         } else if (Shortcut.CLOSE_WINDOW.matches(event) || Shortcut.QUIT.matches(event)) {
@@ -362,7 +367,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         DELIVERY_DEST_TEMPLATES_PREFERENCE.removeListener(deliveryDestTemplatesListener)
 
         createProjectThread.getAndSet(null)?.interrupt()
-        addAccountThread.getAndSet(null)?.interrupt()
+        addAccountThread?.interrupt()
         welcomeView.close()
         masterCtrl.onCloseWelcomeFrame()
     }
@@ -469,6 +474,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     override fun preferences_start_onClickAddAccount() {
         welcomeView.preferences_configureAccount_resetForm()
+        welcomeView.preferences_configureAccount_clearStatus()
         welcomeView.preferences_setCard(PreferencesCard.CONFIGURE_ACCOUNT)
     }
 
@@ -478,7 +484,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         Thread({
             try {
                 service.removeAccount(account)
-            } catch (e: IOException) {
+            } catch (e: Exception) {
                 LOGGER.error("Could not remove a {} account.", account.service.product, e)
                 SwingUtilities.invokeLater {
                     welcomeView.showCannotRemoveAccountMessage(account, e.userNotification)
@@ -507,29 +513,30 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         ) l10n("ui.preferences.accounts.configure.invalidURL") else null
     }
 
-    override fun preferences_configureAccount_onClickCancel() = welcomeView.preferences_setCard(PreferencesCard.START)
+    override fun preferences_configureAccount_onClickCancel() {
+        if (addAccountThread?.also(Thread::interrupt) == null)
+            welcomeView.preferences_setCard(PreferencesCard.START)
+    }
 
     override fun preferences_configureAccount_onClickEstablish(label: String, service: Service, server: String) {
-        welcomeView.preferences_establishAccount_setAction(authorize = service.authorizer != null)
-        welcomeView.preferences_establishAccount_setError(null)
-        welcomeView.preferences_setCard(PreferencesCard.ESTABLISH_ACCOUNT)
-        addAccountThread.set(Thread({
+        val authorize = service.authorizer != null
+        welcomeView.preferences_configureAccount_setFormLocked(true)
+        welcomeView.preferences_configureAccount_setStatusEstablishing(authorize)
+        addAccountThread = Thread({
             try {
                 service.addAccount(label, if (service.accountNeedsServer) URI(server) else null)
                 SwingUtilities.invokeLater { welcomeView.preferences_setCard(PreferencesCard.START) }
-            } catch (e: IOException) {
-                LOGGER.error("Could not establish a {} account.", service.product, e)
-                SwingUtilities.invokeLater { welcomeView.preferences_establishAccount_setError(e.userNotification) }
             } catch (_: InterruptedException) {
+                SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_clearStatus() }
                 // Let the thread come to a stop.
+            } catch (e: Exception) {
+                LOGGER.error("Could not establish a {} account.", service.product, e)
+                val err = e.userNotification
+                SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setStatusFailed(authorize, err) }
             }
-            addAccountThread.set(null)
-        }, "AddAccount").apply { isDaemon = true; start() })
-    }
-
-    override fun preferences_establishAccount_onClickCancel() {
-        addAccountThread.getAndSet(null)?.interrupt()
-        welcomeView.preferences_setCard(PreferencesCard.START)
+            SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setFormLocked(false) }
+            addAccountThread = null
+        }, "AddAccount").apply { isDaemon = true; start() }
     }
 
     override fun preferences_start_onClickSetWindowLayoutAsDefault(layout: WindowLayout) {

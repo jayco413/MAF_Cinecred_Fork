@@ -77,6 +77,8 @@ class WelcomeFrame(private val welcomeCtrl: WelcomeCtrlComms) : CcFrame(l10n("ui
     override fun projects_createWait_setError(error: String?) =
         panel.projectsPanel.projects_createWait_setError(error)
 
+    override fun preferences_getCard() =
+        panel.preferencesPanel.preferences_getCard()
     override fun preferences_setCard(card: PreferencesCard) =
         panel.preferencesPanel.preferences_setCard(card)
     override fun preferences_start_setInitialSetup(initialSetup: Boolean, doneListener: (() -> Unit)?) =
@@ -105,10 +107,14 @@ class WelcomeFrame(private val welcomeCtrl: WelcomeCtrlComms) : CcFrame(l10n("ui
         panel.preferencesPanel.preferences_start_setDeliveryDestTemplates(templates)
     override fun preferences_configureAccount_resetForm() =
         panel.preferencesPanel.preferences_configureAccount_resetForm()
-    override fun preferences_establishAccount_setAction(authorize: Boolean) =
-        panel.preferencesPanel.preferences_establishAccount_setAction(authorize)
-    override fun preferences_establishAccount_setError(error: String?) =
-        panel.preferencesPanel.preferences_establishAccount_setError(error)
+    override fun preferences_configureAccount_setFormLocked(locked: Boolean) =
+        panel.preferencesPanel.preferences_configureAccount_setFormLocked(locked)
+    override fun preferences_configureAccount_clearStatus() =
+        panel.preferencesPanel.preferences_configureAccount_clearStatus()
+    override fun preferences_configureAccount_setStatusEstablishing(authorize: Boolean) =
+        panel.preferencesPanel.preferences_configureAccount_setStatusEstablishing(authorize)
+    override fun preferences_configureAccount_setStatusFailed(authorize: Boolean, error: String) =
+        panel.preferencesPanel.preferences_configureAccount_setStatusFailed(authorize, error)
     override fun preferences_configureOverlay_setForm(
         type: Class<out ConfigurableOverlay>, name: String, aspectRatioH: Double, aspectRatioV: Double,
         linesColor: Color4f?, linesH: List<Int>, linesV: List<Int>, imageFile: Path, imageUnderlay: Boolean
