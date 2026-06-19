@@ -268,6 +268,10 @@ class ProjectController(
                 for (spreadsheet in creditsWorkbook.spreadsheets) {
                     val (curCredits, curLog, curRuntimeGroupSources) =
                         readCredits(creditsWorkbook.fileName, spreadsheet, styling, pictureLoaders, tapes)
+                    log += curLog
+                    // If the credits reader found errors, bail on the spreadsheet.
+                    if (curLog.any { it.severity == ERROR })
+                        continue
                     // If there is not a single page, that's an error.
                     if (curCredits.pages.isEmpty()) {
                         log += ParserMsg(
@@ -277,7 +281,6 @@ class ProjectController(
                         continue
                     }
                     credits += curCredits
-                    log += curLog
                     runtimeGroupSources += curCredits.runtimeGroups.zip(curRuntimeGroupSources)
                 }
                 CreditsBook(creditsWorkbook.fileName, creditsWorkbook.uri, credits.toPersistentList())

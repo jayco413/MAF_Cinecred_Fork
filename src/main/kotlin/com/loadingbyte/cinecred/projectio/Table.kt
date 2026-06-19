@@ -1,8 +1,7 @@
 package com.loadingbyte.cinecred.projectio
 
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.common.Severity.MIGRATE
-import com.loadingbyte.cinecred.common.Severity.WARN
+import com.loadingbyte.cinecred.common.Severity.*
 import com.loadingbyte.cinecred.project.Style
 import com.loadingbyte.cinecred.project.StyleSetting
 
@@ -50,7 +49,7 @@ class Table(
             headerRecord = emptyList()
             bodyRecords = emptyList()
             colMap = emptyMap()
-            log += ParserMsg(fileName, spreadsheet.name, null, null, null, WARN, l10n("projectIO.table.noHeader"))
+            log += ParserMsg(fileName, spreadsheet.name, null, null, null, ERROR, l10n("projectIO.table.noHeader"))
         } else {
             headerRecord = spreadsheet[headerRecordNo].cells.map { it.trim() }
 
