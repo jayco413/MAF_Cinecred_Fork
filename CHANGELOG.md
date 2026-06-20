@@ -16,6 +16,7 @@ Cinecred Changelog
 - Any spreadsheet file in the project folder is now considered a credits file.
   All of them are read in simultaneously and have their sheets presented as
   isolated credits sequences.
+- The spreadsheet may now be hosted on Nextcloud or any other WebDAV server.
 - Manual newlines are now also supported in grid and flow body cells, as well as
   in horizontal heads and tails. As such, they are now supported everywhere.
     - When employing manual newlines, one can control in detail which body lines

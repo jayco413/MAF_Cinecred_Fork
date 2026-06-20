@@ -115,6 +115,17 @@ class TextWidget(
 }
 
 
+class PasswordWidget(
+    widthSpec: WidthSpec? = null
+) : AbstractTextComponentWidget<String>(JPasswordField(), widthSpec) {
+    override var value: String
+        get() = text
+        set(value) {
+            text = value
+        }
+}
+
+
 class TextListWidget(
     widthSpec: WidthSpec? = null
 ) : AbstractTextComponentWidget<List<String>>(JTextArea(), widthSpec) {
@@ -2580,14 +2591,6 @@ class NestedFormWidget<V : Any>(
     override fun getSeverity(index: Int) = null
     override fun setSeverity(index: Int, severity: Severity?) {}
 
-}
-
-
-private fun String.removeAnySuffix(suffixes: List<String>, ignoreCase: Boolean = false): String {
-    for (suffix in suffixes)
-        if (endsWith(suffix, ignoreCase))
-            return dropLast(suffix.length)
-    return this
 }
 
 

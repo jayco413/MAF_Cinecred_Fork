@@ -18,11 +18,15 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.StringWriter
 import java.lang.ref.Cleaner
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
 import java.text.Collator
 import java.text.MessageFormat
 import java.text.NumberFormat
+import java.time.Duration
 import java.util.*
 import java.util.concurrent.Callable
 import java.util.concurrent.ExecutorService
@@ -61,6 +65,7 @@ val GLOBAL_THREAD_POOL: ExecutorService = Executors.newCachedThreadPool(object :
     override fun newThread(r: Runnable) =
         Thread(r, "GlobalThreadPool-${ctr.getAndIncrement()}").apply { isDaemon = true }
 })
+val GLOBAL_HTTP_CLIENT: HttpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build()
 
 
 enum class Severity { INFO, WARN, MIGRATE, ERROR }
@@ -220,6 +225,15 @@ fun Path.isSameFileAsSafely(other: Path): Boolean =
     }
 
 
+/** Like [createFile], but does not throw if the file already exists. */
+fun Path.createFileSafely() {
+    try {
+        createFile()
+    } catch (_: FileAlreadyExistsException) {
+        // Ignore
+    }
+}
+
 /**
  * The implementation of [createDirectories] will throw an exception if the path already exists and is a symbolic link
  * to a directory. This function does not fail in such cases.
@@ -322,6 +336,16 @@ val CONFIG_DIR: Path = when {
             Path(cfgDir, "cinecred")
     }
 }
+
+
+fun httpRequest(uri: URI): HttpRequest =
+    httpRequestBuilder(uri).build()
+
+fun httpRequestBuilder(uri: URI): HttpRequest.Builder =
+    HttpRequest.newBuilder(uri).header("User-Agent", USER_AGENT).timeout(Duration.ofSeconds(10))
+
+fun HttpRequest.Builder.basicAuth(username: String, password: String): HttpRequest.Builder =
+    header("Authorization", "Basic " + Base64.getEncoder().encodeToString("$username:$password".toByteArray()))
 
 
 val TRANSLATED_LOCALES: List<Locale> =

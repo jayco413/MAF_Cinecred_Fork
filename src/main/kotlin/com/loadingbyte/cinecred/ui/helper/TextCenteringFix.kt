@@ -1,6 +1,7 @@
 package com.loadingbyte.cinecred.ui.helper
 
 import com.formdev.flatlaf.ui.FlatFormattedTextFieldUI
+import com.formdev.flatlaf.ui.FlatPasswordFieldUI
 import com.formdev.flatlaf.ui.FlatTextFieldUI
 import com.loadingbyte.cinecred.common.ceilDiv
 import java.awt.Shape
@@ -72,7 +73,7 @@ class CcFormattedTextFieldUI : FlatFormattedTextFieldUI() {
         postGetBaseline(this, c, height, super.getBaseline(c, width, height))
 }
 
-class CcPasswordFieldUI : FlatFormattedTextFieldUI() {
+class CcPasswordFieldUI : FlatPasswordFieldUI() {
     companion object {
         @JvmStatic
         fun createUI(@Suppress("UNUSED_PARAMETER") c: JComponent) = CcPasswordFieldUI()

@@ -36,8 +36,8 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     @Deprecated("ENCAPSULATION LEAK") val leakedStartDropLabel: JLabel
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgResWidget get() = createConfigureForm.resolutionWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgLocWidget get() = createConfigureForm.creditsLocationWidget
-    @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgFormatWidget get() = createConfigureForm.creditsFormatWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgAccWidget get() = createConfigureForm.creditsAccountWidget
+    @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgFormatWidget get() = createConfigureForm.creditsFormatWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgDoneButton get() = createConfigureDoneButton
     // =========================================
 
@@ -110,9 +110,9 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
                     createConfigureForm.timecodeFormatWidget.value,
                     createConfigureForm.contentWidget.value,
                     createConfigureForm.creditsLocationWidget.value,
-                    createConfigureForm.creditsFormatWidget.value,
                     createConfigureForm.creditsAccountWidget.value.getOrNull(),
-                    createConfigureForm.creditsFilenameWidget.value
+                    createConfigureForm.creditsFilenameWidget.value,
+                    createConfigureForm.creditsFormatWidget.value
                 )
             }
 
@@ -276,15 +276,6 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             )
         )
 
-        val creditsFormatWidget = addWidget(
-            l10n("ui.projects.create.creditsFormat"),
-            ComboBoxWidget(
-                SpreadsheetFormat::class.java, SPREADSHEET_FORMATS.filter { it.available }, widthSpec = WidthSpec.WIDE,
-                toString = { "${it.label} (.${it.fileExt})" }
-            ),
-            isVisible = { creditsLocationWidget.value == CreditsLocation.LOCAL }
-        )
-
         val creditsAccountWidget = addWidget(
             l10n("ui.projects.create.creditsAccount"),
             OptionalComboBoxWidget(
@@ -300,7 +291,23 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             TextWidget(),
             isVisible = {
                 creditsLocationWidget.value == CreditsLocation.SERVICE &&
-                        creditsAccountWidget.value.getOrNull()?.service?.uploadNeedsFilename ?: false
+                        creditsAccountWidget.value.getOrNull().let { it != null && it.service.uploadNeedsFilename }
+            }
+        )
+
+        val creditsFormatWidget = addWidget(
+            l10n("ui.projects.create.creditsFormat"),
+            ComboBoxWidget(
+                SpreadsheetFormat::class.java, SPREADSHEET_FORMATS.filter { it.available }, widthSpec = WidthSpec.WIDE,
+                toString = { "${it.label} (.${it.fileExt})" }
+            ),
+            isVisible = {
+                when (creditsLocationWidget.value) {
+                    CreditsLocation.LOCAL -> true
+                    CreditsLocation.SERVICE ->
+                        creditsAccountWidget.value.getOrNull().let { it != null && it.service.uploadNeedsFormat }
+                    CreditsLocation.SKIP -> false
+                }
             }
         )
 

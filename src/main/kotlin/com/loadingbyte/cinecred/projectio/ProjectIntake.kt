@@ -9,10 +9,7 @@ import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.projectio.RecursiveFileWatcher.Event.DELETE
 import com.loadingbyte.cinecred.projectio.RecursiveFileWatcher.Event.MODIFY
-import com.loadingbyte.cinecred.projectio.service.SERVICES
-import com.loadingbyte.cinecred.projectio.service.SERVICE_LINK_EXTS
-import com.loadingbyte.cinecred.projectio.service.ServiceWatcher
-import com.loadingbyte.cinecred.projectio.service.readServiceLink
+import com.loadingbyte.cinecred.projectio.service.*
 import java.io.IOException
 import java.net.URI
 import java.nio.channels.FileChannel
@@ -152,40 +149,51 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
             creditsWorkbooksChanged = creditsWorkbooksChanged ||
                     changedFile in creditsWorkbooks || changedFile in creditsLogs ||
                     changedFile in linkedCreditsWatchers
+            // First cancel the watcher, which is then guaranteed to immediately stop touching the credits* maps.
+            linkedCreditsWatchers.remove(changedFile)?.cancel()
             creditsWorkbooks.remove(changedFile)
             creditsLogs.remove(changedFile)
-            linkedCreditsWatchers.remove(changedFile)?.cancel()
         } else {
             val fileExt = changedFile.extension
             try {
                 if (fileExt in SERVICE_LINK_EXTS) {
                     val link = readServiceLink(changedFile)
-                    val service = SERVICES.find { it.canWatch(link) }
-                    if (service == null) {
-                        val msg = l10n("projectIO.credits.unsupportedServiceLink", l10nQuoted(link))
-                        val msgObj = ParserMsg(changedFile.name, null, null, null, null, ERROR, msg)
-                        creditsWorkbooks.remove(changedFile)
-                        creditsLogs[changedFile] = listOf(msgObj)
-                        linkedCreditsWatchers.remove(changedFile)?.cancel()
-                    } else {
-                        linkedCreditsWatchers.put(changedFile, service.watch(link, object : ServiceWatcher.Callbacks {
+                    var found = false
+                    var msg: String? = null
+                    for (service in SERVICES) {
+                        val result = service.watch(link, object : ServiceWatcher.Callbacks {
                             override fun content(spreadsheets: List<Spreadsheet>) {
                                 creditsWorkbooks[changedFile] = CreditsWorkbook(changedFile.name, link, spreadsheets)
                                 updateCreditsLogBasedOnSpreadsheets(changedFile, spreadsheets)
                                 pushCreditsWorkbooks()
                             }
 
-                            override fun problem(problem: ServiceWatcher.Problem) {
-                                val key = when (problem) {
-                                    ServiceWatcher.Problem.INACCESSIBLE -> "projectIO.credits.noAccountGrantsAccess"
-                                    ServiceWatcher.Problem.DOWN -> "projectIO.credits.serviceUnresponsive"
-                                }
-                                val msg = ParserMsg(changedFile.name, null, null, null, null, ERROR, l10n(key))
-                                creditsWorkbooks[changedFile] = CreditsWorkbook(changedFile.name, link, emptyList())
+                            override fun problem(error: ServiceError) {
+                                val str = "${error.message} ${l10n("projectIO.credits.outdated")}"
+                                val msg = ParserMsg(changedFile.name, null, null, null, null, ERROR, str)
                                 creditsLogs[changedFile] = listOf(msg)
                                 pushCreditsWorkbooks()
                             }
-                        }))?.cancel()
+                        })
+                        if (!(result is ServiceResult.Failure && result.error is ServiceError.ServiceNotResponsible)) {
+                            found = true
+                            when (result) {
+                                is ServiceResult.Failure -> msg = result.error.message
+                                is ServiceResult.Success ->
+                                    linkedCreditsWatchers.put(changedFile, result.value)?.cancel()
+                            }
+                            break
+                        }
+                    }
+                    if (!found)
+                        msg = l10n("projectIO.credits.unsupportedServiceLink", l10nQuoted(link))
+                    if (msg != null) {
+                        val msgObj = ParserMsg(changedFile.name, null, null, null, null, ERROR, msg)
+                        // First cancel the watcher, which then immediately stops touching the credits* maps.
+                        linkedCreditsWatchers.remove(changedFile)?.cancel()
+                        creditsWorkbooks.remove(changedFile)
+                        creditsLogs[changedFile] = listOf(msgObj)
+                        creditsWorkbooksChanged = true
                     }
                 } else {
                     val fmt = SPREADSHEET_FORMATS.first { fmt -> fmt.fileExt.equals(fileExt, ignoreCase = true) }

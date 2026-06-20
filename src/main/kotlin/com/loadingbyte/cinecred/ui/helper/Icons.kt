@@ -8,9 +8,7 @@ import com.github.weisj.jsvg.parser.SVGLoader
 import com.loadingbyte.cinecred.common.Severity
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.project.SpineAttachment.*
-import com.loadingbyte.cinecred.projectio.service.EtherCalcService
-import com.loadingbyte.cinecred.projectio.service.GoogleService
-import com.loadingbyte.cinecred.projectio.service.Service
+import com.loadingbyte.cinecred.projectio.service.*
 import com.loadingbyte.cinecred.ui.comms.DockableId
 import java.awt.*
 import java.awt.image.BufferedImage
@@ -572,11 +570,15 @@ private class SpineAttachmentIcon(
 
 
 private val SERVICE_GOOGLE_ICON = SVGIcon.load("/icons/service/google.svg")
+private val SERVICE_NEXTCLOUD_ICON = SVGIcon.load("/icons/service/nextcloud.svg")
+private val SERVICE_WEBDAV_ICON = SVGIcon.load("/icons/service/webdav.svg")
 private val SERVICE_ETHERCALC_ICON = SVGIcon.load("/icons/service/ethercalc.svg")
 
 val Service.icon
     get() = when (this) {
         is GoogleService -> SERVICE_GOOGLE_ICON
+        is NextcloudService -> SERVICE_NEXTCLOUD_ICON
+        is WebDAVService -> SERVICE_WEBDAV_ICON
         is EtherCalcService -> SERVICE_ETHERCALC_ICON
         else -> throw IllegalArgumentException()
     }

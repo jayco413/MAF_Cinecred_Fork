@@ -21,6 +21,9 @@ import jxl.write.WritableCellFormat
 import jxl.write.WritableFont
 import org.slf4j.LoggerFactory
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
+import java.io.Reader
 import java.nio.file.Path
 import kotlin.io.path.*
 
@@ -64,10 +67,24 @@ interface SpreadsheetFormat {
     val available: Boolean get() = true
 
     /** @throws Exception */
-    fun read(file: Path, defaultName: String): List<Spreadsheet>
+    fun read(file: Path, defaultName: String): List<Spreadsheet> =
+        read(file.inputStream(), defaultName)
+
+    /**
+     * @param stream Will be closed by this method.
+     * @throws Exception
+     */
+    fun read(stream: InputStream, defaultName: String): List<Spreadsheet>
 
     /** @throws Exception */
-    fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook)
+    fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) =
+        write(file.outputStream(), spreadsheet, look)
+
+    /**
+     * @param stream Will be closed by this method.
+     * @throws Exception
+     */
+    fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook)
 
 }
 
@@ -95,8 +112,8 @@ object XlsxFormat : SpreadsheetFormat {
     override val fileExt get() = "xlsx"
     override val label get() = "Microsoft Excel 2007+"
 
-    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
-        val workbook = ch.rabanti.nanoxlsx4j.Workbook.load(file.toString())
+    override fun read(stream: InputStream, defaultName: String): List<Spreadsheet> {
+        val workbook = stream.use { ch.rabanti.nanoxlsx4j.Workbook.load(stream) }
         return List(workbook.worksheets.size) { sheetIdx ->
             val sheet = workbook.worksheets[sheetIdx]
             val numRows = (sheet.lastRowNumber + 1).coerceAtMost(MAX_ROWS)
@@ -109,7 +126,7 @@ object XlsxFormat : SpreadsheetFormat {
         }
     }
 
-    override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
+    override fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook) = stream.use {
         val numCols = spreadsheet.numColumns
 
         val workbook = ch.rabanti.nanoxlsx4j.Workbook(spreadsheet.name)
@@ -135,7 +152,7 @@ object XlsxFormat : SpreadsheetFormat {
             look.colWidths.getOrNull(col)?.let { sheet.setColumnWidth(col, it * 0.5f) }
         }
 
-        workbook.saveAs(file.toString())
+        workbook.saveAsStream(stream)
     }
 
     private fun createStyle() =
@@ -163,8 +180,8 @@ object XlsFormat : SpreadsheetFormat {
     override val fileExt get() = "xls"
     override val label get() = "Microsoft Excel 97-2003"
 
-    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
-        val workbook = jxl.Workbook.getWorkbook(file.toFile(), WorkbookSettings().apply { encoding = "ISO-8859-1" })
+    override fun read(stream: InputStream, defaultName: String): List<Spreadsheet> {
+        val workbook = stream.use { jxl.Workbook.getWorkbook(it, WorkbookSettings().apply { encoding = "ISO-8859-1" }) }
         return List(workbook.numberOfSheets) { sheetIdx ->
             val sheet = workbook.getSheet(sheetIdx)
             val numRows = sheet.rows.coerceAtMost(MAX_ROWS)
@@ -174,8 +191,8 @@ object XlsFormat : SpreadsheetFormat {
         }
     }
 
-    override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
-        val workbook = jxl.Workbook.createWorkbook(file.toFile())
+    override fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook) = stream.use {
+        val workbook = jxl.Workbook.createWorkbook(stream)
         val sheet = workbook.createSheet(spreadsheet.name, 0)
         val defaultStyle = createStyle()
 
@@ -228,8 +245,8 @@ object OdsFormat : SpreadsheetFormat {
     override val fileExt get() = "ods"
     override val label get() = "LibreOffice Calc"
 
-    override fun read(file: Path, defaultName: String): List<Spreadsheet> {
-        val workbook = com.github.miachm.sods.SpreadSheet(file.toFile())
+    override fun read(stream: InputStream, defaultName: String): List<Spreadsheet> {
+        val workbook = stream.use { com.github.miachm.sods.SpreadSheet(stream) }
         return List(workbook.numSheets) { sheetIdx ->
             val sheet = workbook.getSheet(sheetIdx)
             val numRows = sheet.maxRows.coerceAtMost(MAX_ROWS)
@@ -239,7 +256,7 @@ object OdsFormat : SpreadsheetFormat {
         }
     }
 
-    override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
+    override fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook) = stream.use {
         val numRows = spreadsheet.numRecords
         val numCols = spreadsheet.numColumns
 
@@ -265,7 +282,7 @@ object OdsFormat : SpreadsheetFormat {
 
         val workbook = com.github.miachm.sods.SpreadSheet()
         workbook.appendSheet(sheet)
-        workbook.save(file.toFile())
+        workbook.save(stream)
     }
 
     private fun createStyle() =
@@ -320,9 +337,16 @@ object NumbersFormat : SpreadsheetFormat {
                 }
             }
         """
-        return withTempFile("cinecred-numbers2xlsx-") { tmpFile ->
+        return withTempFile("cinecred-numbers2xlsx-", ".xlsx") { tmpFile ->
             runScript("JavaScript", script, file.absolutePathString(), tmpFile.pathString)
             XlsxFormat.read(tmpFile, defaultName)
+        }
+    }
+
+    override fun read(stream: InputStream, defaultName: String) = stream.use {
+        withTempFile("cinecred-numbers2xlsx-", ".numbers") { tmpFile ->
+            tmpFile.outputStream().use(stream::copyTo)
+            read(tmpFile, defaultName)
         }
     }
 
@@ -341,14 +365,21 @@ object NumbersFormat : SpreadsheetFormat {
                 }
             }
         """
-        withTempFile("cinecred-xlsx2numbers-") { tmpFile ->
+        withTempFile("cinecred-xlsx2numbers-", ".xlsx") { tmpFile ->
             XlsxFormat.write(tmpFile, spreadsheet, look)
             runScript("JavaScript", script, tmpFile.pathString, file.absolutePathString())
         }
     }
 
-    private fun <R> withTempFile(prefix: String, action: (Path) -> R): R {
-        val tmpFile = createTempFile(prefix, ".xlsx")
+    override fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook) = stream.use {
+        withTempFile("cinecred-xlsx2numbers-", ".numbers") { tmpFile ->
+            write(tmpFile, spreadsheet, look)
+            tmpFile.inputStream().use { it.copyTo(stream) }; Unit
+        }
+    }
+
+    private fun <R> withTempFile(prefix: String, suffix: String, action: (Path) -> R): R {
+        val tmpFile = createTempFile(prefix, suffix)
         try {
             return action(tmpFile)
         } finally {
@@ -374,8 +405,8 @@ object CsvFormat : SpreadsheetFormat {
     override val fileExt get() = "csv"
     override val label get() = l10n("projectIO.spreadsheet.csv")
 
-    override fun read(file: Path, defaultName: String): List<Spreadsheet> =
-        listOf(read(file.readText(), defaultName))
+    override fun read(stream: InputStream, defaultName: String) =
+        listOf(read(stream.reader().use(Reader::readText), defaultName))
 
     fun read(text: String, name: String): Spreadsheet {
         // Trim the character which results from the byte order mark (BOM) added by Excel.
@@ -397,8 +428,8 @@ object CsvFormat : SpreadsheetFormat {
         return Spreadsheet(name, matrix)
     }
 
-    override fun write(file: Path, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
-        CsvWriter.builder().build(file).use { writer ->
+    override fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook) {
+        CsvWriter.builder().build(stream).use { writer ->
             for (record in spreadsheet)
                 writer.writeRecord(record.cells)
         }

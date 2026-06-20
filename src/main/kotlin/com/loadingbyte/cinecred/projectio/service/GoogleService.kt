@@ -19,6 +19,7 @@ import com.google.api.services.sheets.v4.SheetsScopes
 import com.google.api.services.sheets.v4.model.*
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
 import com.loadingbyte.cinecred.ui.helper.tryBrowse
 import com.sun.net.httpserver.HttpExchange
@@ -48,7 +49,9 @@ object GoogleService : Service {
     override val product get() = "Google Sheets"
     override val authorizer get() = "Google"
     override val accountNeedsServer get() = false
+    override val credentialsRequirement get() = Service.CredentialsRequirement.UNUSED
     override val uploadNeedsFilename get() = true
+    override val uploadNeedsFormat get() = false
 
     override val accounts: List<Account> get() = _accounts.get()
 
@@ -87,21 +90,53 @@ object GoogleService : Service {
     private val watchersForPolling = LinkedBlockingQueue<GoogleWatcher>()
     private val watchersPoller = AtomicReference<Thread?>()
 
-    override fun addAccount(accountId: String, server: URI?) {
-        require(_accounts.get().none { it.id == accountId }) { "Account ID already in use." }
+    override fun addAccount(accountId: String, server: URI?, credentials: Credentials?): ServiceError? {
+        if (_accounts.get().any { it.id == accountId })
+            return ServiceError.Generic("Account ID already in use.")
+
         val account = GoogleAccount(accountId)
-        account.sheets(authorizeIfNeeded = true)
+        try {
+            account.sheets(authorizeIfNeeded = true)
+        } catch (e: InterruptedException) {
+            throw e
+        } catch (e: Exception) {
+            LOGGER.error("Could not establish a Google account.", e)
+            return ServiceError.Generic(e.userNotification)
+        }
+
         _accounts.updateAndGet { it.add(account) }
         invokeAccountListListeners()
+        return null
     }
 
-    override fun removeAccount(account: Account) {
-        require(account is GoogleAccount && account in _accounts.get()) { "This service is not responsible." }
+    override fun removeAccount(account: Account): ServiceError? {
+        if (account !is GoogleAccount || account !in _accounts.get())
+            return ServiceError.ServiceNotResponsible(this)
 
         // Try to revoke the refresh token. If this fails, do not remove the account. We don't want non-revoked refresh
         // tokens floating around.
         // This request is manual as revocation is missing from the client library:
         // https://github.com/googleapis/google-oauth-java-client/issues/250
+        try {
+            revokeRefreshToken(account)
+        } catch (e: InterruptedException) {
+            throw e
+        } catch (e: Exception) {
+            LOGGER.error("Failed to revoke a Google refresh token.", e)
+            return ServiceError.Generic("Failed to revoke the Google refresh token: ${e.userNotification}")
+        }
+
+        try {
+            forceRemoveAccount(account)
+        } catch (e: IOException) {
+            LOGGER.error("Failed to remove a Google account from the credential store.", e)
+            return ServiceError.Generic("Failed to remove the account from the credential store: ${e.userNotification}")
+        }
+
+        return null
+    }
+
+    private fun revokeRefreshToken(account: GoogleAccount) {
         val refreshToken = credentialDataStore.get(account.id)?.refreshToken
         if (refreshToken != null) {
             val request = GoogleNetHttpTransport.newTrustedTransport().createRequestFactory().buildPostRequest(
@@ -113,12 +148,12 @@ object GoogleService : Service {
                 val e = TokenResponseException.from(GsonFactory.getDefaultInstance(), response)
                 // Check whether the token has already been revoked, or whether the client secret has become invalid,
                 // in which case everything is fine.
-                if (!(response.statusCode == 400 && e.details.error != "invalid_token" || response.statusCode == 401))
+                if (!(response.statusCode == 400 && e.details.error != "invalid_token") &&
+                    !isUnauthorizedHttpStatus(response.statusCode)
+                )
                     throw e
             }
         }
-
-        forceRemoveAccount(account)
     }
 
     private fun forceRemoveAccount(account: GoogleAccount) {
@@ -127,24 +162,18 @@ object GoogleService : Service {
         invokeAccountListListeners()
     }
 
-    private fun fileIdFromLink(link: URI): String? {
-        if (link.scheme != "http" && link.scheme != "https" || link.host != "docs.google.com")
-            return null
+    override fun watch(link: URI, callbacks: ServiceWatcher.Callbacks): ServiceResult<ServiceWatcher> {
+        if (link.scheme != "http" && link.scheme != "https" || link.authority != "docs.google.com")
+            return ServiceResult.Failure(ServiceError.ServiceNotResponsible(this))
         val path = link.path.split('/')
         if (path.size < 4 || path[1] != "spreadsheets" || path[2] != "d")
-            return null
-        return path[3]
-    }
-
-    override fun canWatch(link: URI): Boolean =
-        fileIdFromLink(link) != null
-
-    override fun watch(link: URI, callbacks: ServiceWatcher.Callbacks): ServiceWatcher {
+            return ServiceResult.Failure(ServiceError.SpreadsheetLinkUnrecognizable(this, link))
+        val fileId = path[3]
         // Just add an uninitialized watcher. All the work will be done by the poller.
-        val watcher = GoogleWatcher(fileIdFromLink(link)!!, callbacks)
+        val watcher = GoogleWatcher(fileId, callbacks)
         watchersPoller.updateAndGet { it ?: Thread(::pollerLoop, "GooglePoller").apply { isDaemon = true; start() } }
         watchersForPolling.add(watcher)
-        return watcher
+        return ServiceResult.Success(watcher)
     }
 
     private fun pollerLoop() {
@@ -172,7 +201,7 @@ object GoogleService : Service {
                     // All the watchers that are still dirty haven't been fully polled before the outage happened.
                     // Notify them about the outage and try again in a bit, after having backed off exponentially.
                     for (watcher in dirtyWatchers)
-                        watcher.callbacks?.problem(ServiceWatcher.Problem.DOWN)
+                        watcher.callbacks?.problem(ServiceError.Unreachable(this))
                     sleep = (sleep * 2).coerceIn(minSleep, maxSleep)
                 }
                 Thread.sleep(sleep * 1000L)
@@ -219,7 +248,7 @@ object GoogleService : Service {
                 // If no account has access, let the watcher know it's inaccessible. Also remove it from the dirty list
                 // so that it is only polled again when the user explicitly requests that.
                 if (response == null) {
-                    watcher.callbacks?.problem(ServiceWatcher.Problem.INACCESSIBLE)
+                    watcher.callbacks?.problem(ServiceError.SpreadsheetFileForbidden(this))
                     dirtyWatchers.remove(watcher)
                 }
             } else {
@@ -259,8 +288,7 @@ object GoogleService : Service {
         callbacks: ServiceWatcher.Callbacks
     ) : ServiceWatcher {
 
-        @Volatile
-        var callbacks: ServiceWatcher.Callbacks? = callbacks
+        @Volatile var callbacks: ServiceWatcher.Callbacks? = callbacks
         var currentAccount: GoogleAccount? = null
 
         override fun poll() {
@@ -281,6 +309,7 @@ object GoogleService : Service {
         private var cachedSheets: Sheets? = null
         private val cachedSheetsLock = ReentrantLock()
 
+        /** @throws Exception In 2 cases: if [authorizeIfNeeded] is true, or if the credential data store is corrupt. */
         fun sheets(authorizeIfNeeded: Boolean): Sheets? = cachedSheetsLock.withLock {
             cachedSheets?.let { return it }
 
@@ -329,9 +358,15 @@ object GoogleService : Service {
             return sheets
         }
 
-        override fun upload(filename: String?, spreadsheet: Spreadsheet, look: SpreadsheetLook): URI {
+        override fun upload(
+            filename: String?, format: SpreadsheetFormat?, spreadsheet: Spreadsheet, look: SpreadsheetLook
+        ): ServiceResult<URI> {
+            if (filename.isNullOrBlank())
+                return ServiceResult.Failure(ServiceError.Generic("Filename is blank."))
+
             // Get the sheets object.
-            val sheets = sheets(false) ?: throw IOException("Account is missing credentials.")
+            val sheets = sheets(false) ?: return ServiceResult.Failure(ServiceError.Unauthorized(service))
+
             // Construct the request object.
             val rowData = mutableListOf<RowData>()
             for (row in 0..<max(200, spreadsheet.numRecords)) {
@@ -374,16 +409,27 @@ object GoogleService : Service {
                 .setProperties(SheetProperties().setTitle(spreadsheet.name).setGridProperties(gridProps))
                 .setData(listOf(gridData))
             val sSheet = Spreadsheet()
-                .setProperties(SpreadsheetProperties().setTitle(filename!!))
+                .setProperties(SpreadsheetProperties().setTitle(filename))
                 .setSheets(listOf(sheet))
             val request = sheets.spreadsheets().create(sSheet).setFields("spreadsheetUrl")
+
             // Send the request object.
-            val url = send(request).spreadsheetUrl
-            return try {
-                URI(url)
-            } catch (e: URISyntaxException) {
-                throw IOException("Received malformed spreadsheet URL: $url", e)
+            val url = try {
+                send(request).spreadsheetUrl
+            } catch (_: ForbiddenException) {
+                return ServiceResult.Failure(ServiceError.Generic("Google Sheets disallowed the creation of a sheet."))
+            } catch (_: DownException) {
+                return ServiceResult.Failure(ServiceError.Unreachable(service))
             }
+
+            // Parse the returned URL.
+            val uri = try {
+                URI(url)
+            } catch (_: URISyntaxException) {
+                return ServiceResult.Failure(ServiceError.Generic("Received malformed spreadsheet URL: $url"))
+            }
+
+            return ServiceResult.Success(uri)
         }
 
         /**
@@ -405,10 +451,7 @@ object GoogleService : Service {
                         }
                         throw ForbiddenException()
                     }
-                    e is HttpResponseException -> when (e.statusCode) {
-                        408, 429, 500, 502, 503, 504 -> throw DownException()
-                        else -> throw ForbiddenException()
-                    }
+                    e is HttpResponseException && !isUnreachableHttpStatus(e.statusCode) -> throw ForbiddenException()
                     else -> throw DownException()
                 }
             }
@@ -491,7 +534,7 @@ object GoogleService : Service {
     }
 
 
-    private class ForbiddenException : IOException(l10n("ui.projects.create.error.access"))
-    private class DownException : IOException(l10n("ui.projects.create.error.unresponsive"))
+    private class ForbiddenException : IOException()
+    private class DownException : IOException()
 
 }

@@ -7,6 +7,14 @@ package com.loadingbyte.cinecred.common
  */
 
 
+fun String.removeAnySuffix(suffixes: Iterable<String>, ignoreCase: Boolean = false): String {
+    for (suffix in suffixes)
+        if (endsWith(suffix, ignoreCase))
+            return dropLast(suffix.length)
+    return this
+}
+
+
 inline fun FloatArray.allBetween(startIdx: Int, endIdx: Int, predicate: (Float) -> Boolean): Boolean {
     for (idx in startIdx..<endIdx)
         if (!predicate(this[idx]))

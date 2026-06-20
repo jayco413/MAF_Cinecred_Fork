@@ -4,6 +4,7 @@ import com.loadingbyte.cinecred.demo.ScreencastDemo
 import com.loadingbyte.cinecred.demo.l10nDemo
 import com.loadingbyte.cinecred.projectio.OdsFormat
 import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
 import com.loadingbyte.cinecred.projectio.service.Account
 import com.loadingbyte.cinecred.projectio.service.GoogleService
@@ -58,8 +59,9 @@ object GuideProjectFolderCreateProjectDemo : ScreencastDemo("$DIR/create-project
     private object DummyAccount : Account {
         override val id get() = l10nDemo("genericName")
         override val service get() = GoogleService
-        override fun upload(filename: String?, spreadsheet: Spreadsheet, look: SpreadsheetLook) =
-            throw UnsupportedOperationException()
+        override fun upload(
+            filename: String?, format: SpreadsheetFormat?, spreadsheet: Spreadsheet, look: SpreadsheetLook
+        ) = throw UnsupportedOperationException()
     }
 }
 

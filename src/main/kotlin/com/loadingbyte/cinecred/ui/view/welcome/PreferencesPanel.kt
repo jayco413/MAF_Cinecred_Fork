@@ -157,7 +157,9 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             welcomeCtrl.preferences_configureAccount_onClickEstablish(
                 configureAccountForm.labelWidget.value,
                 configureAccountForm.serviceWidget.value.get(),
-                configureAccountForm.serverWidget.value
+                configureAccountForm.serverWidget.value,
+                configureAccountForm.usernameWidget.value,
+                configureAccountForm.passwordWidget.value
             )
         }
         configureAccountForm.onChange(configureAccountForm.labelWidget)  // Run validation
@@ -374,6 +376,8 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             labelWidget.value = ""
             serviceWidget.value = Optional.empty()
             serverWidget.value = "https://"
+            usernameWidget.value = ""
+            passwordWidget.value = ""
         }
     }
 
@@ -381,6 +385,8 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         configureAccountForm.labelWidget.isEnabled = !locked
         configureAccountForm.serviceWidget.isEnabled = !locked
         configureAccountForm.serverWidget.isEnabled = !locked
+        configureAccountForm.usernameWidget.isEnabled = !locked
+        configureAccountForm.passwordWidget.isEnabled = !locked
         configureAccountEstablishButton.isEnabled = !locked
     }
 
@@ -480,6 +486,30 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             verify = { server ->
                 welcomeCtrl.preferences_configureAccount_verifyServer(serviceWidget.value.getOrNull(), server)
                     ?.let { Notice(Severity.ERROR, it) }
+            }
+        )
+
+        val usernameWidget = addWidget(
+            l10n("ui.preferences.accounts.configure.username"),
+            TextWidget(),
+            isVisible = {
+                val service = serviceWidget.value.getOrNull()
+                service != null && service.credentialsRequirement != Service.CredentialsRequirement.UNUSED
+            },
+            verify = { username ->
+                welcomeCtrl.preferences_configureAccount_verifyCredential(serviceWidget.value.getOrNull(), username)
+            }
+        )
+
+        val passwordWidget = addWidget(
+            l10n("ui.preferences.accounts.configure.password"),
+            PasswordWidget(),
+            isVisible = {
+                val service = serviceWidget.value.getOrNull()
+                service != null && service.credentialsRequirement != Service.CredentialsRequirement.UNUSED
+            },
+            verify = { password ->
+                welcomeCtrl.preferences_configureAccount_verifyCredential(serviceWidget.value.getOrNull(), password)
             }
         )
 

@@ -3,6 +3,7 @@ package com.loadingbyte.cinecred.projectio
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.projectio.service.Account
 import com.loadingbyte.cinecred.projectio.service.WRITTEN_SERVICE_LINK_EXT
+import com.loadingbyte.cinecred.projectio.service.abort
 import com.loadingbyte.cinecred.projectio.service.writeServiceLink
 import java.nio.file.Files
 import java.nio.file.Path
@@ -15,17 +16,23 @@ import kotlin.math.max
 
 /** @throws Exception */
 fun tryCopyTemplate(destDir: Path, template: Template) {
-    tryCopyTemplate(destDir, template, null, null, null)
+    doTryCopyTemplate(destDir, template, null, null, null)
 }
 
 /** @throws Exception */
 fun tryCopyTemplate(destDir: Path, template: Template, creditsFormat: SpreadsheetFormat) {
-    tryCopyTemplate(destDir, template, creditsFormat, null, null)
+    doTryCopyTemplate(destDir, template, null, null, creditsFormat)
 }
 
 /** @throws Exception */
-fun tryCopyTemplate(destDir: Path, template: Template, creditsAccount: Account, creditsFilename: String) {
-    tryCopyTemplate(destDir, template, null, creditsAccount, creditsFilename)
+fun tryCopyTemplate(
+    destDir: Path,
+    template: Template,
+    creditsAccount: Account,
+    creditsFilename: String?,
+    creditsFormat: SpreadsheetFormat?
+) {
+    doTryCopyTemplate(destDir, template, creditsAccount, creditsFilename, creditsFormat)
 }
 
 class Template(
@@ -37,17 +44,17 @@ class Template(
 )
 
 
-private fun tryCopyTemplate(
+private fun doTryCopyTemplate(
     destDir: Path,
     template: Template,
-    creditsFormat: SpreadsheetFormat?,
     creditsAccount: Account?,
-    creditsFilename: String?
+    creditsFilename: String?,
+    creditsFormat: SpreadsheetFormat?
 ) {
     // First try to write the credits file, so that if something goes wrong (which is likely with online services),
     // the project folder just isn't created at all, instead of being half-created.
     if (creditsFormat != null || creditsAccount != null)
-        tryCopyCreditsTemplate(destDir, template, creditsFormat, creditsAccount, creditsFilename)
+        tryCopyCreditsTemplate(destDir, template, creditsAccount, creditsFilename, creditsFormat)
     tryCopyStylingTemplate(destDir, template)
     if (template.sample) {
         tryCopyLogoFile(destDir, "cinecredH.svg", "Cinecred H.svg")
@@ -59,9 +66,9 @@ private fun tryCopyTemplate(
 private fun tryCopyCreditsTemplate(
     destDir: Path,
     template: Template,
-    creditsFormat: SpreadsheetFormat?,
     creditsAccount: Account?,
-    creditsFilename: String?
+    creditsFilename: String?,
+    creditsFormat: SpreadsheetFormat?
 ) {
     var csv = useResourceStream("/template/credits.csv") { it.bufferedReader().readLines() }
     // If desired, cut off the sample credits and only keep the table header.
@@ -78,7 +85,7 @@ private fun tryCopyCreditsTemplate(
         colWidths = listOf(45, 45, 15, 15, 25, 15, 40, 20, 25, 25)
     )
     when {
-        creditsFormat != null -> {
+        creditsAccount == null && creditsFormat != null -> {
             val destFile = destDir.resolve("$fileName.${creditsFormat.fileExt}")
             if (!destFile.notExists())
                 return
@@ -89,8 +96,13 @@ private fun tryCopyCreditsTemplate(
             val destFile = destDir.resolve("$fileName.$WRITTEN_SERVICE_LINK_EXT")
             if (!destFile.notExists())
                 return
-            val name = if (creditsAccount.service.uploadNeedsFilename) requireNotNull(creditsFilename) else null
-            val link = creditsAccount.upload(name, spreadsheet, look)
+            var filename = if (creditsAccount.service.uploadNeedsFilename) requireNotNull(creditsFilename) else null
+            val format = if (creditsAccount.service.uploadNeedsFormat) requireNotNull(creditsFormat) else null
+            if (filename != null && format != null)
+                filename = filename.removeAnySuffix(SPREADSHEET_FORMATS.map { ".${it.fileExt}" }, ignoreCase = true) +
+                        ".${format.fileExt}"
+            val link = creditsAccount.upload(filename, format, spreadsheet, look)
+                .abort { error -> throw Exception(l10n("ui.projects.create.error.service", error.message)) }
             // Uploading the credits file can take some time. If the user cancels in the meantime, the uploader is
             // actually not interrupted. So instead, we detect interruption here and stop project initialization.
             if (Thread.interrupted())

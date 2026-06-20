@@ -8,6 +8,7 @@ import com.loadingbyte.cinecred.projectio.service.*
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.comms.*
 import com.loadingbyte.cinecred.ui.helper.FileExtAssortment
+import com.loadingbyte.cinecred.ui.helper.Form
 import com.loadingbyte.cinecred.ui.helper.useAppleScriptFileChooser
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.AttributeProvider
@@ -17,8 +18,6 @@ import java.io.IOException
 import java.io.StringReader
 import java.net.URI
 import java.net.URISyntaxException
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
@@ -245,10 +244,8 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         if (latestStableVersion.get() != null)
             afterFetch()
         else if (CHECK_FOR_UPDATES_PREFERENCE.get()) {
-            val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build()
-            val req = HttpRequest.newBuilder(URI.create("https://cinecred.com/dl/api/v1/components"))
-                .setHeader("User-Agent", USER_AGENT).build()
-            client.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenAccept { resp ->
+            val req = httpRequest(URI.create("https://cinecred.com/dl/api/v1/components"))
+            GLOBAL_HTTP_CLIENT.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenAccept { resp ->
                 if (resp.statusCode() != 200)
                     return@thenAccept
 
@@ -433,9 +430,9 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         timecodeFormat: TimecodeFormat,
         sample: Boolean,
         creditsLocation: CreditsLocation,
-        creditsFormat: SpreadsheetFormat,
         creditsAccount: Account?,
-        creditsFilename: String
+        creditsFilename: String,
+        creditsFormat: SpreadsheetFormat
     ) {
         val projectDir = newBrowseSelection ?: return
         val effSample = if (creditsLocation == CreditsLocation.SKIP) false else sample
@@ -448,7 +445,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
                     CreditsLocation.LOCAL ->
                         tryCopyTemplate(projectDir, template, creditsFormat)
                     CreditsLocation.SERVICE ->
-                        tryCopyTemplate(projectDir, template, creditsAccount!!, creditsFilename)
+                        tryCopyTemplate(projectDir, template, creditsAccount!!, creditsFilename, creditsFormat)
                     CreditsLocation.SKIP ->
                         tryCopyTemplate(projectDir, template)
                 }
@@ -482,15 +479,21 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         welcomeView.preferences_start_setAccountRemovalLocked(account, true)
         val service = SERVICES.first { account in it.accounts }
         Thread({
+            var err: String? = null
             try {
-                service.removeAccount(account)
+                val error = service.removeAccount(account)
+                if (error != null)
+                    err = error.message
             } catch (e: Exception) {
+                // In case there's a programmer error and an exception escapes, handle it instead of crashing.
                 LOGGER.error("Could not remove a {} account.", account.service.product, e)
+                err = e.userNotification
+            }
+            if (err != null)
                 SwingUtilities.invokeLater {
-                    welcomeView.showCannotRemoveAccountMessage(account, e.userNotification)
+                    welcomeView.showCannotRemoveAccountMessage(account, err)
                     welcomeView.preferences_start_setAccountRemovalLocked(account, false)
                 }
-            }
         }, "RemoveAccount").apply { isDaemon = true; start() }
     }
 
@@ -503,37 +506,54 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     }
 
     override fun preferences_configureAccount_verifyServer(service: Service?, server: String): String? {
-        val server = try {
+        if (service == null || !service.accountNeedsServer)
+            return null
+        val uri = try {
             URI(server)
         } catch (_: URISyntaxException) {
             null
         }
-        return if (server == null ||
-            service != null && service.accountNeedsServer && !service.isServerPlausible(server)
-        ) l10n("ui.preferences.accounts.configure.invalidURL") else null
+        return if (server.isBlank() || uri == null || !service.isServerPlausible(uri))
+            l10n("ui.preferences.accounts.configure.invalidURL") else null
     }
+
+    override fun preferences_configureAccount_verifyCredential(service: Service?, credential: String): Form.Notice? =
+        when (service?.credentialsRequirement) {
+            Service.CredentialsRequirement.REQUIRED ->
+                if (credential.isBlank()) Form.Notice(Severity.ERROR, l10n("required")) else null
+            Service.CredentialsRequirement.OPTIONAL -> Form.Notice(Severity.INFO, l10n("optional"))
+            Service.CredentialsRequirement.UNUSED, null -> null
+        }
 
     override fun preferences_configureAccount_onClickCancel() {
         if (addAccountThread?.also(Thread::interrupt) == null)
             welcomeView.preferences_setCard(PreferencesCard.START)
     }
 
-    override fun preferences_configureAccount_onClickEstablish(label: String, service: Service, server: String) {
+    override fun preferences_configureAccount_onClickEstablish(
+        label: String, service: Service, server: String, username: String, password: String
+    ) {
         val authorize = service.authorizer != null
         welcomeView.preferences_configureAccount_setFormLocked(true)
         welcomeView.preferences_configureAccount_setStatusEstablishing(authorize)
         addAccountThread = Thread({
+            var err: String? = null
             try {
-                service.addAccount(label, if (service.accountNeedsServer) URI(server) else null)
-                SwingUtilities.invokeLater { welcomeView.preferences_setCard(PreferencesCard.START) }
+                val cred = if (username.isBlank() && password.isBlank()) null else Credentials(username, password)
+                val error = service.addAccount(label, if (service.accountNeedsServer) URI(server) else null, cred)
+                if (error == null)
+                    SwingUtilities.invokeLater { welcomeView.preferences_setCard(PreferencesCard.START) }
+                else
+                    err = error.message
             } catch (_: InterruptedException) {
                 SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_clearStatus() }
-                // Let the thread come to a stop.
             } catch (e: Exception) {
+                // In case there's a programmer error and an exception escapes, handle it instead of crashing.
                 LOGGER.error("Could not establish a {} account.", service.product, e)
-                val err = e.userNotification
-                SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setStatusFailed(authorize, err) }
+                err = e.userNotification
             }
+            if (err != null)
+                SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setStatusFailed(authorize, err) }
             SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setFormLocked(false) }
             addAccountThread = null
         }, "AddAccount").apply { isDaemon = true; start() }

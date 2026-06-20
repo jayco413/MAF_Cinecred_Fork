@@ -1,160 +1,74 @@
 package com.loadingbyte.cinecred.projectio.service
 
-import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.projectio.CsvFormat
+import com.loadingbyte.cinecred.common.httpRequestBuilder
+import com.loadingbyte.cinecred.projectio.OdsFormat
 import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
-import kotlinx.collections.immutable.persistentListOf
-import kotlinx.collections.immutable.toPersistentList
-import java.io.IOException
 import java.net.URI
 import java.net.URISyntaxException
-import java.net.http.HttpClient
 import java.net.http.HttpRequest
-import java.net.http.HttpResponse
-import java.util.concurrent.locks.ReentrantLock
-import kotlin.concurrent.withLock
-import kotlin.io.path.deleteIfExists
-import kotlin.io.path.notExists
+import java.nio.file.Path
 
 
-object EtherCalcService : Service {
+object EtherCalcService : IndependentService() {
 
     override val product get() = "EtherCalc"
     override val authorizer get() = null
-    override val accountNeedsServer get() = true
+    override val credentialsRequirement get() = Service.CredentialsRequirement.OPTIONAL
     override val uploadNeedsFilename get() = false
+    override val uploadNeedsFormat get() = false
 
-    override val accounts: List<Account> get() = _accounts
+    override val accountsFile: Path get() = SERVICE_CONFIG_DIR.resolve("ethercalc")
 
-    private val httpClient by lazy { HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build() }
-    private fun httpRequestBuilder(uri: URI) = HttpRequest.newBuilder(uri).setHeader("User-Agent", USER_AGENT)
+    override fun constructAccount(accountId: String, server: URI, credentials: Credentials?): Account =
+        EtherCalcAccount(accountId, server, credentials)
 
-    private val accountsFile = SERVICE_CONFIG_DIR.resolve("ethercalc.toml")
-    private val accountsLock = ReentrantLock()
-    @Volatile
-    private var _accounts =
-        if (accountsFile.notExists()) persistentListOf() else try {
-            (readToml(accountsFile)["instance"] as? List<*> ?: emptyList<Any>()).mapNotNull {
-                if (it !is Map<*, *>) return@mapNotNull null
-                val id = it["id"] as? String ?: return@mapNotNull null
-                val server = try {
-                    URI(it["server"] as? String ?: return@mapNotNull null)
-                } catch (_: URISyntaxException) {
-                    return@mapNotNull null
-                }
-                if (!isServerPlausible(server)) return@mapNotNull null
-                EtherCalcAccount(id, normalizeServer(server))
-            }.toPersistentList()
-        } catch (e: IOException) {
-            LOGGER.error("Cannot access the EtherCalc services file at '{}'.", accountsFile, e)
-            persistentListOf()
-        }
-
-    private fun writeAccountsFile() {
-        val toml = mapOf("instance" to _accounts.map { mapOf("id" to it.id, "server" to it.server.toString()) })
-        writeToml(accountsFile, toml)
+    override fun normalizeServer(server: URI): URI {
+        val rawPath = server.rawPath
+        return if (rawPath.endsWith('/')) server else server.resolve("$rawPath/")
     }
 
-    override fun isServerPlausible(server: URI): Boolean =
-        (server.scheme == "http" || server.scheme == "https") && !server.isOpaque && !server.host.isNullOrEmpty()
-
-    private fun normalizeServer(server: URI): URI =
-        server.resolve(server.rawPath.let { if (it.endsWith('/')) it else "$it/" })
-
-    override fun addAccount(accountId: String, server: URI?) {
-        if (!isServerPlausible(server!!))
-            throw IOException("Server URL must use HTTP(S) and be hierarchical.")
-        val server = normalizeServer(server)
-        val req = httpRequestBuilder(server.resolve("_exists/x")).build()
-        val resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString())
-        if (resp.statusCode() != 200 || resp.body().let { it != "true" && it != "false" })
-            throw IOException(l10n("ui.preferences.accounts.establish.noServerFound", product, l10nQuoted(server)))
-        val account = EtherCalcAccount(accountId, server)
-        accountsLock.withLock {
-            _accounts = _accounts.add(account)
-            writeAccountsFile()
+    override fun verifyServer(server: URI, credentials: Credentials?): ServiceError? {
+        for (path in arrayOf("static/ethercalc.js", "static/socialcalc.js")) {
+            val req = httpRequestBuilder(server.resolve(path)).basicAuth(credentials).build()
+            val resp = sendForString(req, this).abort { return it }
+            if (resp.statusCode() == 200)
+                return null
         }
-        invokeAccountListListeners()
+        return ServiceError.ServiceNotResponsible(this)
     }
 
-    override fun removeAccount(account: Account) {
-        require(account is EtherCalcAccount && account in _accounts) { "This service is not responsible." }
-        accountsLock.withLock {
-            _accounts = _accounts.remove(account)
-            if (_accounts.isEmpty()) accountsFile.deleteIfExists() else writeAccountsFile()
-        }
-        invokeAccountListListeners()
-    }
-
-    override fun canWatch(link: URI): Boolean {
-        if (link.scheme != "http" && link.scheme != "https" || link.isOpaque || link.host.isNullOrEmpty() ||
-            '/' !in link.rawPath || link.rawPath.endsWith('/')
-        )
-            return false
-        val linkStr = link.toString()
-        for (account in _accounts) {
-            val serverStr = account.server.toString()
-            if (linkStr.startsWith(serverStr) && '/' !in linkStr.substring(serverStr.length))
-                return true
-        }
-        val req = httpRequestBuilder(makeAPIURI(link, "_exists", "")).build()
-        try {
-            val resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString())
-            return resp.statusCode() == 200 && resp.body() == "true"
-        } catch (_: IOException) {
-            return false
-        }
-    }
-
-    override fun watch(link: URI, callbacks: ServiceWatcher.Callbacks): ServiceWatcher =
-        EtherCalcWatcher(makeAPIURI(link, "_", "/csv"), callbacks)
-            .also(EtherCalcWatcher::poll)
-
-    private fun makeAPIURI(link: URI, endpoint: String, suffix: String): URI {
+    override fun watch(
+        link: URI, callbacks: ServiceWatcher.Callbacks, candidateAccounts: List<Account>
+    ): ServiceResult<ServiceWatcher> {
+        if (candidateAccounts.isEmpty() && verifyServer(link, credentials = null) != null)
+            return ServiceResult.Failure(ServiceError.ServiceNotResponsible(this))
         val path = link.rawPath
         val idx = path.lastIndexOf('/')
-        return link.resolve("${path.substring(0, idx)}/$endpoint/${path.substring(idx + 1)}$suffix")
+        if (idx == -1 || idx == path.lastIndex)
+            return ServiceResult.Failure(ServiceError.SpreadsheetLinkUnrecognizable(this, link))
+        // Note that we deliberately choose ODS over CSV because EtherCalc produces weird artifacts in the latter,
+        // like prefixing every @ at the start of a cell with an apostrophe.
+        val downloadURI = link.resolve("${path.substring(0, idx)}/_/${path.substring(idx + 1)}/ods")
+        val candidateCredentials = candidateAccounts.mapNotNull(Account::credentials)
+        val watcher = SimpleDownloadWatcher(downloadURI, candidateCredentials, OdsFormat, callbacks, this)
+        watcher.poll()
+        return ServiceResult.Success(watcher)
     }
 
 
-    private class EtherCalcWatcher(
-        private val csvURI: URI,
-        callbacks: ServiceWatcher.Callbacks
-    ) : ServiceWatcher {
-
-        private val jobSlot = JobSlot()
-        @Volatile
-        var callbacks: ServiceWatcher.Callbacks? = callbacks
-
-        override fun poll() {
-            callbacks ?: return
-            jobSlot.submit {
-                val req = httpRequestBuilder(csvURI).build()
-                try {
-                    val resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString())
-                    if (resp.statusCode() != 200) throw IOException()
-                    callbacks?.content(listOf(CsvFormat.read(resp.body(), l10n("project.template.spreadsheetName"))))
-                } catch (_: IOException) {
-                    callbacks?.problem(ServiceWatcher.Problem.DOWN)
-                }
-                // Simple rate limiting.
-                Thread.sleep(1000)
-            }
-        }
-
-        override fun cancel() {
-            callbacks = null
-        }
-
-    }
-
-
-    private class EtherCalcAccount(override val id: String, val server: URI) : Account {
+    private class EtherCalcAccount(
+        override val id: String,
+        override val server: URI,
+        override val credentials: Credentials?
+    ) : Account {
 
         override val service get() = EtherCalcService
 
-        override fun upload(filename: String?, spreadsheet: Spreadsheet, look: SpreadsheetLook): URI {
+        override fun upload(
+            filename: String?, format: SpreadsheetFormat?, spreadsheet: Spreadsheet, look: SpreadsheetLook
+        ): ServiceResult<URI> {
             val body = StringBuilder()
             body.appendLine(
                 """socialcalc:version:1.0
@@ -208,21 +122,21 @@ version:1.5"""
                 .appendLine("--SocialCalcSpreadsheetControlSave--")
 
             val req = httpRequestBuilder(server.resolve("_"))
+                .basicAuth(credentials)
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
-                .setHeader("Content-Type", "text/x-socialcalc")
+                .header("Content-Type", "text/x-socialcalc")
                 .build()
-            val name = try {
-                val resp = httpClient.send(req, HttpResponse.BodyHandlers.ofString())
-                if (resp.statusCode() != 201) throw IOException()
-                resp.body().substringAfterLast("/")
-            } catch (e: IOException) {
-                throw IOException(l10n("ui.projects.create.error.unresponsive"), e)
-            }
-            return try {
+            val resp = sendForString(req, service).abort { return ServiceResult.Failure(it) }
+            if (resp.statusCode() != 201)
+                return ServiceResult.Failure(ServiceError.Unexpected(service, resp.statusCode()))
+            val name = resp.body().substringAfterLast("/")
+            val uri = try {
                 server.resolve(URI(name))
-            } catch (e: URISyntaxException) {
-                throw IOException("Received malformed spreadsheet name: $name", e)
+            } catch (_: URISyntaxException) {
+                return ServiceResult.Failure(ServiceError.Generic("Received malformed spreadsheet name: $name"))
             }
+
+            return ServiceResult.Success(uri)
         }
 
         private data class FontKey(val size: Int, val bold: Boolean, val italic: Boolean)

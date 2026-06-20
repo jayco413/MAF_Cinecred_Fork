@@ -9,6 +9,7 @@ import com.loadingbyte.cinecred.projectio.service.Account
 import com.loadingbyte.cinecred.projectio.service.Service
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.helper.FileExtAssortment
+import com.loadingbyte.cinecred.ui.helper.Form
 import java.awt.GraphicsConfiguration
 import java.awt.event.KeyEvent
 import java.nio.file.Path
@@ -46,9 +47,9 @@ interface WelcomeCtrlComms {
         timecodeFormat: TimecodeFormat,
         sample: Boolean,
         creditsLocation: CreditsLocation,
-        creditsFormat: SpreadsheetFormat,
         creditsAccount: Account?,
-        creditsFilename: String
+        creditsFilename: String,
+        creditsFormat: SpreadsheetFormat
     )
 
     fun projects_createWait_onClickCancel()
@@ -67,8 +68,11 @@ interface WelcomeCtrlComms {
 
     fun preferences_configureAccount_verifyLabel(label: String): String? // Returns an error.
     fun preferences_configureAccount_verifyServer(service: Service?, server: String): String? // Returns an error.
+    fun preferences_configureAccount_verifyCredential(service: Service?, credential: String): Form.Notice?
     fun preferences_configureAccount_onClickCancel()
-    fun preferences_configureAccount_onClickEstablish(label: String, service: Service, server: String)
+    fun preferences_configureAccount_onClickEstablish(
+        label: String, service: Service, server: String, username: String, password: String
+    )
 
     fun preferences_configureOverlay_verifyName(name: String): String? // Returns an error.
     fun preferences_configureOverlay_onClickCancel()
