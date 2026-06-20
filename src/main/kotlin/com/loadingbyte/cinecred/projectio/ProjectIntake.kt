@@ -406,7 +406,7 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
 
     companion object {
 
-        private val CREDITS_EXTS = sortedSetOf(String.CASE_INSENSITIVE_ORDER).also {
+        val CREDITS_EXTS = sortedSetOf(String.CASE_INSENSITIVE_ORDER).also {
             SPREADSHEET_FORMATS.mapTo(it, SpreadsheetFormat::fileExt)
             it.addAll(SERVICE_LINK_EXTS)
         }

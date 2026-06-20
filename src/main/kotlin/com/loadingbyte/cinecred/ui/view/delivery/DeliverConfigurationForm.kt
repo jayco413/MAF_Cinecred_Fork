@@ -1,10 +1,7 @@
 package com.loadingbyte.cinecred.ui.view.delivery
 
 import com.formdev.flatlaf.FlatClientProperties.TEXT_FIELD_TRAILING_COMPONENT
-import com.loadingbyte.cinecred.common.Severity
-import com.loadingbyte.cinecred.common.l10n
-import com.loadingbyte.cinecred.common.l10nQuoted
-import com.loadingbyte.cinecred.common.toPathSafely
+import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.delivery.ImageSequenceRenderJob
 import com.loadingbyte.cinecred.delivery.RenderFormat
 import com.loadingbyte.cinecred.delivery.RenderFormat.*
@@ -31,7 +28,7 @@ import com.loadingbyte.cinecred.imaging.BitmapWriter.*
 import com.loadingbyte.cinecred.imaging.ColorSpace
 import com.loadingbyte.cinecred.project.Scan
 import com.loadingbyte.cinecred.project.label
-import com.loadingbyte.cinecred.projectio.SPREADSHEET_FORMATS
+import com.loadingbyte.cinecred.projectio.ProjectIntake.Companion.CREDITS_EXTS
 import com.loadingbyte.cinecred.ui.DeliveryDestTemplate
 import com.loadingbyte.cinecred.ui.DeliveryDestTemplate.Placeholder
 import com.loadingbyte.cinecred.ui.comms.*
@@ -722,7 +719,7 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
                 when (placeholder) {
                     Placeholder.PROJECT -> deliveryCtrl.getProjectName()
                     Placeholder.CREDITS_FILENAME ->
-                        SPREADSHEET_FORMATS.fold(creditsId?.fileName ?: "") { f, s -> f.removeSuffix("." + s.fileExt) }
+                        creditsId?.fileName?.removeAnySuffix(CREDITS_EXTS.map { ".$it" }, ignoreCase = true) ?: ""
                     Placeholder.SPREADSHEET -> creditsId?.spreadsheetName ?: ""
                     Placeholder.FIRST_PAGE -> "%02d".format(extremePageIndices.first + 1)
                     Placeholder.LAST_PAGE -> "%02d".format(extremePageIndices.second + 1)
