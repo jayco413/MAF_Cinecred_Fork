@@ -666,7 +666,15 @@ class SpreadsheetEditorVirtualWindow(
 
     override val title = "${file.name} \u2013 " + l10nDemo("screencast.spreadsheetEditor.title")
 
-    val matrix = format.read(file, "").single().drop(skipRows).map { it.cells.toMutableList() }
+    val sheetName: String
+    val matrix: List<MutableList<String>>
+
+    init {
+        val spreadsheet = format.read(file, "").single()
+        sheetName = spreadsheet.name
+        matrix = spreadsheet.drop(skipRows).map { it.cells.toMutableList() }
+    }
+
     var rowOffset = 0
     var colWidths = intArrayOf()
 
@@ -747,7 +755,7 @@ class SpreadsheetEditorVirtualWindow(
     )
 
     fun save() {
-        format.write(file, Spreadsheet("", matrix), SpreadsheetLook(emptyMap(), emptyList()))
+        format.write(file, Spreadsheet(sheetName, matrix), SpreadsheetLook(0, emptyMap(), emptyList(), emptyList()))
     }
 
     private fun cellX(colIdx: Int) = INSET_L + colIdx * SEP_THICKNESS + colWidths.sumBetween(0, colIdx)
