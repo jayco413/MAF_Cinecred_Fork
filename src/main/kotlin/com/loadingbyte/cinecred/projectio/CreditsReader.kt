@@ -22,7 +22,7 @@ fun readCredits(
 ): Triple<Credits, List<ParserMsg>, List<RuntimeGroupSource>> {
     // Try to find the table in the spreadsheet.
     val table = Table(
-        fileName, spreadsheet, l10nPrefix = "projectIO.credits.table.", l10nColNames = listOf(
+        fileName, spreadsheet, l10nColNames = listOf(
             "head", "body", "tail", "vGap", "contentStyle", "breakHarmonization", "spinePos",
             "pageStyle", "pageRuntime", "pageGap"
         ), legacyColNames = mapOf(
@@ -456,7 +456,7 @@ private class CreditsReader(
 
         table.getString(row, "pageGap")?.let { str ->
             fun illFormattedPageGapMsg(): String {
-                val fuse = l10n(FUSE_KW.key)
+                val fuse = FUSE_KW.get()
                 return l10n(
                     "projectIO.credits.illFormattedPageGap",
                     "<i>$timecodeFormatLabel</i>", l10nQuoted(sampleTimecode), l10nQuoted("-$sampleTimecode"),
@@ -476,7 +476,7 @@ private class CreditsReader(
                 table.log(row, "pageGap", WARN, l10n("projectIO.credits.pageGapAlreadySet"))
             else if (str.substringBefore(' ').let {
                     if (ROOT_CASE_INSENSITIVE_COLLATOR.equals(it, "Melt")) {
-                        table.logMigrationPut(row, "pageGap", l10n(FUSE_KW.key, Locale.ENGLISH) + str.substring(4))
+                        table.logMigrationPut(row, "pageGap", FUSE_KW.get(Locale.ENGLISH) + str.substring(4))
                         true
                     } else it in FUSE_KW
                 }) {
@@ -603,9 +603,9 @@ private class CreditsReader(
                 val msg = when {
                     hookKw -> {
                         val kw = parts[0]
-                        val top = l10n(TOP_KW.key)
-                        val mid = l10n(MIDDLE_KW.key)
-                        val bot = l10n(BOTTOM_KW.key)
+                        val top = TOP_KW.get()
+                        val mid = MIDDLE_KW.get()
+                        val bot = BOTTOM_KW.get()
                         l10n(
                             "projectIO.credits.illFormattedSpinePosHook", l10nQuoted(kw), u,
                             "<i>$top</i>", "<i>$mid</i>", "<i>$bot</i>",
@@ -613,18 +613,18 @@ private class CreditsReader(
                         )
                     }
                     onCard -> {
-                        val below = l10n(BELOW_KW.key)
-                        val parallel = l10n(PARALLEL_KW.key)
-                        val hook = l10n(HOOK_KW.key)
+                        val below = BELOW_KW.get()
+                        val parallel = PARALLEL_KW.get()
+                        val hook = HOOK_KW.get()
                         l10n(
                             "projectIO.credits.illFormattedSpinePosCard",
-                            "<i>$below</i>", "<i>${l10n(ABOVE_KW.key)}</i>", "<i>$parallel</i>", "<i>$hook</i>",
+                            "<i>$below</i>", "<i>${ABOVE_KW.get()}</i>", "<i>$parallel</i>", "<i>$hook</i>",
                             l10nEnumQuoted("-400", "-400 200", "-400 200 $below", "-400 $parallel", "$hook \u2026")
                         )
                     }
                     else -> {
-                        val parallel = l10n(PARALLEL_KW.key)
-                        val hook = l10n(HOOK_KW.key)
+                        val parallel = PARALLEL_KW.get()
+                        val hook = HOOK_KW.get()
                         l10n(
                             "projectIO.credits.illFormattedSpinePosScroll",
                             "<i>$parallel</i>", "<i>$hook</i>",
@@ -666,7 +666,7 @@ private class CreditsReader(
                 isBlockConclusionMarked = true
             if (unknown.isNotEmpty()) {
                 val kws = l10nEnumQuoted(unknown)
-                val opts = "<i>${l10nEnum(l10n(HEAD_KW.key), l10n(BODY_KW.key), l10n(TAIL_KW.key))}</i>"
+                val opts = "<i>${l10nEnum(HEAD_KW.get(), BODY_KW.get(), TAIL_KW.get())}</i>"
                 val msg = l10n("projectIO.credits.unknownBreakHarmonizationKeyword", unknown.size, kws, opts)
                 table.log(row, "breakHarmonization", WARN, msg)
             }
@@ -713,7 +713,7 @@ private class CreditsReader(
                         if ((c || n) && currStyle?.behavior != nextStyle.behavior) {
                             val msd = if (c) MigrationDataSource(currStyle, PageStyle::scrollMeltWithNext.st())
                             else MigrationDataSource(nextStyle, PageStyle::scrollMeltWithPrev.st())
-                            table.logMigrationPut(row - 1, "pageGap", l10n(FUSE_KW.key), msd)
+                            table.logMigrationPut(row - 1, "pageGap", FUSE_KW.get(), msd)
                             false
                         } else true
                     }
@@ -798,7 +798,7 @@ private class CreditsReader(
 
         fun unknownTagMsg(tagKey: String) = l10n(
             "projectIO.credits.unknownTagKeyword", l10nQuoted("{{$tagKey …}}"), l10nQuoted("\\{{$tagKey …}}"),
-            "<i>" + l10nEnum(listOf(BLANK_KW, STYLE_KW, PIC_KW, VIDEO_KW).map { "{{${l10n(it.key)}}}" }) + "</i>"
+            "<i>" + l10nEnum(listOf(BLANK_KW, STYLE_KW, PIC_KW, VIDEO_KW).map { "{{${it.get()}}}" }) + "</i>"
         )
 
         fun tagDisallowedMsg(tagKey: String) = l10n("projectIO.credits.tagDisallowed", l10nQuoted("{{$tagKey …}}"))
@@ -1034,22 +1034,22 @@ private class CreditsReader(
 
     companion object {
 
-        val FUSE_KW = Keyword("projectIO.credits.table.melt")
-        val BELOW_KW = Keyword("projectIO.credits.table.below")
-        val ABOVE_KW = Keyword("projectIO.credits.table.above")
-        val HOOK_KW = Keyword("projectIO.credits.table.hook")
-        val TOP_KW = Keyword("projectIO.credits.table.top")
-        val MIDDLE_KW = Keyword("projectIO.credits.table.middle")
-        val BOTTOM_KW = Keyword("projectIO.credits.table.bottom")
-        val PARALLEL_KW = Keyword("projectIO.credits.table.parallel")
-        val HEAD_KW = Keyword("projectIO.credits.table.head")
-        val BODY_KW = Keyword("projectIO.credits.table.body")
-        val TAIL_KW = Keyword("projectIO.credits.table.tail")
+        val FUSE_KW = Keyword("fuse")
+        val PARALLEL_KW = Keyword("parallel")
+        val HOOK_KW = Keyword("hook")
+        val TOP_KW = Keyword("top")
+        val MIDDLE_KW = Keyword("middle")
+        val BOTTOM_KW = Keyword("bottom")
+        val ABOVE_KW = Keyword("above")
+        val BELOW_KW = Keyword("below")
+        val HEAD_KW = Keyword("head")
+        val BODY_KW = Keyword("body")
+        val TAIL_KW = Keyword("tail")
         val BLANK_KW = Keyword("blank")
-        val STYLE_KW = Keyword("projectIO.credits.table.style")
-        val PIC_KW = Keyword("projectIO.credits.table.pic")
+        val STYLE_KW = Keyword("style")
+        val PIC_KW = Keyword("pic")
         val CROP_KW = legacyKeyword("Crop", "Oříznutí", "Stutzen", "Rogner", "裁剪")
-        val VIDEO_KW = Keyword("projectIO.credits.table.video")
+        val VIDEO_KW = Keyword("video")
         val MARGIN_KW = legacyKeyword("Margin", "Odsazení", "Rand", "Marge", "边缘")
         val FADE_KW = legacyKeyword("Fade", "Blende", "Fondu", "淡入")
         val END_KW = legacyKeyword("End", "Konec", "Ende", "Fin", "末尾")
@@ -1069,12 +1069,15 @@ private class CreditsReader(
     }
 
 
-    class Keyword(val key: String) {
+    class Keyword(private val key: String) {
+
         private val kwSet = TRANSLATED_LOCALES.mapTo(TreeSet(ROOT_CASE_INSENSITIVE_COLLATOR)) { l ->
-            l10n(key, l).also { kw -> require(' ' !in kw) { "Keyword '$kw' from $key @ $l contains whitespace" } }
+            l10nKeyword(key, l).also { require(' ' !in it) { "Keyword '$it' from $key @ $l contains whitespace" } }
         }
 
         operator fun contains(str: String) = str in kwSet
+        fun get(locale: Locale = Locale.getDefault()) = l10nKeyword(key, locale)
+
     }
 
 

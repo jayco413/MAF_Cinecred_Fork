@@ -3,6 +3,7 @@ package com.loadingbyte.cinecred.demos
 import com.loadingbyte.cinecred.common.Timecode.SMPTENonDropFrame
 import com.loadingbyte.cinecred.common.TimecodeFormat.SMPTE_NON_DROP_FRAME
 import com.loadingbyte.cinecred.common.l10n
+import com.loadingbyte.cinecred.common.l10nKeyword
 import com.loadingbyte.cinecred.common.useResourcePath
 import com.loadingbyte.cinecred.demo.*
 import com.loadingbyte.cinecred.imaging.Picture
@@ -95,18 +96,18 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
         dt.toBack(spreadsheetEditorWin)
 
         sc.hold(2 * hold)
-        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred}}", 8 * hold)
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10nKeyword("pic")} Cinecred}}", 8 * hold)
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click(4 * hold)
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred"))
         sc.click(12 * hold)
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
-        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred.svg}}")
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10nKeyword("pic")} Cinecred.svg}}")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click(8 * hold)
         sc.click()
-        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred Cropped}}")
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10nKeyword("pic")} Cinecred Cropped}}")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred Cropped"))

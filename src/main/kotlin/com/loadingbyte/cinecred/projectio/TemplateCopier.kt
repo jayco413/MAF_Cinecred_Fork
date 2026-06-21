@@ -150,7 +150,7 @@ private fun fillIn(string: String, template: Template): String = string
             "scrollPxPerFrame" ->
                 max(1, template.fps.run { 78 * denominator / numerator } * template.resolution.k / 2).toString()
             "projectIO.credits.table.headDesc" -> {
-                val styleKw = l10n("projectIO.credits.table.style", template.locale)
+                val styleKw = l10nKeyword("style", template.locale)
                 val stylePlaceholder = "[${l10n("ui.styling.letter.name", template.locale)}]"
                 val name = l10n("project.template.letterStyleName", template.locale)
                 l10n(
@@ -163,14 +163,14 @@ private fun fillIn(string: String, template: Template): String = string
                 )
             }
             "projectIO.credits.table.tailDesc", "projectIO.credits.table.bodyDesc" -> {
-                val picKw = l10n("projectIO.credits.table.pic", template.locale)
-                val videoKw = l10n("projectIO.credits.table.video", template.locale)
+                val picKw = l10nKeyword("pic", template.locale)
+                val videoKw = l10nKeyword("video", template.locale)
                 val filenamePlaceholder = "[${l10n("filename", template.locale)}]"
                 l10n(
                     key,
-                    l10nQuoted("{{${l10n("projectIO.credits.table.style", template.locale)} …}}", template.locale),
-                    "@" + l10n("projectIO.credits.table.head", template.locale),
-                    l10nQuoted("{{${l10n("blank", template.locale)}}}", template.locale),
+                    l10nQuoted("{{${l10nKeyword("style", template.locale)} …}}", template.locale),
+                    "@" + l10nKeyword("head", template.locale),
+                    l10nQuoted("{{${l10nKeyword("blank", template.locale)}}}", template.locale),
                     l10nQuoted("{{$picKw $filenamePlaceholder}}", template.locale),
                     l10nQuoted("{{$videoKw $filenamePlaceholder}}", template.locale),
                     l10nEnumQuoted(
@@ -185,22 +185,22 @@ private fun fillIn(string: String, template: Template): String = string
             "projectIO.credits.table.breakHarmonizationDesc" ->
                 l10n(
                     key,
-                    l10nQuoted(l10n("projectIO.credits.table.head", template.locale), template.locale),
-                    l10nQuoted(l10n("projectIO.credits.table.body", template.locale), template.locale),
-                    l10nQuoted(l10n("projectIO.credits.table.tail", template.locale), template.locale),
+                    l10nQuoted(l10nKeyword("head", template.locale), template.locale),
+                    l10nQuoted(l10nKeyword("body", template.locale), template.locale),
+                    l10nQuoted(l10nKeyword("tail", template.locale), template.locale),
                     locale = template.locale
                 )
             "projectIO.credits.table.spinePosDesc" -> {
-                val below = l10n("projectIO.credits.table.below", template.locale)
-                val parallel = l10n("projectIO.credits.table.parallel", template.locale)
-                val hook = l10n("projectIO.credits.table.hook", template.locale)
-                val top = l10n("projectIO.credits.table.top", template.locale)
-                val mid = l10n("projectIO.credits.table.middle", template.locale)
-                val bot = l10n("projectIO.credits.table.bottom", template.locale)
+                val below = l10nKeyword("below", template.locale)
+                val parallel = l10nKeyword("parallel", template.locale)
+                val hook = l10nKeyword("hook", template.locale)
+                val top = l10nKeyword("top", template.locale)
+                val mid = l10nKeyword("middle", template.locale)
+                val bot = l10nKeyword("bottom", template.locale)
                 l10n(
                     key,
                     l10nQuoted(below, template.locale),
-                    l10nQuoted(l10n("projectIO.credits.table.above", template.locale), template.locale),
+                    l10nQuoted(l10nKeyword("above", template.locale), template.locale),
                     l10nEnumQuoted("-400", "-400 200", "-400 200 $below", locale = template.locale),
                     l10nEnumQuoted("-400", locale = template.locale),
                     l10nQuoted(parallel, template.locale),
@@ -219,7 +219,7 @@ private fun fillIn(string: String, template: Template): String = string
                     locale = template.locale
                 )
             "projectIO.credits.table.pageGapDesc" -> {
-                val fuse = l10n("projectIO.credits.table.melt", template.locale)
+                val fuse = l10nKeyword("fuse", template.locale)
                 val linear = l10n("project.template.transitionStyleLinear", template.locale)
                 l10n(
                     key,
@@ -231,7 +231,12 @@ private fun fillIn(string: String, template: Template): String = string
                     locale = template.locale
                 )
             }
-            else -> l10n(key, template.locale)
+            else ->
+                try {
+                    l10nKeyword(key, template.locale)
+                } catch (_: MissingResourceException) {
+                    l10n(key, template.locale)
+                }
         }
     }
     .replace(SCALING_REGEX) { match ->

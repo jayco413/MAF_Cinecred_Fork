@@ -365,9 +365,12 @@ fun closestLocale(target: Locale, options: Collection<Locale>): Locale? =
         ?: options.find { it.language == target.language }
 
 private val BUNDLE_CONTROL = ResourceBundle.Control.getNoFallbackControl(ResourceBundle.Control.FORMAT_PROPERTIES)
-private fun getL10nBundle(locale: Locale) = ResourceBundle.getBundle("l10n.strings", locale, BUNDLE_CONTROL)
 
-fun l10n(key: String, locale: Locale = Locale.getDefault()): String = getL10nBundle(locale).getString(key)
+fun l10n(key: String, locale: Locale = Locale.getDefault()): String =
+    ResourceBundle.getBundle("l10n.strings", locale, BUNDLE_CONTROL).getString(key)
+
+fun l10nKeyword(key: String, locale: Locale = Locale.getDefault()): String =
+    ResourceBundle.getBundle("l10n.keywords", locale, BUNDLE_CONTROL).getString(key)
 
 private val DOUBLE_BRACE_REGEX = Regex("(?<!\\{)\\{\\{|}}(?!})")
 fun l10n(key: String, vararg args: Any, locale: Locale = Locale.getDefault()): String {

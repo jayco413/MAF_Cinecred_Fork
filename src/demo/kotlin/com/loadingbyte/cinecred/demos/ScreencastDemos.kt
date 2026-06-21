@@ -1,6 +1,7 @@
 package com.loadingbyte.cinecred.demos
 
 import com.loadingbyte.cinecred.common.l10n
+import com.loadingbyte.cinecred.common.l10nKeyword
 import com.loadingbyte.cinecred.delivery.ImageSequenceRenderJob
 import com.loadingbyte.cinecred.demo.FileBrowserVirtualWindow
 import com.loadingbyte.cinecred.demo.ScreencastDemo
@@ -64,7 +65,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
             val sheet = XlsxFormat.read(creditsFile, "").single()
             val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
             matrix.removeAt(0)
-            val kw = l10n("projectIO.credits.table.pic")
+            val kw = l10nKeyword("pic")
             val indices = matrix.withIndex().filter { (_, cells) -> cells.any { "{{$kw" in it } }.map { (i, _) -> i }
             check(indices.isNotEmpty()) { "Expected there to be at least one picture." }
             check(indices.zipWithNext(Int::minus).all { it == -1 }) { "Expected all pictures to be in one cluster." }
@@ -369,7 +370,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         spreadsheetEditorWin.rowOffset = 75
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
-        sc.type(spreadsheetEditorWin, picLineIdx, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred H}}", 4 * hold)
+        sc.type(spreadsheetEditorWin, picLineIdx, 1, "{{${l10nKeyword("pic")} Cinecred H}}", 4 * hold)
         sc.caption("screencast.caption.picture.config")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()

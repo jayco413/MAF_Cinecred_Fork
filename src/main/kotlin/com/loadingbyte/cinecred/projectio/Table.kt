@@ -27,7 +27,6 @@ data class MigrationDataSource<S : Style>(
 class Table(
     val fileName: String,
     val spreadsheet: Spreadsheet,
-    private val l10nPrefix: String,
     l10nColNames: List<String>,
     legacyColNames: Map<String, List<String>>
 ) {
@@ -66,8 +65,7 @@ class Table(
             colMap = HashMap()
             outer@
             for (l10nColName in l10nColNames) {
-                val key = "$l10nPrefix$l10nColName"
-                val possibleColNames = TRANSLATED_LOCALES.map { "@${l10n(key, it)}" }
+                val possibleColNames = TRANSLATED_LOCALES.map { "@${l10nKeyword(l10nColName, it)}" }
                 for (colName in possibleColNames) {
                     val col = headerRecord.indexOfFirst { ROOT_CASE_INSENSITIVE_COLLATOR.equals(it, colName) }
                     if (col != -1) {
@@ -76,7 +74,7 @@ class Table(
                     }
                 }
                 // Prepare the column name which will be shown in a warning message.
-                val colName = "@${l10n(key)}"
+                val colName = "@${l10nKeyword(l10nColName)}"
                 // The column might be missing, but first look for a legacy column name. Emit a warning if we find one.
                 val possibleLegacyColNames = legacyColNames.getOrDefault(l10nColName, emptyList())
                     .filterNot(possibleColNames::contains).map { "@$it" }
@@ -104,7 +102,7 @@ class Table(
     }
 
     fun log(row: Int?, l10nColName: String?, severity: Severity, msg: String, mds: MigrationDataSource<*>? = null) {
-        val colName = l10nColName?.let { getColHeader(it) ?: ("@" + l10n(l10nPrefix + l10nColName)) }
+        val colName = l10nColName?.let { getColHeader(it) ?: ("@" + l10nKeyword(l10nColName)) }
         val cellValue = if (row != null && l10nColName != null) getString(row, l10nColName) else null
         log += ParserMsg(fileName, spreadsheet.name, row?.let(::getRecordNo), colName, cellValue, severity, msg, mds)
     }

@@ -3,6 +3,7 @@ package com.loadingbyte.cinecred.ui
 import com.formdev.flatlaf.FlatClientProperties.STYLE
 import com.formdev.flatlaf.ui.FlatEmptyBorder
 import com.loadingbyte.cinecred.common.l10n
+import com.loadingbyte.cinecred.common.l10nKeyword
 import com.loadingbyte.cinecred.common.l10nQuoted
 import com.loadingbyte.cinecred.ui.comms.DockableId
 import com.loadingbyte.cinecred.ui.comms.ProjectsCard
@@ -54,9 +55,9 @@ fun makeProjectHintTrack(ctrl: ProjectController): HintTrack {
     val stylingDockable = ctrl.stylingDockable
     val stylingTreeHint = l10n(
         "ui.hints.projectTrack.stylingTree",
-        l10nQuoted("{{${l10n("projectIO.credits.table.style")} [${l10n("ui.styling.letter.name")}]}}"),
-        l10nQuoted("{{${l10n("projectIO.credits.table.pic")} [${l10n("filename")}]}}"),
-        l10nQuoted("{{${l10n("projectIO.credits.table.video")} [${l10n("filename")}]}}"),
+        l10nQuoted("{{${l10nKeyword("style")} [${l10n("ui.styling.letter.name")}]}}"),
+        l10nQuoted("{{${l10nKeyword("pic")} [${l10n("filename")}]}}"),
+        l10nQuoted("{{${l10nKeyword("video")} [${l10n("filename")}]}}"),
     )
     return listOf(
         Hint(l10n("ui.hints.projectTrack.pageTabs"), previewDockable.leakedPreviewTabs, Side.NONE),
