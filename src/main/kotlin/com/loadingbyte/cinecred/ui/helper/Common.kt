@@ -161,8 +161,15 @@ fun newToolbarButton(
     tooltip: String,
     shortcut: Shortcut? = null,
     listener: (() -> Unit)? = null
+) = newToolbarButton(icon, tooltip, if (shortcut == null) emptyList() else listOf(shortcut), listener = listener)
+
+fun newToolbarButton(
+    icon: Icon,
+    tooltip: String,
+    shortcuts: List<Shortcut>,
+    listener: (() -> Unit)? = null
 ) = JButton(icon).also { btn ->
-    cfgForToolbar(btn, tooltip, shortcut)
+    cfgForToolbar(btn, tooltip, shortcuts)
     if (listener != null)
         btn.addActionListener { listener() }
 }
@@ -173,20 +180,20 @@ fun newToolbarToggleButton(
     shortcut: Shortcut? = null,
     listener: ((Boolean) -> Unit)? = null
 ) = JToggleButton(icon).also { btn ->
-    cfgForToolbar(btn, tooltip, shortcut)
+    cfgForToolbar(btn, tooltip, if (shortcut == null) emptyList() else listOf(shortcut))
     if (listener != null)
         btn.addItemListener { listener(it.stateChange == ItemEvent.SELECTED) }
 }
 
-private fun cfgForToolbar(btn: AbstractButton, tooltip: String, shortcut: Shortcut?) {
+private fun cfgForToolbar(btn: AbstractButton, tooltip: String, shortcuts: List<Shortcut>) {
     btn.putClientProperty(BUTTON_TYPE, BUTTON_TYPE_TOOLBAR_BUTTON)
     btn.isFocusable = false
 
-    if (shortcut == null) {
+    if (shortcuts.isEmpty()) {
         btn.toolTipText = tooltip
         return
     }
-    val shortcutHint = shortcut.hint
+    val shortcutHint = l10nEnum(shortcuts.map(Shortcut::hint))
     btn.toolTipText = if ("<br>" !in tooltip) "$tooltip ($shortcutHint)" else {
         val idx = tooltip.indexOf("<br>")
         tooltip.substring(0, idx) + " ($shortcutHint)" + tooltip.substring(idx)

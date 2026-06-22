@@ -565,7 +565,7 @@ class ProjectController(
             TOOLBAR_OPEN_CREDITS -> toolbarCtrl.openCredits()
             TOOLBAR_BROWSE_PROJECT_DIR -> toolbarCtrl.browseProjectDir()
             TOOLBAR_UNDO_STYLING -> toolbarCtrl.undoStyling()
-            TOOLBAR_REDO_STYLING -> toolbarCtrl.redoStyling()
+            TOOLBAR_REDO_STYLING_1, TOOLBAR_REDO_STYLING_2 -> toolbarCtrl.redoStyling()
             TOOLBAR_SAVE_STYLING -> toolbarCtrl.saveStyling()
             TOOLBAR_RESET_STYLING -> toolbarCtrl.resetStyling()
             TOOLBAR_ZOOM_IN -> toolbarCtrl.zoom(zoomIn = true)

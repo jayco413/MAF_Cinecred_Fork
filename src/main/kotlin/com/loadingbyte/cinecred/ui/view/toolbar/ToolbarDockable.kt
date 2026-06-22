@@ -63,7 +63,10 @@ class ToolbarDockable(private val toolbarCtrl: ToolbarCtrlComms, playbackCtrl: P
     private val undoStylingButton =
         newToolbarButton(UNDO_ICON, l10n("ui.edit.undoStyling"), TOOLBAR_UNDO_STYLING, toolbarCtrl::undoStyling)
     private val redoStylingButton =
-        newToolbarButton(REDO_ICON, l10n("ui.edit.redoStyling"), TOOLBAR_REDO_STYLING, toolbarCtrl::redoStyling)
+        newToolbarButton(
+            REDO_ICON, l10n("ui.edit.redoStyling"), listOf(TOOLBAR_REDO_STYLING_1, TOOLBAR_REDO_STYLING_2),
+            toolbarCtrl::redoStyling
+        )
     private val saveStylingButton =
         newToolbarButton(SAVE_ICON, l10n("ui.edit.saveStyling"), TOOLBAR_SAVE_STYLING, toolbarCtrl::saveStyling)
     private val resetStylingButton =
