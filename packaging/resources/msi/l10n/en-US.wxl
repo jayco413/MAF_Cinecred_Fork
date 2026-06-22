@@ -1,9 +1,7 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<WixLocalization xmlns="http://schemas.microsoft.com/wix/2006/localization" Culture="en-US" Codepage="1252">
-  <String Id="LanguageCode">1033</String>
-  <String Id="Slogan">@SLOGAN_EN@</String>
-  <String Id="ShortcutDlgTitle">{\WixUI_Font_Title}Shortcuts</String>
-  <String Id="ShortcutDlgDescription">Select shortcuts to create.</String>
-  <String Id="ShortcutDlgDesktop">Create desktop shortcut</String>
-  <String Id="ShortcutDlgStartMenu">Create start menu shortcut</String>
+﻿<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="en-US">
+  <String Id="Slogan" Value="@SLOGAN_EN@"/>
+  <String Id="ShortcutDlgTitle" Value="{\WixUI_Font_Title}Shortcuts"/>
+  <String Id="ShortcutDlgDescription" Value="Select shortcuts to create."/>
+  <String Id="ShortcutDlgDesktop" Value="Create desktop shortcut"/>
+  <String Id="ShortcutDlgStartMenu" Value="Create start menu shortcut"/>
 </WixLocalization>
