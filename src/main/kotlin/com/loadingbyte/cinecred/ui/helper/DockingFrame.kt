@@ -746,6 +746,7 @@ class DockingFrame(
             for (window in windows) {
                 val glassPane = GlassPane(window)
                 (window as RootPaneContainer).glassPane = glassPane
+                // If we don't show the glass pane AFTER adding it to the container, the highlight never appears.
                 glassPane.isVisible = true
             }
         }
@@ -812,8 +813,12 @@ class DockingFrame(
 
         fun cancel() {
             ghost.dispose()
-            for (window in windows)
-                (window as RootPaneContainer).glassPane.isVisible = false
+            for (window in windows) {
+                val glassPane = JPanel().apply { isOpaque = false }
+                (window as RootPaneContainer).glassPane = glassPane
+                // If we don't hide the glass pane AFTER adding it to the container, mouse hovering is blocked.
+                glassPane.isVisible = false
+            }
         }
 
         private fun cardinalForDropPoint(comp: Component, locOnComp: Point): Cardinal {
