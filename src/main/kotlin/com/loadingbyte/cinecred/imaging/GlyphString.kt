@@ -425,7 +425,9 @@ class GlyphString<U> private constructor(
             for (i in 0..<glyphCount) {
                 val transform = AffineTransform.getTranslateInstance(pos[i * 2] * sx + dx, pos[i * 2 + 1] + dy)
                     .apply { scale(sx, 1.0) }
-                path.append(fontCase.getGlyphOutline(glyphs[i]).getPathIterator(transform), false)
+                val g = fontCase.getGlyphOutline(glyphs[i])
+                require(path.windingRule == g.windingRule)
+                path.append(g.getPathIterator(transform), false)
             }
             return path
         }

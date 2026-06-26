@@ -494,6 +494,8 @@ class Font private constructor(private val hbFace: MemorySegment) {
         /** The returned object is shared; do not mutate it! */
         fun getGlyphOutline(glyph: Int): Path2D.Float {
             glyphOutlineCache[glyph]?.let { return it }
+            // OpenType specifies that glyphs use the non-zero winding rule, which is convenient, as it means that we
+            // can always use the default Path2D constructor.
             val path = Path2D.Float()
             Arena.ofConfined().use { arena ->
                 val moveFunc = hb_draw_move_to_func_t.allocate({ _, _, _, x, y, _ ->

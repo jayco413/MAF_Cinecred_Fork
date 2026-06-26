@@ -951,7 +951,11 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                     pi.next()
                 }
                 if (d.isEmpty()) null else
-                    doc.createElementNS(SVG_NS_URI, "path").apply { setAttribute("d", d.substring(1)) }
+                    doc.createElementNS(SVG_NS_URI, "path").apply {
+                        setAttribute("d", d.substring(1))
+                        if (pi.windingRule == PathIterator.WIND_EVEN_ODD)
+                            setAttribute("fill-rule", "evenodd")
+                    }
             }
         }
 
