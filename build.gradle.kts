@@ -25,6 +25,7 @@ val flatlafVersion = "3.7.1"
 // Versions of custom-built native libraries; upon updating, rebuild them following MAINTENANCE.md:
 val skiaVersion = "e2ea2eb" // head of branch chrome/m124
 val harfBuzzVersion = "14.2.0"
+val clipperVersion = "Clipper2_2.0.1"
 val zimgVersion = "fa52dee"
 val nfdVersion = "17b6e8c"
 
@@ -403,6 +404,12 @@ val checkoutHarfBuzz by tasks.registering(CheckoutGitRef::class) {
     repositoryDir = layout.buildDirectory.dir("repositories/harfbuzz")
 }
 
+val checkoutClipper by tasks.registering(CheckoutGitRef::class) {
+    uri = "https://github.com/AngusJohnson/Clipper2.git"
+    ref = clipperVersion
+    repositoryDir = layout.buildDirectory.dir("repositories/clipper")
+}
+
 val checkoutZimg by tasks.registering(CheckoutGitRef::class) {
     uri = "https://github.com/sekrit-twc/zimg.git"
     ref = zimgVersion
@@ -450,6 +457,15 @@ for (platform in Platform.entries) {
         forPlatform = platform
         repositoryDir = checkoutHarfBuzz.flatMap { it.repositoryDir }
         outputFile = srcMainNatives(platform).file(platform.os.codeLib("harfbuzz"))
+    }
+
+    tasks.register<BuildClipper>("buildClipperFor${platform.label.capitalized()}") {
+        group = "Native"
+        description = "Builds the Clipper native library for ${platform.label.capitalized()}."
+        forPlatform = platform
+        capiDir = srcClippercapiCpp
+        repositoryDir = checkoutClipper.flatMap { it.repositoryDir }
+        outputFile = srcMainNatives(platform).file(platform.os.codeLib("clipper"))
     }
 
     tasks.register<BuildZimg>("buildZimgFor${platform.label.capitalized()}") {
@@ -513,6 +529,14 @@ tasks.register<Jextract>("jextractHarfBuzz") {
     outputDir = srcMainJava
 }
 
+tasks.register<Jextract>("jextractClipperCAPI") {
+    group = "Native"
+    description = "Extracts Java bindings for the Clipper CAPI native library."
+    targetPackage = "com.loadingbyte.cinecred.natives.clippercapi"
+    headerFile = srcClippercapiCpp.file("clippercapi.h")
+    outputDir = srcMainJava
+}
+
 tasks.register<Jextract>("jextractZimg") {
     group = "Native"
     description = "Extracts Java bindings for the zimg native library."
@@ -548,6 +572,7 @@ fun srcMainNatives(platform: Platform) = srcMainNatives.dir(platform.slug)
 
 val srcClibC get() = layout.projectDirectory.dir("src/clib/c")
 val srcSkiacapiCpp get() = layout.projectDirectory.dir("src/skiacapi/cpp")
+val srcClippercapiCpp get() = layout.projectDirectory.dir("src/clippercapi/cpp")
 val srcDecklinkcapiCpp get() = layout.projectDirectory.dir("src/decklinkcapi/cpp")
 
 val mainBundles: Provider<Map<Locale, ResourceBundle>> = provider {

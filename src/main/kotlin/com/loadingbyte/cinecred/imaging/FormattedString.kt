@@ -5,7 +5,6 @@ import com.loadingbyte.cinecred.common.mapToFloatArray
 import com.loadingbyte.cinecred.common.transformedBy
 import java.awt.BasicStroke
 import java.awt.Shape
-import java.awt.Stroke
 import java.awt.geom.*
 import java.util.*
 import kotlin.math.*
@@ -192,15 +191,25 @@ class FormattedString private constructor(
             }
 
             layer.dilation?.let { dilation ->
-                val dilStroke =
-                    BasicStroke((dilation.radiusPx * 2.0).toFloat(), capForJoin(dilation.join), dilation.join)
-                forms = forms.map { form -> Form.AWTShape(form.anchor, dilate(form.awtShape, dilStroke)) }
+                forms = forms.map { form ->
+                    Form.Path(form.anchor, form.opPath.dilate(dilation.radiusPx, dilation.join))
+                }
             }
 
             // Convert the forms to contours if requested.
             layer.contour?.let { contour ->
-                val stroke = BasicStroke(contour.thicknessPx.toFloat(), capForJoin(contour.join), contour.join)
-                forms = forms.map { form -> Form.AWTShape(form.anchor, stroke.createStrokedShape(form.awtShape)) }
+                forms = forms.map { form ->
+                    if (form is Form.GlyphSegments || form is Form.Path && form.isSimple) {
+                        // If the form is text or a simple path, assume that it's well-behaved and use AWT's instead of
+                        // OpPath's stroke, since the former is faster by more than an order of magnitude.
+                        val stroke = BasicStroke(contour.thicknessPx.toFloat(), BasicStroke.CAP_BUTT, contour.join)
+                        Form.Path(form.anchor, stroke.createStrokedShape(form.awtShape), isSimple = false)
+                    } else {
+                        // Otherwise, we could in principle first clean the form and then still use AWT's stroke, but
+                        // then the runtime advantage disappears, so we might as well do it all inside OpPath.
+                        Form.Path(form.anchor, form.opPath.stroke(contour.thicknessPx / 2.0, contour.join))
+                    }
+                }
             }
 
             // Transform the forms if requested.
@@ -234,19 +243,16 @@ class FormattedString private constructor(
 
             // Poke holes into the forms to clear around other layers if requested.
             layer.clearing?.let { clearing ->
-                val clearArea = Area()
-                if (clearing.radiusPx == 0.0)
-                    for (clearForm in clearing.layers.flatMapToSequence(::formLayer))
-                        clearArea.add(Area(clearForm.awtShape))
-                else {
-                    val dilStroke =
-                        BasicStroke((clearing.radiusPx * 2.0).toFloat(), capForJoin(clearing.join), clearing.join)
-                    for (clearForm in clearing.layers.flatMapToSequence(::formLayer))
-                        clearArea.add(Area(dilate(clearForm.awtShape, dilStroke)))
-                }
-                forms = forms.map { form ->
-                    Form.AWTShape(form.anchor, Area(form.awtShape).apply { subtract(clearArea) })
-                }
+                clearing.layers
+                    .flatMapToSequence(::formLayer)
+                    .map { clearForm ->
+                        if (clearing.radiusPx == 0.0) clearForm.opPath else
+                            clearForm.opPath.dilate(clearing.radiusPx, clearing.join)
+                    }
+                    .reduceOrNull(OpPath::union)
+                    ?.let { clearOpPath ->
+                        forms = forms.map { form -> Form.Path(form.anchor, form.opPath.difference(clearOpPath)) }
+                    }
             }
 
             val formList = forms.toList()
@@ -263,28 +269,28 @@ class FormattedString private constructor(
             }
             if (invisible)
                 continue
+            val opaque = when (val c = layer.coloring) {
+                is Layer.Coloring.Plain -> c.color.a == 1f
+                is Layer.Coloring.Gradient -> c.color1.a == 1f && c.color2.a == 1f
+            }
             val forms = formLayer(layerIdx)
             val coat = makeCoat(layer.coloring, center)
-            if (layer.blurRadiusPx == 0.0)
+            if (layer.blurRadiusPx == 0.0 && (forms.size <= 1 || opaque))
                 for (form in forms)
                     form.drawTo(image, x, yBaseline, coat, imageLayer)
             else if (forms.isNotEmpty()) {
-                // Merge all forms into one shape and then blur all of them in one go. This makes a difference at points
+                // If the layer is transparent or blurred, union all forms. For transparent layers, this has an effect
+                // when multiple forms overlap. For blurred layers, it additionally makes a difference at points
                 // where two forms come very close to each other, and in those cases, we pursue the behavior of other
                 // editing programs.
-                val mergedShape = if (forms.size == 1) forms[0].awtShape else {
-                    val path = Path2D.Double(forms[0].awtShape)
-                    for (i in 1..<forms.size)
-                        path.append(forms[i].awtShape, false)
-                    path
-                }
+                // Notice that we have to union the forms and can't just append them to a single path, since if they
+                // overlap, that might lead to new, unwanted holes depending on the winding rule.
+                val mergedShape = if (forms.size == 1) forms[0].awtShape else
+                    forms.asSequence().map(Form::opPath).reduce(OpPath::union).toPath()
                 image.drawShape(coat, mergedShape, x, yBaseline, fill = true, layer.blurRadiusPx, imageLayer)
             }
         }
     }
-
-    private fun capForJoin(join: Int): Int =
-        if (join == BasicStroke.JOIN_ROUND) BasicStroke.CAP_ROUND else BasicStroke.CAP_SQUARE
 
     private fun makeStripeForm(shape: Layer.Shape.Stripe, xLeft: Double, xRight: Double): Form {
         val x0 = xLeft - shape.widenLeftPx
@@ -300,12 +306,12 @@ class FormattedString private constructor(
         val dashed = if (shape.dashPatternPx == null || shape.dashPatternPx.isEmpty()) null else
             BasicStroke(
                 shape.heightPx.toFloat(), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f,
-                // Restrict the minimum size of a dash to prevent the Area computation below from crashing.
+                // Restrict the minimum size of a dash to prevent the path operations below from crashing.
                 shape.dashPatternPx.mapToFloatArray { it.toFloat().coerceAtLeast(0.5f) }, 0f
             ).createStrokedShape(Line2D.Double(x, shape.offsetPx, x + w, shape.offsetPx))
 
         if (dashed != null && (shape.cornerJoin == BasicStroke.JOIN_MITER || r == 0.0))
-            return Form.AWTShape(anchor, dashed)
+            return Form.Path(anchor, dashed, isSimple = true)
 
         val rect = when (shape.cornerJoin) {
             BasicStroke.JOIN_MITER -> Rectangle2D.Double(x, y, w, h)
@@ -324,8 +330,8 @@ class FormattedString private constructor(
             else -> throw IllegalStateException()
         }
 
-        val awtShape = if (dashed == null) rect else Area(rect).apply { intersect(Area(dashed)) }
-        return Form.AWTShape(anchor, awtShape)
+        return if (dashed == null) Form.Path(anchor, rect, isSimple = true) else
+            Form.Path(anchor, OpPath(dashed).intersect(OpPath(rect)))
     }
 
     private fun anchor(
@@ -334,62 +340,6 @@ class FormattedString private constructor(
         translate(anchor.x + postTx, anchor.y + postTy)
         concatenate(transform)
         translate(-anchor.x + preTx, -anchor.y + preTy)
-    }
-
-    /**
-     * Dilates a shape, that is, extends its edges outwards. The amount of dilation in pixels is half
-     * the thickness of the given [dilStroke].
-     */
-    private fun dilate(shape: Shape, dilStroke: Stroke): Shape {
-        // To dilate a shape, we apply the following procedure:
-        //  1. Convert the shape to an area. This "normalizes" the path by removing any overlaps of path segments.
-        //     Also, the outermost sub-paths of an Area are oriented counter-clockwise, and any inner sub-paths
-        //     which cut out holes or fill in parts of holes are oriented in the inverse direction of their
-        //     surrounding sub-path. All this means that the left side of any sub-path always points to a filled
-        //     area, while the right side always points to non-filled area.
-        val area = Area(shape)
-        //  2. Compute a shape whose interior realizes a stroke along the edges of the area shape. Because of the
-        //     way Java2D's algorithmic stroking works, that stroke shape will have two sub-paths for each sub-path
-        //     of the area shape. Looking at such a pair of sub-paths, the first one traces along the left side of
-        //     the original sub-path in the original direction while the second one traces along the right side in
-        //     the reverse direction.
-        val stroke = dilStroke.createStrokedShape(area)
-        //  3. Extract the second, fourth, sixth, and so on sub-path from the stroke shape and collect them in the
-        //     final output shape. As we have noted, these sub-paths trace along the right side of the sub-paths of
-        //     the area shape, and to the right side of those lies the exterior. Hence, the collected sub-paths form
-        //     a dilated version of the area shape.
-        //     You may wonder why we don't just use the dilated stroke directly and combine it with the original shape
-        //     by just adding it to the area object. First, measurements have shown this to be at least 2x slower than
-        //     our current approach, even when trying to minimize the area operations by also considering the sole
-        //     caller of this method. Second, with shapes like the symbol ^ and the miter join rule, when looking
-        //     at the peak, the stroke behaves correctly for the upper part, but extends out even above the upper part
-        //     for the lower part because the angle there is quite acute, thereby producing an incorrect result with
-        //     an artificial peak extending out above the dilated shape.
-        //     Note: Stroke shapes are double paths, and hence, we also use doubles to avoid conversions to floats.
-        val pi = stroke.getPathIterator(null)
-        val coords = DoubleArray(6)
-        val out = Path2D.Double(pi.windingRule)
-        var flag = true
-        while (!pi.isDone) {
-            val type = pi.currentSegment(coords)
-            if (type == PathIterator.SEG_MOVETO)
-                flag = !flag
-            if (flag)
-                when (type) {
-                    PathIterator.SEG_MOVETO ->
-                        out.moveTo(coords[0], coords[1])
-                    PathIterator.SEG_LINETO ->
-                        out.lineTo(coords[0], coords[1])
-                    PathIterator.SEG_QUADTO ->
-                        out.quadTo(coords[0], coords[1], coords[2], coords[3])
-                    PathIterator.SEG_CUBICTO ->
-                        out.curveTo(coords[0], coords[1], coords[2], coords[3], coords[4], coords[5])
-                    PathIterator.SEG_CLOSE ->
-                        out.closePath()
-                }
-            pi.next()
-        }
-        return out
     }
 
     private fun makeCoat(coloring: Layer.Coloring, center: Point2D.Double): DeferredImage.Coat =
@@ -414,14 +364,33 @@ class FormattedString private constructor(
 
         val anchor: Point2D
         val awtShape: Shape
+        val opPath: OpPath
         fun transform(tx: AffineTransform): Form
         fun drawTo(img: DeferredImage, x: Double, yBaseline: Y, coat: DeferredImage.Coat, layer: DeferredImage.Layer)
 
-        class AWTShape(override val anchor: Point2D, override val awtShape: Shape) : Form {
+        class Path private constructor(
+            override val anchor: Point2D,
+            val isSimple: Boolean,
+            private val source: Any,
+            private val transform: AffineTransform?
+        ) : Form {
 
-            override fun transform(tx: AffineTransform) = AWTShape(
+            constructor(anchor: Point2D, awtShape: Shape, isSimple: Boolean) : this(anchor, isSimple, awtShape, null)
+            constructor(anchor: Point2D, opPath: OpPath) : this(anchor, false, opPath, null)
+
+            override val awtShape: Shape by lazy {
+                source as? Shape ?: (source as? OpPath)?.toPath() ?: (source as Path).awtShape.transformedBy(transform)
+            }
+
+            override val opPath: OpPath by lazy {
+                source as? OpPath ?: (source as? Shape)?.let(::OpPath) ?: (source as Path).opPath.transform(transform)
+            }
+
+            override fun transform(tx: AffineTransform) = Path(
                 anchor = tx.transform(anchor, null),
-                awtShape = awtShape.transformedBy(tx)
+                isSimple = isSimple,
+                source = source as? Path ?: this,
+                transform = if (transform == null) tx else AffineTransform(tx).apply { concatenate(transform) }
             )
 
             override fun drawTo(
@@ -434,8 +403,8 @@ class FormattedString private constructor(
 
         class GlyphSegments(
             override val anchor: Point2D,
-            val segments: List<GlyphString.Segment<Attribute>>,
-            val transform: AffineTransform?
+            private val segments: List<GlyphString.Segment<Attribute>>,
+            private val transform: AffineTransform?
         ) : Form {
 
             override val awtShape by lazy {
@@ -447,6 +416,8 @@ class FormattedString private constructor(
                 transform?.let(path::transform)
                 path
             }
+
+            override val opPath by lazy { OpPath(awtShape) }
 
             override fun transform(tx: AffineTransform) = GlyphSegments(
                 anchor = tx.transform(anchor, null),

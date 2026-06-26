@@ -118,6 +118,7 @@ fun setupNatives() {
     System.loadLibrary("skia")
     System.loadLibrary("skiacapi")
     System.loadLibrary("harfbuzz")
+    System.loadLibrary("clipper")
     System.loadLibrary("zimg")
     if (SystemInfo.isLinux)
         System.loadLibrary("nfd")
