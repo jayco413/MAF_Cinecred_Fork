@@ -305,7 +305,7 @@ JVM: ${System.getProperty("java.vm.vendor")} ${System.getProperty("java.vm.name"
 OS: ${System.getProperty("os.name")} ${System.getProperty("os.arch")} ${System.getProperty("os.version")}
 RSS: ${if (rss == null) "?" else mb(rss)} MB
 Heap: Used ${mb(heap.used)} MB, Committed ${mb(heap.committed)} MB, Max ${mb(heap.max)} MB
-Disposable: ${mb(disposableBytes())} MB
+Disposable: Used ${mb(disposableBytes())} MB, Max ${mb(maxDisposableBytes())} MB
 Cores: ${ManagementFactory.getOperatingSystemMXBean().availableProcessors}
 Locale: ${Locale.getDefault().toLanguageTag()}
 

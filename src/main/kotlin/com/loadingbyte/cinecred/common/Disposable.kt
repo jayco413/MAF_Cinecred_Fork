@@ -144,6 +144,7 @@ class DisposableCache<K : Any, V : Any> : AutoCloseable {
 }
 
 
+fun maxDisposableBytes(): Long = DisposableTracker.maxBytes
 fun disposableBytes(): Long = DisposableTracker.bytes()
 
 
@@ -165,7 +166,7 @@ private class Disposable(sizedValue: SizedValue<*>, private val dispose: Runnabl
 private object DisposableTracker {
 
     // We want to limit memory-tracked objects to use at most 20% of the available memory.
-    private val maxBytes = (ManagementFactory.getOperatingSystemMXBean() as com.sun.management.OperatingSystemMXBean)
+    val maxBytes = (ManagementFactory.getOperatingSystemMXBean() as com.sun.management.OperatingSystemMXBean)
         .totalMemorySize / 5
 
     private val lock = ReentrantLock()
