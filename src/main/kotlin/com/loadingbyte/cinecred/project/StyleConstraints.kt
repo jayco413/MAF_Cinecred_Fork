@@ -314,6 +314,8 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
     DoubleConstr(ERROR, Layer::dilationRfh.st(), min = 0.0),
     DoubleConstr(ERROR, Layer::contourThicknessRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::offsetAngleDeg.st(), mod = 360.0),
+    ScalingConstr(WARN, Layer::hScaling.st()),
+    ScalingConstr(WARN, Layer::vScaling.st()),
     DynChoiceConstr(WARN, Layer::anchor.st()) { _, style ->
         if (style.shape == LayerShape.CLONE && style.cloneLayers.size >= 2) EnumSet.allOf(LayerAnchor::class.java)
         else EnumSet.of(LayerAnchor.INDIVIDUAL, LayerAnchor.GLOBAL)
@@ -547,6 +549,12 @@ class StyleNameConstr<S : Style, R : ListedStyle>(
 }
 
 
+class ScalingConstr<S : Style>(
+    val severity: Severity,
+    setting: StyleSetting<S, Double>
+) : StyleConstraint<S, StyleSetting<S, Double>>(setting)
+
+
 class ColorConstr<S : Style>(
     val severity: Severity,
     setting: StyleSetting<S, Color4f>,
@@ -765,6 +773,11 @@ fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
                         }
                     }
                 }
+                is ScalingConstr ->
+                    style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, scaling ->
+                        if (scaling == 0.0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.zeroScaling"))
+                    }
                 is ColorConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, color ->
                         if (!cst.allowAlpha && color.a != 1f)
