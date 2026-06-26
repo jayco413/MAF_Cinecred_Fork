@@ -26,6 +26,7 @@ Cinecred Changelog
   now be vertically justified in an arbitrary way, while previously it was just
   being baseline-aligned.
 - Added support for variable fonts.
+- Letter style dilation may now be negative.
 - Embedded pictures and videos may now be cropped, flipped, and rotated.
 - Embedded raster pictures may now have their blank space automatically cropped.
 - Embedded videos can now loop.

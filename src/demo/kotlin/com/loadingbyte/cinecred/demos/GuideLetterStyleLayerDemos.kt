@@ -264,12 +264,14 @@ object GuideLetterStyleLayerDilationDemo : StyleSettingsDemo<Layer>(
     listOf(Layer::dilationRfh.st(), Layer::dilationJoin.st())
 ) {
     override fun styles() = buildList<Layer> {
-        this += PRESET_LAYER.copy(shape = LayerShape.TEXT)
+        this += PRESET_LAYER.copy(shape = LayerShape.TEXT, dilationRfh = -1.0 / 64.0)
+        this += last().copy(dilationRfh = -0.5 / 64.0)
+        this += last().copy(dilationRfh = 0.0 / 64.0)
         this += last().copy(dilationRfh = 0.5 / 64.0)
         this += last().copy(dilationRfh = 1.0 / 64.0)
         this += last().copy(dilationRfh = 1.5 / 64.0)
         this += last().copy(dilationRfh = 2.0 / 64.0)
-        this += last().copy(dilationJoin = LineJoin.ROUND)
+        this += last().copy(dilationJoin = LineJoin.BEVEL)
     }
 
     override fun credits(style: Layer) = buildCredits(style, height = 64.0, tracking = 0.1)

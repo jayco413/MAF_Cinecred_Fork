@@ -311,7 +311,6 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
         siblingOrdinal != styleOrdinal
     },
     MinSizeConstr(WARN, Layer::cloneLayers.st(), minSize = 1),
-    DoubleConstr(ERROR, Layer::dilationRfh.st(), min = 0.0),
     DoubleConstr(ERROR, Layer::contourThicknessRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::offsetAngleDeg.st(), mod = 360.0),
     ScalingConstr(WARN, Layer::hScaling.st()),
