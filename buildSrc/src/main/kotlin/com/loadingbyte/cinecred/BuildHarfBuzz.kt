@@ -43,7 +43,7 @@ abstract class BuildHarfBuzz : DefaultTask() {
         val cmd = mutableListOf<String>()
         if (forPlatform.os == WINDOWS) {
             val sub = mutableListOf<String>()
-            sub += listOf(Tools.vcvars(execOps), "&&", "cl", "/LD", "/std:c++14", "/O2", "/GL", "/GR-")
+            sub += listOf(Tools.vcvars(execOps), "&&", "cl", "/LD", "/MD", "/std:c++14", "/O2", "/GL", "/GR-")
             sub += macros.map { "/D$it" } + "/DHB_EXTERN=__declspec(dllexport)"
             sub += listOf("\"/Fe:${outFile.absolutePath}\"", "\"${srcFile.absolutePath}\"")
             sub += listOf("/link", "/NOIMPLIB", "/NOEXP")

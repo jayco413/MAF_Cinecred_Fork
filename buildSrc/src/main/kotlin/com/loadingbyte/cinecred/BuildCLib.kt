@@ -35,7 +35,7 @@ abstract class BuildCLib : DefaultTask() {
         val cmd = mutableListOf<String>()
         if (forPlatform.os == WINDOWS) {
             val sub = mutableListOf<String>()
-            sub += listOf(Tools.vcvars(execOps), "&&", "cl", "/LD", "/O2", "/GL", "/GR-")
+            sub += listOf(Tools.vcvars(execOps), "&&", "cl", "/LD", "/MD", "/O2", "/GL", "/GR-")
             sub += "/DCAPI=__declspec(dllexport)"
             sub += listOf("\"/Fe:${outFile.absolutePath}\"", "\"${srcFile.absolutePath}\"")
             sub += listOf("/link", "/NOIMPLIB", "/NOEXP")
