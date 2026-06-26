@@ -596,13 +596,26 @@ class DockingFrame(
             add(dockable, BorderLayout.CENTER)
         }
 
-        private inner class Header : JPanel(FlowLayout(FlowLayout.LEFT, 5, 5)) {
+        private inner class Header : JPanel() {
 
             init {
+                preferredSize = Dimension(0, 28)
+                layout = BoxLayout(this, BoxLayout.X_AXIS)
+                border = BorderFactory.createEmptyBorder(0, 5, 0, 3)
                 cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
                 putClientProperty(STYLE, "background: @componentBackground")
 
                 add(JLabel(dockable.title, dockable.icon, JLabel.LEADING).apply { iconTextGap = 6 })
+                if (dockable.collapsible) {
+                    add(Box.createHorizontalGlue())
+                    add(JButton(MINUS_ICON).apply {
+                        toolTipText = l10n("ui.docking.hide")
+                        putClientProperty(BUTTON_TYPE, BUTTON_TYPE_BORDERLESS)
+                        isFocusable = false
+                        cursor = Cursor.getDefaultCursor()
+                        addActionListener { setCollapsed(dockable.dockableId, true) }
+                    })
+                }
 
                 addThresholdedStartDragListener { e ->
                     if (isLocked) onBlockedDrag() else dragTracker = DragTracker(this@Brick, e.locationOnScreen)
