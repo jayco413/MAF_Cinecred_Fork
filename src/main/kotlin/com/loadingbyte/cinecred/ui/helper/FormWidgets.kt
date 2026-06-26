@@ -1917,19 +1917,25 @@ abstract class AbstractListWidget<E : Any, W : Form.Widget<E>>(
         set(elementCount) {
             if (field == elementCount)
                 return
+            val oldElementCount = field
+            field = elementCount
             while (partWidgets.size < elementCount)
                 appendNewPart()
-            for (idx in elementCount..<field)
+            for (idx in elementCount..<oldElementCount)
                 setPartVisible(idx, partWidgets[idx], false)
-            if (field < elementCount) {
-                val fillElement = getFillElement()
-                for (idx in field..<elementCount) {
+            if (oldElementCount < elementCount) {
+                val fillElement = when {
+                    newElementIsLastElement && oldElementCount >= 1 ->
+                        getPartElement(oldElementCount - 1, partWidgets[oldElementCount - 1])
+                    newElement != null -> newElement
+                    else -> throw IllegalStateException("No way to choose value of new ListWidget element.")
+                }
+                for (idx in oldElementCount..<elementCount) {
                     val widget = partWidgets[idx]
                     setPartVisible(idx, widget, true)
                     withoutChangeListeners { setPartElement(idx, widget, fillElement) }
                 }
             }
-            field = elementCount
             notifyChangeListeners()
         }
 
@@ -1944,13 +1950,6 @@ abstract class AbstractListWidget<E : Any, W : Form.Widget<E>>(
                 withoutChangeListeners { setPartElement(idx, widget, value[idx]) }
             notifyChangeListeners()
         }
-
-    private fun getFillElement(): E = when {
-        newElementIsLastElement && elementCount >= 1 ->
-            getPartElement(elementCount - 1, partWidgets[elementCount - 1])
-        newElement != null -> newElement
-        else -> throw IllegalStateException("No way to choose value of new ListWidget element.")
-    }
 
     /** Already prepares some parts so that user interaction will appear quicker later on. */
     protected fun addInitialParts() {
@@ -2114,15 +2113,7 @@ class SimpleListWidget<E : Any>(
 
         if (!fixedSize) {
             val delBtn = JButton(TRASH_ICON)
-            delBtn.addActionListener {
-                val idx = delBtns.indexOfFirst { it === delBtn }
-                // If we didn't reassign the focus manually, some random component would gain it once delBtn is hidden.
-                if (elementCount == 1)
-                    components[0].requestFocusInWindow()
-                else if (idx == elementCount - 1)
-                    delBtns[idx - 1].requestFocusInWindow()
-                userDel(idx)
-            }
+            delBtn.addActionListener { userDel(delBtns.indexOfFirst { it === delBtn }) }
             panel.add(delBtn, "aligny top, gapleft 6, gaptop 1" + firstConstr.also { firstConstr = "" })
             delBtns.add(delBtn)
         }
@@ -2134,6 +2125,20 @@ class SimpleListWidget<E : Any>(
     }
 
     override fun setPartVisible(idx: Int, widget: Form.Widget<E>, isVisible: Boolean) {
+        if (!isVisible) {
+            // If we didn't reassign the focus manually, a random component would gain it once the part is hidden.
+            val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+            if (focusOwner != null) {
+                val isDelBtnFocused = !fixedSize && focusOwner == delBtns[idx]
+                val isWidgetFocused = widget.components.any { SwingUtilities.isDescendingFrom(focusOwner, it) }
+                when {
+                    (isDelBtnFocused || isWidgetFocused) && elementCount == 0 ->
+                        if (!fixedSize) components[0].requestFocusInWindow() else components[0].transferFocusBackward()
+                    isDelBtnFocused -> delBtns[elementCount - 1].requestFocusInWindow()
+                    isWidgetFocused -> delBtns[elementCount - 1].transferFocus()
+                }
+            }
+        }
         if (!fixedSize)
             delBtns[idx].isVisible = isVisible
         widget.isVisible = isVisible
@@ -2183,6 +2188,22 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
     }
 
     override fun setPartVisible(idx: Int, widget: W, isVisible: Boolean) {
+        if (!isVisible) {
+            // If we didn't reassign the focus manually, a random component would gain it once the part is hidden.
+            val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+            if (focusOwner != null) {
+                val isAddBtnFocused = focusOwner == addButtons[idx + 1]
+                val isDelBtnFocused = focusOwner == layerPanels[idx].delBtn
+                val isLayerPanelFocused = SwingUtilities.isDescendingFrom(focusOwner, layerPanels[idx])
+                when {
+                    (isAddBtnFocused || isDelBtnFocused || isLayerPanelFocused) && elementCount == 0 ->
+                        addButtons[0].requestFocusInWindow()
+                    isAddBtnFocused -> addButtons[elementCount].requestFocusInWindow()
+                    isDelBtnFocused -> layerPanels[elementCount - 1].delBtn.requestFocusInWindow()
+                    isLayerPanelFocused -> addButtons[elementCount].transferFocus()
+                }
+            }
+        }
         layerPanels[idx].isVisible = isVisible
         addButtons[idx + 1].isVisible = isVisible
     }
@@ -2238,8 +2259,10 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
             delBtn = JButton(l10n("ui.form.layerDelete"), TRASH_ICON)
             delBtn.putClientProperty(BUTTON_TYPE, BUTTON_TYPE_TOOLBAR_BUTTON)
             delBtn.addActionListener {
-                // If we didn't reassign the focus manually, some random component would gain it once delBtn is hidden.
-                (if (elementCount == 1) addButtons[0] else layerPanels[max(0, idx - 1)].delBtn).requestFocusInWindow()
+                // If the user clicks on a delBtn, focus the delBtn that visually takes its place.
+                // The if statement ensures that we don't compete with setPartVisible() about focus.
+                if (idx in 1..elementCount - 2)
+                    layerPanels[idx - 1].delBtn.requestFocusInWindow()
                 userDel(idx)
             }
 
