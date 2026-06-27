@@ -5,7 +5,6 @@ import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.natives.harfbuzz.*
 import com.loadingbyte.cinecred.natives.harfbuzz.hb_h.*
 import sun.font.Script
-import java.awt.GraphicsEnvironment
 import java.awt.geom.Path2D
 import java.awt.geom.Rectangle2D
 import java.lang.foreign.Arena
@@ -306,31 +305,37 @@ class Font private constructor(private val hbFace: MemorySegment) {
         //   - Logical fonts (e.g., "Dialog" and "Serif") and system-native fonts differ unpredictably between systems.
         //   - At various points in the code, notably ReflectionExt and PDF font embedding, we only support TTF/OTF.
         val SYSTEM: List<Font> =
-            if (SystemInfo.isMacOS) {
-                // On macOS, the JDK only supplies us with "CFont" implementations, which do not let us access the
-                // underlying TTF/OTF structure, and not even contain a path to the originating font file. Hence, we
+            when {
+                // AWT often has problems finding fonts, e.g., per-user fonts on Windows. To circumvent these issues, we
                 // need to manually read in all font files from the well-known font directories.
-                sequenceOf(
+                SystemInfo.isWindows -> sequenceOf(
+                    Path(System.getenv("WINDIR"), "Fonts"),
+                    Path(System.getenv("LOCALAPPDATA"), "Microsoft", "Windows", "Fonts"),
+                    Path(System.getenv("APPDATA"), "Adobe", "CoreSync", "plugins", "livetype", "r")
+                )
+                SystemInfo.isMacOS -> sequenceOf(
                     Path("/System/Library/Fonts"),
                     Path("/Network/Library/Fonts"),
                     Path("/Library/Fonts"),
-                    Path(System.getProperty("user.home")).resolve("Library/Fonts")
+                    Path(System.getProperty("user.home"), "Library/Fonts"),
+                    Path(System.getProperty("user.home"))
+                        .resolve("Library/Application Support/Adobe/CoreSync/plugins/livetype/.r")
                 )
-                    .filter(Path::exists)
-                    .flatMap(Path::walkSafely)
-                    .filter(Path::isRegularFile)
-                    // The createFonts() method can only successfully read TrueType/OpenType fonts, which is desired.
-                    // If a FontFormatException or IOException occurs, just skip over the problematic font file.
-                    .flatMap { file -> read(file, mmap = true) }
-                    // Internal macOS fonts start with a dot; we do not want to include those.
-                    .filter { !it.name.startsWith('.') }
-                    .toList()
-            } else {
-                GraphicsEnvironment.getLocalGraphicsEnvironment().allFonts
-                    .filter(java.awt.Font::isTTFOrOTF)
-                    .mapTo(HashSet(), java.awt.Font::getFontFile)
-                    .flatMap { file -> read(file, mmap = true) }
+                SystemInfo.isLinux -> sequenceOf(
+                    Path("/usr/share/fonts"),
+                    Path("/usr/local/share/fonts"),
+                    Path(System.getProperty("user.home"), ".local/share/fonts"),
+                    Path(System.getProperty("user.home"), ".fonts"),
+                )
+                else -> emptySequence()
             }
+                .filter(Path::exists)
+                .flatMap(Path::walkSafely)
+                .filter(Path::isRegularFile)
+                .flatMap { file -> read(file, mmap = true) }
+                // Internal macOS fonts start with a dot; we do not want to include those.
+                .filter { !it.name.startsWith('.') }
+                .toList()
 
         private val nameToBundled = BUNDLED.associateBy(Font::name)
         private val nameToSystem = SYSTEM.associateBy(Font::name)

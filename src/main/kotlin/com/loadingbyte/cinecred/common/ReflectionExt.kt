@@ -1,5 +1,3 @@
-@file:Suppress("JAVA_MODULE_DOES_NOT_EXPORT_PACKAGE", "USELESS_CAST")
-
 package com.loadingbyte.cinecred.common
 
 import org.apache.pdfbox.contentstream.operator.OperatorName
@@ -10,9 +8,6 @@ import org.apache.pdfbox.pdmodel.common.function.PDFunction
 import org.apache.pdfbox.pdmodel.graphics.color.*
 import org.apache.pdfbox.pdmodel.graphics.shading.PDShading
 import org.apache.pdfbox.util.Matrix
-import sun.font.FontUtilities
-import sun.font.PhysicalFont
-import sun.font.TrueTypeFont
 import java.awt.Font
 import java.awt.Point
 import java.awt.Toolkit
@@ -25,21 +20,7 @@ import java.lang.invoke.MethodHandles
 import java.lang.invoke.MethodType
 import java.lang.invoke.MethodType.methodType
 import java.lang.invoke.VarHandle
-import java.nio.file.Path
 import java.util.*
-import kotlin.io.path.Path
-
-
-fun Font.isTTFOrOTF() =
-    FontUtilities.getFont2D(this) is TrueTypeFont
-
-
-fun Font.getFontFile(): Path {
-    val font2D = FontUtilities.getFont2D(this)
-    if (font2D !is PhysicalFont)
-        throw IllegalArgumentException("A non-physical font has no font file.")
-    return Path(get_platName.invokeExact(font2D as PhysicalFont) as String)
-}
 
 
 fun changeLocaleOfToolkitResources(locale: Locale) {
@@ -179,7 +160,6 @@ private val calcColor_tri = ShadedTriangle
 private val calcColor_line = Line
     .findVirtual("calcColor", methodType(FloatArray::class.java, Point::class.java))
 
-private val get_platName = PhysicalFont::class.java.findGetter("platName", String::class.java)
 private val get_outputStream = PDAbstractContentStream.findGetter("outputStream", OutputStream::class.java)
 private val get_awtColorSpace = PDICCBased::class.java.findGetter("awtColorSpace", ICC_ColorSpace::class.java)
 private val get_alternateColorSpace = PDICCBased::class.java.findGetter("alternateColorSpace", PDColorSpace::class.java)

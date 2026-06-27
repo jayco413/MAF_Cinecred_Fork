@@ -60,6 +60,7 @@ Cinecred Changelog
   settings, namely dilation, contour, clearing, and dashing.
 - Transparent layers that clone multiple other layers no longer have inflated
   opacity where the cloned layers overlap.
+- Per-user fonts and Adobe Fonts are now detected.
 - JPEG pictures with an EXIF orientation tag are now properly rotated.
 - PNG image sequences with 8-bit palettes can now be ingested.
 - Embedded videos with chroma subsampling no longer prevent interlaced export.
