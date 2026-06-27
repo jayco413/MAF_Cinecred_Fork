@@ -252,51 +252,94 @@ interface HighFrequencyDragListener {
 }
 
 fun Component.addHighFrequencyDragListener(listener: HighFrequencyDragListener) {
-    val mouseListener = object : MouseAdapter() {
-        private var startPointer = Point()
-        private var previousPointer = Point()
-        private var dragging = false
-        private var modifiersEx = 0
+    val managingListener = HighFrequencyDragManagingListener(this, listener)
+    addMouseListener(managingListener)
+    addMouseMotionListener(managingListener)
+}
 
-        private val timer = Timer(10) {
-            val currentPointer = MouseInfo.getPointerInfo().location
-            SwingUtilities.convertPointFromScreen(currentPointer, this@addHighFrequencyDragListener)
-            if (previousPointer != currentPointer) {
-                previousPointer = currentPointer
-                listener.onDrag(Point(startPointer), currentPointer, modifiersEx)
-            }
-        }
+private class HighFrequencyDragManagingListener(
+    private val component: Component, private val listener: HighFrequencyDragListener
+) : MouseAdapter(), KeyEventDispatcher, WindowFocusListener {
 
-        override fun mousePressed(e: MouseEvent) {
-            modifiersEx = e.modifiersEx
-            if (SwingUtilities.isLeftMouseButton(e)) {
-                startPointer = e.point
-                previousPointer = startPointer
-            }
-        }
+    private var startPointer = Point()
+    private var previousPointer = Point()
+    private var dragging = 0
+    private var modifiersEx = 0
+    private var window: Window? = null
 
-        override fun mouseDragged(e: MouseEvent) {
-            modifiersEx = e.modifiersEx
-            // Note: We only start dragging if an AWT drag event occurs to make sure that our dragging and AWT click
-            // events continue to be mutually exclusive.
-            if (SwingUtilities.isLeftMouseButton(e) && !dragging && listener.onStartDragging(startPointer)) {
-                dragging = true
-                timer.start()
-            }
-        }
-
-        override fun mouseReleased(e: MouseEvent) {
-            modifiersEx = e.modifiersEx
-            if (SwingUtilities.isLeftMouseButton(e) && dragging) {
-                dragging = false
-                timer.stop()
-                listener.onStopDragging()
-            }
+    private val timer = Timer(10) {
+        val currentPointer = MouseInfo.getPointerInfo().location
+        SwingUtilities.convertPointFromScreen(currentPointer, component)
+        if (previousPointer != currentPointer) {
+            previousPointer = currentPointer
+            listener.onDrag(Point(startPointer), Point(currentPointer), modifiersEx)
         }
     }
 
-    addMouseListener(mouseListener)
-    addMouseMotionListener(mouseListener)
+    private fun forebodeDragging(startPointer: Point) {
+        if (dragging != 2) {
+            this.startPointer = startPointer
+            previousPointer = startPointer
+            dragging = 1
+        }
+    }
+
+    private fun startDragging(modifiersEx: Int) {
+        if (dragging == 1)
+            if (listener.onStartDragging(Point(startPointer))) {
+                dragging = 2
+                this.modifiersEx = modifiersEx
+                KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(this)
+                window = SwingUtilities.getWindowAncestor(component)
+                    .also { it.addWindowFocusListener(this) }
+                timer.start()
+            } else
+                dragging = 0
+    }
+
+    private fun stopDragging() {
+        if (dragging == 2) {
+            KeyboardFocusManager.getCurrentKeyboardFocusManager().removeKeyEventDispatcher(this)
+            window?.removeWindowFocusListener(this)
+            window = null
+            timer.stop()
+            listener.onStopDragging()
+        }
+        dragging = 0
+    }
+
+    override fun mousePressed(e: MouseEvent) {
+        if (SwingUtilities.isLeftMouseButton(e))
+            forebodeDragging(e.point)
+    }
+
+    override fun mouseDragged(e: MouseEvent) {
+        // Note: We only start dragging if an AWT drag event occurs to make sure that our dragging and AWT click
+        // events continue to be mutually exclusive.
+        if (SwingUtilities.isLeftMouseButton(e))
+            startDragging(e.modifiersEx)
+    }
+
+    override fun mouseReleased(e: MouseEvent) {
+        if (SwingUtilities.isLeftMouseButton(e))
+            stopDragging()
+    }
+
+    // This dispatcher is only registered while dragging.
+    override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        if (modifiersEx != e.modifiersEx) {
+            modifiersEx = e.modifiersEx
+            listener.onDrag(Point(startPointer), Point(previousPointer), modifiersEx)
+        }
+        return false
+    }
+
+    override fun windowGainedFocus(e: WindowEvent) {}
+
+    override fun windowLostFocus(e: WindowEvent) {
+        stopDragging()
+    }
+
 }
 
 

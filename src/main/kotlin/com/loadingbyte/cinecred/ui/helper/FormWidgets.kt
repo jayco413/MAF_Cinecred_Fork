@@ -1712,9 +1712,8 @@ class TransitionWidget : Form.AbstractWidget<Transition>() {
                 override fun onStartDragging(startPointer: Point): Boolean {
                     val d1 = startPointer.distance(x1, y1)
                     val d2 = startPointer.distance(x2, y2)
-                    if (d1 < 30 || d2 < 30)
-                        dragging = if (d1 < d2) 1 else 2
-                    return true
+                    dragging = if (d1 > 30 && d2 > 30) 0 else if (d1 < d2) 1 else 2
+                    return dragging != 0
                 }
 
                 override fun onDrag(startPointer: Point, currentPointer: Point, modifiersEx: Int) {
