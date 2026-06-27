@@ -172,7 +172,8 @@ class DeferredImagePanel(
                         // the image unnaturally slow. Hence, we compensate by multiplying by the scale factor again.
                         if (SystemInfo.isWindows) getSystemScaleFactor(graphicsConfiguration) else 1.0
             }
-            if (e.modifiersEx == CTRL_DOWN_MASK)
+            // On macOS, depending on the app, either ctrl or command is used for zooming, so we just support both.
+            if (e.modifiersEx.let { it == CTRL_DOWN_MASK || it == META_DOWN_MASK })
                 zoom *= zoomFactor.pow(-mult)
             else {
                 val unitIncrement = min(viewportWidth, viewportHeight) * mult / 50.0

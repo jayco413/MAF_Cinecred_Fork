@@ -85,6 +85,7 @@ Cinecred Changelog
 - If Windows shuts down or the user logs off while there are unsaved changes or
   running render jobs, the user is offered to cancel the shutdown. macOS already
   had this feature.
+- On macOS, keyboard shortcuts now use the command key, and zooming supports it.
 - If the macOS file chooser freezes the entire program, another way of opening
   the chooser, which hopefully doesn't, can now be selected in the preferences.
 

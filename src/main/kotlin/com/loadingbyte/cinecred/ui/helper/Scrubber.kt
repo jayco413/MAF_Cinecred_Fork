@@ -458,7 +458,8 @@ class Scrubber<T : Any>(scheme: Scheme<T>) : JFormattedTextField() {
                 startValue!!,
                 currentPointer.x - startPointer.x,
                 modifiersEx and SHIFT_DOWN_MASK != 0,
-                modifiersEx and CTRL_DOWN_MASK != 0
+                // On macOS, depending on the app, either ctrl or option is for slowing down, so we just support both.
+                modifiersEx and CTRL_DOWN_MASK != 0 || modifiersEx and ALT_DOWN_MASK != 0
             )
         }
 
