@@ -45,6 +45,8 @@ class EditStylingPanel(private val ctrl: ProjectController) :
     @Deprecated("ENCAPSULATION LEAK") val leakedContentStyleForm get() = contentStyleForm
     @Deprecated("ENCAPSULATION LEAK") val leakedLetterStyleForm get() = letterStyleForm
     @Deprecated("ENCAPSULATION LEAK") val leakedPictureStyleForm get() = pictureStyleForm
+    @Deprecated("ENCAPSULATION LEAK") val leakedRebuildForResWidget get() = rebuildForResWidget
+    @Deprecated("ENCAPSULATION LEAK") val leakedRebuildForFPSWidget get() = rebuildForFPSWidget
     // =========================================
 
     private val keyListeners = mutableListOf<KeyListener>()
@@ -52,7 +54,15 @@ class EditStylingPanel(private val ctrl: ProjectController) :
     fun onKeyEvent(event: KeyEvent): Boolean =
         keyListeners.any { it.onKeyEvent(event) }
 
-    private val globalForm = StyleForm(Global::class.java)
+    private val rebuildForResWidget = ScaleActionWidget(doubleArrayOf(0.25, 0.5, 2.0, 4.0))
+    private val rebuildForFPSWidget = ScaleActionWidget(doubleArrayOf(0.25, 0.5, 2.0, 4.0))
+
+    private val globalForm = StyleForm(
+        Global::class.java, extraFormRows = mapOf(
+            1 to Form.FormRow(l10n("ui.styling.global.rebuildForResolution"), rebuildForResWidget),
+            3 to Form.FormRow(l10n("ui.styling.global.rebuildForFPS"), rebuildForFPSWidget)
+        )
+    )
     private val pageStyleForm = StyleForm(PageStyle::class.java)
     private val contentStyleForm = StyleForm(ContentStyle::class.java)
     private val letterStyleForm = StyleForm(LetterStyle::class.java)
@@ -335,6 +345,10 @@ class EditStylingPanel(private val ctrl: ProjectController) :
         form.changeListeners.add { widget ->
             stylingTree.setSingleton(form.save())
             styling = buildStyling()
+            when (widget) {
+                rebuildForResWidget -> setStyling(styling!!.scaleResolution(rebuildForResWidget.value))
+                rebuildForFPSWidget -> setStyling(styling!!.scaleFPS(rebuildForFPSWidget.value))
+            }
             onChange(widget)
         }
         openStyle(style, form, cardName)

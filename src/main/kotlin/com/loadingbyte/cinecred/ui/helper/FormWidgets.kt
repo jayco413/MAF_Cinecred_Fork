@@ -2616,6 +2616,60 @@ class NestedFormWidget<V : Any>(
 }
 
 
+/** Doesn't have state; instead receives interaction, fires a change event, and presents the choice in its value. */
+class ScaleActionWidget(
+    suggestedScalings: DoubleArray
+) : Form.AbstractWidget<Double>() {
+
+    override val components: List<JComponent>
+
+    init {
+        components = mutableListOf()
+
+        val fmt = NumberFormat.getInstance()
+        for (scaling in suggestedScalings)
+            components.add(JButton("\u00D7 ${fmt.format(scaling)}").apply {
+                margin = margin.apply { left = 6; right = 6 }
+                addActionListener { value = scaling }
+            })
+
+        val customBtn = JButton("\u00D7 \u2026").apply { margin = margin.apply { left = 6; right = 6 } }
+        val scalingTextField = JFormattedTextField(NumberFormatter().apply { minimum = 0.0 })
+        val rebuildBtn = JButton(l10n("ui.form.rebuild"))
+        val popup = DropdownPopupMenu(
+            customBtn,
+            preShow = { scalingTextField.value = 1.0 },
+            // Note: Without invokeLater(), the focus is not transferred.
+            postShow = { SwingUtilities.invokeLater { scalingTextField.requestFocusInWindow() } }
+        ).apply {
+            addMouseListenerTo(customBtn)
+            addKeyListenerTo(customBtn)
+            add(JPanel(MigLayout()).apply {
+                add(JLabel("\u00D7"))
+                add(scalingTextField)
+                add(rebuildBtn)
+            })
+        }
+        rebuildBtn.addActionListener {
+            popup.isVisible = false
+            (scalingTextField.value as? Double)?.let { scaling ->
+                if (scaling > 0.001 && scaling !in 0.999..1.001) value = scaling
+            }
+        }
+        components.add(customBtn)
+    }
+
+    override val constraints = List(suggestedScalings.size + 1) { "" }
+
+    override var value: Double = 1.0
+        set(value) {
+            field = value
+            notifyChangeListeners()
+        }
+
+}
+
+
 private fun lookupFontLabel(labels: Map<Locale, String>): String? =
     if (labels.isEmpty()) null else {
         val nameLocale = closestLocale(Locale.getDefault(), labels.keys)

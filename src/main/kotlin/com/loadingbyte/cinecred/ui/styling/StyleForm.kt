@@ -15,6 +15,7 @@ import javax.swing.JLabel
 class StyleForm<S : Style>(
     val styleClass: Class<S>,
     latent: Set<StyleSetting<in S, *>> = emptySet(),
+    extraFormRows: Map<Int, FormRow> = emptyMap(),
     insets: String = "18",
     noticeArea: Boolean = true,
     constLabelWidth: Boolean = true
@@ -32,7 +33,9 @@ class StyleForm<S : Style>(
         val widgetSpecs = getStyleWidgetSpecs(styleClass)
         val unionSpecs = widgetSpecs.filterIsInstance<UnionWidgetSpec<S>>()
 
+        var rowIdx = 0
         for (setting in getStyleSettings(styleClass)) {
+            extraFormRows[rowIdx]?.let { addFormRow(it); rowIdx++ }
             if (setting in latent)
                 continue
             val unionSpec = unionSpecs.find { setting in it.settings }
@@ -43,6 +46,7 @@ class StyleForm<S : Style>(
                     addSingleSettingWidget(setting)
                 else
                     addSettingUnionWidget(unionSpec)
+                rowIdx++
             }
         }
     }
@@ -568,6 +572,13 @@ class StyleForm<S : Style>(
             if (widget is ToggleButtonGroupWidget)
                 @Suppress("UNCHECKED_CAST")
                 (widget as ToggleButtonGroupWidget<Nothing>).toIcon = toIcon
+        }
+    }
+
+    fun setSensitivity(setting: StyleSetting<S, *>, sensitivity: Double) {
+        valueWidgets.getValue(setting).applyConfigurator { widget ->
+            if (widget is ScrubberWidget)
+                widget.sensitivity = sensitivity
         }
     }
 

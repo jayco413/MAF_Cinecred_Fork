@@ -148,7 +148,7 @@ private fun fillIn(string: String, template: Template): String = string
             "cardRuntimeFrames" -> template.fps.run { 5 * numerator / denominator }.toString()
             "cardFadeFrames" -> template.fps.run { numerator / (2 * denominator) }.toString()
             "scrollPxPerFrame" ->
-                max(1, template.fps.run { 78 * denominator / numerator } * template.resolution.k / 2).toString()
+                max(1, template.fps.run { 78 * denominator / numerator } * template.resolution.order).toString()
             "projectIO.credits.table.headDesc" -> {
                 val styleKw = l10nKeyword("style", template.locale)
                 val stylePlaceholder = "[${l10n("ui.styling.letter.name", template.locale)}]"
@@ -241,7 +241,7 @@ private fun fillIn(string: String, template: Template): String = string
     }
     .replace(SCALING_REGEX) { match ->
         val num = match.groups[1]!!.value
-        (num.toInt() * template.resolution.k / 2).toString()
+        (num.toInt() * template.resolution.order).toString()
     }
     .replace(TIMECODE_REGEX) { match ->
         val num = match.groups[1]!!.value

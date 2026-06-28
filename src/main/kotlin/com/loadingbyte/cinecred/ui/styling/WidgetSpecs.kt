@@ -5,7 +5,6 @@ import com.loadingbyte.cinecred.common.TimecodeFormat
 import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.imaging.Bitmap
 import com.loadingbyte.cinecred.imaging.ColorSpace
-import com.loadingbyte.cinecred.imaging.DeferredImage
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.ui.helper.*
 import com.loadingbyte.cinecred.ui.styling.ToggleButtonGroupWidgetSpec.Show.*
@@ -469,10 +468,10 @@ private val PICTURE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<PictureStyle, *>> =
         unionLabelL10nKey = "resolution", settingIcons = listOf(SIZE_WIDTH_ICON, SIZE_HEIGHT_ICON)
     ),
     OverrideWidgetSpec(PictureStyle::widthPx.st()) { _, style ->
-        basicEmbeddedPic(style, null, style.heightPx.value)?.widthBeforeRotation ?: 0.0
+        style.computeResolutionBeforeRotation(respectStyleWidth = false)?.widthPx ?: 0.0
     },
     OverrideWidgetSpec(PictureStyle::heightPx.st()) { _, style ->
-        basicEmbeddedPic(style, style.widthPx.value, null)?.heightBeforeRotation ?: 0.0
+        style.computeResolutionBeforeRotation(respectStyleHeight = false)?.heightPx ?: 0.0
     },
     WidthWidgetSpec(PictureStyle::cropLeftPx.st(), WidthSpec.TINY),
     WidthWidgetSpec(PictureStyle::cropRightPx.st(), WidthSpec.TINY),
@@ -495,18 +494,6 @@ private val PICTURE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<PictureStyle, *>> =
     NumberWidgetSpec(PictureStyle::rotationDeg.st(), sensitivity = 1.0),
 )
 
-private fun basicEmbeddedPic(style: PictureStyle, width: Double?, height: Double?) =
-    try {
-        style.picture.loader?.picture?.let { picture ->
-            DeferredImage.EmbeddedPicture(
-                picture, width, height,
-                style.cropLeftPx, style.cropRightPx, style.cropTopPx, style.cropBottomPx, style.cropBlankSpace
-            )
-        }
-    } catch (_: Exception) {
-        null
-    }
-
 
 private val TAPE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<TapeStyle, *>> = listOf(
     UnitWidgetSpec(
@@ -525,10 +512,10 @@ private val TAPE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<TapeStyle, *>> = listO
         unionLabelL10nKey = "resolution", settingIcons = listOf(SIZE_WIDTH_ICON, SIZE_HEIGHT_ICON)
     ),
     OverrideWidgetSpec(TapeStyle::widthPx.st()) { _, style ->
-        basicEmbeddedTape(style, null, style.heightPx.value)?.resolutionBeforeRotation?.widthPx ?: 0
+        style.computeResolutionBeforeRotation(respectStyleWidth = false)?.widthPx ?: 0
     },
     OverrideWidgetSpec(TapeStyle::heightPx.st()) { _, style ->
-        basicEmbeddedTape(style, style.widthPx.value, null)?.resolutionBeforeRotation?.heightPx ?: 0
+        style.computeResolutionBeforeRotation(respectStyleHeight = false)?.heightPx ?: 0
     },
     WidthWidgetSpec(TapeStyle::cropLeftPx.st(), WidthSpec.TINY),
     WidthWidgetSpec(TapeStyle::cropRightPx.st(), WidthSpec.TINY),
@@ -662,20 +649,6 @@ private val TAPE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<TapeStyle, *>> = listO
 private fun tapeSpec(style: TapeStyle) =
     try {
         style.tape.tape?.spec
-    } catch (_: IllegalStateException) {
-        null
-    }
-
-private fun basicEmbeddedTape(style: TapeStyle, width: Int?, height: Int?) =
-    try {
-        style.tape.tape?.let { tape ->
-            DeferredImage.EmbeddedTape(
-                tape, width, height,
-                style.cropLeftPx, style.cropRightPx, style.cropTopPx, style.cropBottomPx
-            )
-        }
-    } catch (_: IllegalArgumentException) {
-        null
     } catch (_: IllegalStateException) {
         null
     }

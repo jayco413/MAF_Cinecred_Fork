@@ -25,6 +25,9 @@ Cinecred Changelog
 - When different fonts are used within the same grid or flow row, the text may
   now be vertically justified in an arbitrary way, while previously it was just
   being baseline-aligned.
+- Added buttons in the project settings to scale the resolution or frame rate,
+  and all relevant settings in all styles alongside them. This permits to, e.g.,
+  convert a 2K project to 4K or a 30fps project to 60fps after the fact.
 - Added support for variable fonts.
 - Letter style dilation may now be negative.
 - Embedded pictures and videos may now be cropped, flipped, and rotated.

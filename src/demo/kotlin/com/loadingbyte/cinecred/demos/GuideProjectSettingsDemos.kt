@@ -3,15 +3,19 @@ package com.loadingbyte.cinecred.demos
 import com.loadingbyte.cinecred.common.FPS
 import com.loadingbyte.cinecred.common.Resolution
 import com.loadingbyte.cinecred.common.TimecodeFormat
-import com.loadingbyte.cinecred.demo.StyleSettingsDemo
-import com.loadingbyte.cinecred.demo.TEMPLATE_PROJECT
-import com.loadingbyte.cinecred.demo.TEMPLATE_SCROLL_PAGE_FROM_DOP
+import com.loadingbyte.cinecred.demo.*
 import com.loadingbyte.cinecred.imaging.Color4f
 import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.project.*
+import com.loadingbyte.cinecred.ui.comms.DockableId.STYLING
+import com.loadingbyte.cinecred.ui.helper.withG2
 import com.loadingbyte.cinecred.ui.styling.OverrideWidgetSpec
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
+import java.awt.Color
+import java.awt.Rectangle
+import java.awt.image.BufferedImage
+import java.lang.Thread.sleep
 import java.util.*
 
 
@@ -20,6 +24,7 @@ private const val DIR = "guide/project-settings"
 val GUIDE_PROJECT_SETTINGS_DEMOS
     get() = listOf(
         GuideProjectSettingsResolutionAndFrameRateDemo,
+        GuideProjectSettingsResolutionAndFrameRateRebuildDemo,
         GuideProjectSettingsTimecodeFormatDemo,
         GuideProjectSettingsRuntimeFineAdjustmentDemo,
         GuideProjectSettingsLeaveFramesBlankDemo,
@@ -38,6 +43,38 @@ object GuideProjectSettingsResolutionAndFrameRateDemo : StyleSettingsDemo<Global
         this += PRESET_GLOBAL
         this += last().copy(resolution = Resolution(1080, 1080))
         this += last().copy(fps = FPS(25, 2))
+    }
+}
+
+
+@Suppress("DEPRECATION")
+object GuideProjectSettingsResolutionAndFrameRateRebuildDemo : ProjectDemo(
+    "$DIR/resolution-and-frame-rate-rebuild", Format.PNG
+) {
+    override fun trees() = trees(tree(1000, 1000, STYLING))
+
+    override fun generate() {
+        val form = styDok.leakedGlobalForm
+        edt {
+            styDok.leakedStylingTree.selectionRows = intArrayOf(0)
+            form.getFormRowFor(Global::fps.st())?.notice = null
+        }
+        sleep(500)
+        val b = Rectangle(0, 0, -1, -1)
+        for (widget in listOf(Global::resolution.st(), Global::fps.st()).map(form::getWidgetFor) +
+                listOf(styDok.leakedRebuildForResWidget, styDok.leakedRebuildForFPSWidget)) {
+            b.add(form.components.let { comps -> comps[comps.indexOf(widget.components[0]) - 1] }.bounds)
+            for (comp in widget.components) if (comp.isVisible) b.add(comp.bounds)
+        }
+        val settImg = BufferedImage(b.width, b.height, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
+            g2.translate(-b.x, -b.y)
+            printWithPopups(form, g2)
+        }
+        write(BufferedImage(b.width + 40, b.height + 40, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
+            g2.color = Color(settImg.getRGB(0, 0))
+            g2.fillRect(0, 0, 1000, 1000)
+            g2.drawImage(settImg, 20, 20, null)
+        })
     }
 }
 

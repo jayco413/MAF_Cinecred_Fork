@@ -75,9 +75,9 @@ data class Resolution(val widthPx: Int, val heightPx: Int) {
 
     override fun toString() = "${widthPx}x${heightPx}"
 
-    /** Returns whether the resolution's width is closest to 1k, 2k, 3k, 4k, and so on. Never returns less than 1k. */
-    val k: Int
-        get() = max(1, roundingDiv(widthPx, 1024))
+    /** Returns whether the width is closest to 2k (order 1), 4k (order 2), and so on. Returns at least 1. */
+    val order: Int
+        get() = max(1, roundingDiv(widthPx, 2048))
 
     companion object {
         fun fromString(str: String): Resolution {
@@ -105,6 +105,10 @@ class FPS(numerator: Int, denominator: Int) {
         get() = numerator.toDouble() / denominator
     val isFractional: Boolean
         get() = numerator / denominator * denominator != numerator
+
+    /** Returns whether the FPS are in the ~24-30 range (order 1), ~48-60 (order 2), and so on. Returns at least 1. */
+    val order: Int
+        get() = max(1, roundingDiv(numerator, denominator * 25))
 
     override fun equals(other: Any?) =
         this === other || other is FPS && numerator == other.numerator && denominator == other.denominator

@@ -185,11 +185,16 @@ class StyleFormAdjuster(
 
         for (spec in getStyleWidgetSpecs(curStyle.javaClass)) when (spec) {
             is NumberWidgetSpec<S, *> -> {
-                for (setting in spec.settings)
-                    (curForm.getWidgetFor(setting) as? ScrubberWidget)?.sensitivity =
-                        requireNotNull(spec.sensitivity) { "$setting misses sensitivity WidgetSpec." } *
-                                // This is a simple heuristic that adapts the sensitivity of scrubbers for pixel values.
-                                if (setting.name.endsWith("Px")) (styling.global.resolution.k / 2).toDouble() else 1.0
+                for (setting in spec.settings) {
+                    if (curForm.getWidgetFor(setting) is ScrubberWidget && spec.sensitivity == null)
+                        throw IllegalStateException("All scrubber widgets require a sensitivity widget spec.")
+                    val sensitivity = (spec.sensitivity ?: 0.1) * when (setting) {
+                        in SETTINGS_SCALING_WITH_RESOLUTION if setting != Global::resolution.st() ->
+                            styling.global.resolution.order.toDouble()
+                        else -> 1.0
+                    }
+                    curForm.setSensitivity(setting, sensitivity)
+                }
             }
             is ToggleButtonGroupWidgetSpec<S, *> -> {
                 fun <SUBJ : Any> makeToIcon(spec: ToggleButtonGroupWidgetSpec<S, SUBJ>): ((SUBJ) -> Icon)? =
@@ -208,8 +213,15 @@ class StyleFormAdjuster(
             is TimecodeWidgetSpec -> {
                 val fps = spec.getFPS(styling, curStyle)
                 val timecodeFormat = spec.getTimecodeFormat(styling, curStyle)
-                for (setting in spec.settings)
+                for (setting in spec.settings) {
+                    val sensitivity = when (setting) {
+                        in SETTINGS_SCALING_WITH_FPS -> styling.global.fps.order.toDouble()
+                        in SETTINGS_SCALING_INVERSELY_WITH_FPS -> 1.0 / styling.global.fps.order
+                        else -> 1.0
+                    }
+                    curForm.setSensitivity(setting, sensitivity)
                     curForm.setTimecodeFPSAndFormat(setting, fps, timecodeFormat)
+                }
             }
             is OverrideWidgetSpec<S, *> ->
                 updateDefaultValue(curForm, curStyle, spec)
