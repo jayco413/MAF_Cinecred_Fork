@@ -1,16 +1,17 @@
 package com.loadingbyte.cinecred.projectio
 
 import com.loadingbyte.cinecred.common.*
+import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.projectio.service.Account
 import com.loadingbyte.cinecred.projectio.service.WRITTEN_SERVICE_LINK_EXT
 import com.loadingbyte.cinecred.projectio.service.abort
 import com.loadingbyte.cinecred.projectio.service.writeServiceLink
+import kotlinx.collections.immutable.persistentListOf
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.*
 import kotlin.io.path.name
 import kotlin.io.path.notExists
-import kotlin.io.path.writeText
 import kotlin.math.max
 
 
@@ -118,12 +119,10 @@ private fun tryCopyCreditsTemplate(
 private fun tryCopyStylingTemplate(destDir: Path, template: Template) {
     val file = destDir.resolve(STYLING_FILE_NAME)
     if (file.notExists()) {
-        var lines = useResourceStream("/template/styling.toml") { it.bufferedReader().readLines() }
-        // If desired, cut off the template where the first sample style declaration starts.
-        if (!template.sample)
-            lines = lines.subList(0, lines.indexOfFirst { "[[" in it })
+        val styling = (if (template.sample) sampleStyling(template) else emptyStyling(template))
+            .scaleResolution(template.resolution.order.toDouble())
         destDir.createDirectoriesSafely()
-        file.writeText(fillIn(lines.joinToString("\n"), template))
+        writeStyling(file, styling)
     }
 }
 
@@ -140,15 +139,6 @@ private fun tryCopyLogoFile(destDir: Path, from: String, to: String) {
 private fun fillIn(string: String, template: Template): String = string
     .replace(PLACEHOLDER_REGEX) { match ->
         when (val key = match.groups[1]!!.value) {
-            "locale" -> template.locale.toLanguageTag()
-            "resolution" -> template.resolution.toString()
-            "fps" -> template.fps.toString()
-            "timecodeFormat" -> template.timecodeFormat.name
-            "subsequentGapFrames" -> template.fps.run { numerator / denominator }.toString()
-            "cardRuntimeFrames" -> template.fps.run { 5 * numerator / denominator }.toString()
-            "cardFadeFrames" -> template.fps.run { numerator / (2 * denominator) }.toString()
-            "scrollPxPerFrame" ->
-                max(1, template.fps.run { 78 * denominator / numerator } * template.resolution.order).toString()
             "projectIO.credits.table.headDesc" -> {
                 val styleKw = l10nKeyword("style", template.locale)
                 val stylePlaceholder = "[${l10n("ui.styling.letter.name", template.locale)}]"
@@ -252,3 +242,191 @@ private fun fillIn(string: String, template: Template): String = string
 private val PLACEHOLDER_REGEX = Regex("\\{([a-zA-Z0-9.]+)}")
 private val SCALING_REGEX = Regex("<([0-9]+)>")
 private val TIMECODE_REGEX = Regex("\\[([0-9]+)s]")
+
+
+private fun emptyStyling(template: Template) = Styling(
+    global = PRESET_GLOBAL.copy(
+        resolution = template.resolution,
+        fps = template.fps,
+        timecodeFormat = template.timecodeFormat,
+        blankLastFrame = true,
+        unitVGapPx = 32.0,
+        locale = template.locale
+    ),
+    pageStyles = persistentListOf(),
+    contentStyles = persistentListOf(),
+    letterStyles = persistentListOf(),
+    transitionStyles = persistentListOf(
+        PRESET_TRANSITION_STYLE.copy(
+            name = l10n("project.template.transitionStyleLinear", template.locale)
+        )
+    ),
+    pictureStyles = persistentListOf(),
+    tapeStyles = persistentListOf()
+)
+
+private fun sampleStyling(template: Template) = emptyStyling(template).copy(
+    pageStyles = persistentListOf(
+        PRESET_PAGE_STYLE.copy(
+            name = l10n("project.PageBehavior.CARD", template.locale),
+            subsequentGapFrames = template.fps.run { roundingDiv(numerator, denominator) },
+            behavior = PageBehavior.CARD,
+            cardRuntimeFrames = template.fps.run { roundingDiv(5 * numerator, denominator) },
+            cardFadeInFrames = template.fps.run { roundingDiv(numerator, 2 * denominator) },
+            cardFadeInTransitionStyleName = l10n("project.template.transitionStyleLinear", template.locale),
+            cardFadeOutFrames = template.fps.run { roundingDiv(numerator, 2 * denominator) },
+            cardFadeOutTransitionStyleName = l10n("project.template.transitionStyleLinear", template.locale)
+        ),
+        PRESET_PAGE_STYLE.copy(
+            name = l10n("project.PageBehavior.SCROLL", template.locale),
+            subsequentGapFrames = template.fps.run { roundingDiv(numerator, denominator) },
+            behavior = PageBehavior.SCROLL,
+            scrollPxPerFrame = max(1, template.fps.run { roundingDiv(78 * denominator, numerator) }).toDouble()
+        )
+    ),
+    contentStyles = persistentListOf(
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleHeading", template.locale),
+            bodyLetterStyleName = l10n("project.template.contentStyleHeading", template.locale),
+            bodyLayout = BodyLayout.GRID
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleSubheading", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
+            bodyLayout = BodyLayout.GRID
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleGutter", template.locale),
+            blockOrientation = BlockOrientation.HORIZONTAL,
+            spineAttachment = SpineAttachment.HEAD_GAP_CENTER,
+            bodyLetterStyleName = l10n("project.template.letterStyleName", template.locale),
+            bodyLayout = BodyLayout.GRID,
+            gridHarmonizeColWidths = HarmonizeExtent.ACROSS_BLOCKS,
+            gridCellHJustifyPerCol = persistentListOf(HJustify.LEFT),
+            hasHead = true,
+            headLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
+            headHarmonizeWidth = HarmonizeExtent.ACROSS_BLOCKS,
+            headHJustify = HJustify.RIGHT,
+            headVJustify = VJustifyText.TOP,
+            headGapPx = 24.0
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleBullets", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleName", template.locale),
+            bodyLayout = BodyLayout.FLOW,
+            flowRowWidthPx = 800.0,
+            flowCellHGapPx = 32.0,
+            hasHead = true,
+            headLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
+            headGapPx = 4.0
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleTabular", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleName", template.locale),
+            bodyLayout = BodyLayout.GRID,
+            gridCols = 3,
+            gridStructure = GridStructure.EQUAL_WIDTH_COLS,
+            gridCellHJustifyPerCol = persistentListOf(HJustify.LEFT, HJustify.CENTER, HJustify.RIGHT),
+            gridColGapPx = 32.0
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleSong", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
+            bodyLayout = BodyLayout.GRID,
+            hasHead = true,
+            headLetterStyleName = l10n("project.template.letterStyleSongTitle", template.locale),
+            headGapPx = 0.0
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleLogos", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleNormal", template.locale),
+            bodyLayout = BodyLayout.FLOW,
+            flowRowWidthPx = 1200.0,
+            flowRowGapPx = 64.0,
+            flowCellHGapPx = 96.0,
+            flowSeparator = ""
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.template.contentStyleBlurb", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleNormal", template.locale),
+            bodyLayout = BodyLayout.PARAGRAPHS,
+            paragraphsLineWidthPx = 500.0,
+            paragraphsParaGapPx = 8.0
+        ),
+        PRESET_CONTENT_STYLE.copy(
+            name = l10n("project.PageBehavior.CARD", template.locale),
+            bodyLetterStyleName = l10n("project.template.letterStyleCardName", template.locale),
+            bodyLayout = BodyLayout.GRID,
+            hasHead = true,
+            headLetterStyleName = l10n("project.template.letterStyleCardSmall", template.locale),
+            headGapPx = 32.0,
+            hasTail = true,
+            tailLetterStyleName = l10n("project.template.letterStyleCardSmall", template.locale),
+            tailGapPx = 32.0
+        )
+    ),
+    letterStyles = persistentListOf(
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.letterStyleNormal", template.locale),
+            font = FontRef("Archivo Narrow Regular"),
+            heightPx = 32.0
+        ),
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.letterStyleSmall", template.locale),
+            font = FontRef("Archivo Narrow Regular"),
+            heightPx = 24.0
+        ),
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.contentStyleHeading", template.locale),
+            font = FontRef("Archivo Narrow Regular"),
+            heightPx = 32.0,
+            trackingEm = 0.05,
+            layers = persistentListOf(
+                PRESET_LAYER.copy(
+                    name = l10n("project.LayerShape.TEXT", template.locale),
+                    shape = LayerShape.TEXT
+                ),
+                PRESET_LAYER.copy(
+                    name = l10n("project.StripePreset.UNDERLINE", template.locale),
+                    shape = LayerShape.STRIPE,
+                    stripePreset = StripePreset.UNDERLINE
+                )
+            )
+        ),
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.letterStyleName", template.locale),
+            font = FontRef("Archivo Narrow Bold"),
+            heightPx = 32.0
+        ),
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.letterStyleSongTitle", template.locale),
+            font = FontRef("Archivo Narrow Bold"),
+            heightPx = 32.0,
+            smallCaps = SmallCaps.SMALL_CAPS
+        ),
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.letterStyleCardName", template.locale),
+            font = FontRef("Archivo Narrow Bold"),
+            heightPx = 100.0
+        ),
+        PRESET_LETTER_STYLE.copy(
+            name = l10n("project.template.letterStyleCardSmall", template.locale),
+            font = FontRef("Archivo Narrow Regular"),
+            heightPx = 50.0
+        )
+    ),
+    pictureStyles = persistentListOf(
+        PRESET_PICTURE_STYLE.copy(
+            name = "Cinecred H",
+            picture = PictureRef("Cinecred H.svg"),
+            heightPx = Override(90.0),
+            cropBlankSpace = true
+        ),
+        PRESET_PICTURE_STYLE.copy(
+            name = "Cinecred V",
+            picture = PictureRef("Cinecred V.svg"),
+            heightPx = Override(150.0),
+            cropBlankSpace = true
+        )
+    )
+)
