@@ -51,7 +51,7 @@ class PlaybackControlsPanel(private val playbackCtrl: PlaybackCtrlComms) : JPane
         playbackCtrl.registerView(this)
 
         deckLinkConfigButton = newToolbarButton(GEAR_ICON, l10n("ui.video.configureDeckLink"))
-        deckLinkConfigMenu = DropdownPopupMenu(deckLinkConfigButton)
+        deckLinkConfigMenu = DropdownPopupMenu()
         deckLinkConfigMenu.addMouseListenerTo(deckLinkConfigButton)
         deckLinkConfigMenu.addKeyListenerTo(deckLinkConfigButton)
         deckLinkSubmenu = DeckLinkSubmenu(

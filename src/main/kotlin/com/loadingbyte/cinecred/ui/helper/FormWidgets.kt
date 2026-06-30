@@ -145,7 +145,7 @@ class TextModulesWidget(
 ) : AbstractTextComponentWidget<String>(JTextArea(), widthSpec) {
 
     private val insertModuleBtn = JButton(ADD_ICON)
-    private val popup = DropdownPopupMenu(insertModuleBtn)
+    private val popup = DropdownPopupMenu()
 
     override val components = listOf<JComponent>(JScrollPane(tc), insertModuleBtn)
     override val constraints = listOf(super.constraints.single() + ", hmax ${10 * STD_HEIGHT}", "growy")
@@ -1057,7 +1057,6 @@ class ColorWellWidget(
 
     private val picker = ColorPicker(allowNonSRGB, allowAlpha)
     private val popup = DropdownPopupMenu(
-        btn,
         preShow = { picker.resetUI(); picker.swatchColors = swatchColors },
         // Note: Without invokeLater(), the focus is not transferred.
         postShow = { SwingUtilities.invokeLater { picker.requestFocusInWindow() } }
@@ -2637,7 +2636,6 @@ class ScaleActionWidget(
         val scalingTextField = JFormattedTextField(NumberFormatter().apply { minimum = 0.0 })
         val rebuildBtn = JButton(l10n("ui.form.rebuild"))
         val popup = DropdownPopupMenu(
-            customBtn,
             preShow = { scalingTextField.value = 1.0 },
             // Note: Without invokeLater(), the focus is not transferred.
             postShow = { SwingUtilities.invokeLater { scalingTextField.requestFocusInWindow() } }

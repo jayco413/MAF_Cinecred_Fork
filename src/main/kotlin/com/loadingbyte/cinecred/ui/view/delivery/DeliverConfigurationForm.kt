@@ -523,7 +523,7 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
         }
 
         private val templateBtn = JButton(TEMPLATE_ICON).apply { toolTipText = l10n("template") }
-        val templateMenu = DropdownPopupMenu(templateBtn).apply {
+        val templateMenu = DropdownPopupMenu().apply {
             addMouseListenerTo(templateBtn)
             addKeyListenerTo(templateBtn)
         }

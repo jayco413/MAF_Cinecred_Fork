@@ -410,7 +410,6 @@ class LargeCheckBox(size: Int) : JCheckBox() {
 private const val STYLE_LIKE_COMBO_BOX_POPUP = "borderInsets: 1,1,1,1; background: \$List.background"
 
 class DropdownPopupMenu(
-    private val owner: Component,
     private val preShow: (() -> Unit)? = null,
     private val postShow: (() -> Unit)? = null
 ) : JPopupMenu(), PopupMenuListener {
@@ -430,7 +429,7 @@ class DropdownPopupMenu(
     override fun popupMenuCanceled(e: PopupMenuEvent) {}
     // @formatter:on
 
-    fun toggle() {
+    fun toggle(owner: Component) {
         // When the user clicks on the box button while the popup is open, it first closes because the user clicked
         // outside the popup, and then the button is informed, triggering this method. This would immediately re-open
         // the popup. We avoid that via this hack.
@@ -461,14 +460,14 @@ class DropdownPopupMenu(
         if (m == 0 && k == VK_SPACE ||
             m == ALT_DOWN_MASK && (k == VK_DOWN || k == VK_KP_DOWN || k == VK_UP || k == VK_KP_UP)
         )
-            toggle()
+            toggle(e.component)
     }
 
     fun addMouseListenerTo(btn: JComponent) {
         btn.addMouseListener(object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
                 if (btn.isEnabled && SwingUtilities.isLeftMouseButton(e))
-                    SwingUtilities.invokeLater { toggle() }
+                    SwingUtilities.invokeLater { toggle(btn) }
             }
         })
     }

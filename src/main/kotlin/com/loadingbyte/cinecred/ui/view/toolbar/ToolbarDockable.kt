@@ -105,7 +105,7 @@ class ToolbarDockable(private val toolbarCtrl: ToolbarCtrlComms, playbackCtrl: P
     )
 
     private val overlaysButton = newToolbarButton(ADVANCED_ICON, l10n("ui.edit.overlaysTooltip"), TOOLBAR_OVERLAY_MENU)
-    private val overlaysMenu: DropdownPopupMenu = DropdownPopupMenu(overlaysButton)
+    private val overlaysMenu: DropdownPopupMenu = DropdownPopupMenu()
         .apply { addMouseListenerTo(overlaysButton) }
 
     private val runtimeLabel = JLabel("\u2014").apply {
@@ -119,7 +119,7 @@ class ToolbarDockable(private val toolbarCtrl: ToolbarCtrlComms, playbackCtrl: P
     }
 
     private val windowLayoutsButton = newToolbarButton(WINDOW_LAYOUT_ICON, l10n("ui.toolbar.windowLayoutsTooltip"))
-    private val windowLayoutsMenu: DropdownPopupMenu = DropdownPopupMenu(windowLayoutsButton)
+    private val windowLayoutsMenu: DropdownPopupMenu = DropdownPopupMenu()
         .apply { addMouseListenerTo(windowLayoutsButton) }
 
     private val windowLayoutLockedToggleButton =
@@ -315,7 +315,7 @@ class ToolbarDockable(private val toolbarCtrl: ToolbarCtrlComms, playbackCtrl: P
     override fun setPlaybackControlsVisible(visible: Boolean) { playbackControls.isVisible = visible }
     override fun setZoom(zoom: Double) { zoomScrubber.value = zoom.coerceIn(MIN_ZOOM, MAX_ZOOM) }
     override fun toggleGuides() { guidesToggleButton.isSelected = !guidesToggleButton.isSelected }
-    override fun toggleOverlaysMenu() = overlaysMenu.toggle()
+    override fun toggleOverlaysMenu() = overlaysMenu.toggle(overlaysButton)
     // @formatter:on
 
     override fun setRuntime(timecode: String?, frames: Int) {
