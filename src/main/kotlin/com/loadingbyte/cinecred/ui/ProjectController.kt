@@ -65,7 +65,7 @@ class ProjectController(
     val stylingHistory: StylingHistory
 
     private data class Input(
-        val creditsWorkbooks: List<ProjectIntake.CreditsWorkbook>,
+        val creditsWorkbooks: List<ProjectIntake.CreditsWorkbook>?,
         val ioLog: List<ParserMsg>,
         val projectFonts: Map<String, Font>?,
         val pictureLoaders: Map<String, Picture.Loader>?,
@@ -73,7 +73,7 @@ class ProjectController(
         val styling: Styling?
     )
 
-    private val currentInput = AtomicReference(Input(emptyList(), emptyList(), null, null, null, null))
+    private val currentInput = AtomicReference(Input(null, emptyList(), null, null, null, null))
     private val processingJobSlot = JobSlot()
 
     // STEP 1:
@@ -184,6 +184,8 @@ class ProjectController(
         for (style in styling.tapeStyles)
             style.tape.tape?.loadMetadataInBackground()
         stylingHistory = StylingHistory(styling)
+        // In case the project intake already loaded the workbooks and triggered processing (which then aborted due to
+        // the missing styling), trigger processing again.
         process(currentInput.updateAndGet { it.copy(styling = styling) })
     }
 
@@ -226,7 +228,9 @@ class ProjectController(
     private fun runProcessing(input: Input): ProcessingResult {
         val (creditsWorkbooks, _, projectFonts, pictureLoaders, tapes, origStyling) = input
         // If something hasn't been initialized yet, abort reading and drawing the credits.
-        if (projectFonts == null || pictureLoaders == null || tapes == null || origStyling == null)
+        if (creditsWorkbooks == null ||
+            projectFonts == null || pictureLoaders == null || tapes == null || origStyling == null
+        )
             return ProcessingResult(input, emptyList(), emptyList(), null, null)
 
         try {
@@ -476,9 +480,9 @@ class ProjectController(
         val (input, processingLog, constraintViolations, styling, drawnProject) = processingResult
         SwingUtilities.invokeLater {
             val logCmp = compareByDescending(ParserMsg::severity)
-                .thenComparingInt { msg -> input.creditsWorkbooks.indexOfFirst { it.fileName == msg.fileName } }
+                .thenComparingInt { msg -> input.creditsWorkbooks?.indexOfFirst { it.fileName == msg.fileName } ?: -1 }
                 .thenComparingInt { msg ->
-                    (input.creditsWorkbooks.find { it.fileName == msg.fileName } ?: return@thenComparingInt 0)
+                    (input.creditsWorkbooks?.find { it.fileName == msg.fileName } ?: return@thenComparingInt 0)
                         .spreadsheets.indexOfFirst { it.name == msg.spreadsheetName }
                 }
                 .thenBy(ParserMsg::spreadsheetName)
@@ -499,7 +503,7 @@ class ProjectController(
 
     fun isCreditsFile(file: Path): Boolean {
         val uri = file.toUri()
-        return currentInput.get().creditsWorkbooks.any { it.uri == uri }
+        return (currentInput.get().creditsWorkbooks ?: emptyList()).any { it.uri == uri }
     }
 
     fun tryCloseProject(force: Boolean = false): Boolean {
