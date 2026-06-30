@@ -138,6 +138,7 @@ object GuideLetterStyleLayerColoringDemo : StyleSettingsDemo<Layer>(
             gradientStops = persistentListOf(GradientStop(Color4f.RED, 0.0), GradientStop(Color4f.GREEN, 1.0))
         )
         this += last().copy(gradientAngleDeg = 90.0)
+        this += last().copy(gradientAngleDeg = 0.0)
         this += last().copy(gradientExtentRfh = 6.0)
         this += last().copy(gradientInterpolation = GradientInterpolation.SRGB)
         this += last().copy(gradientInterpolation = GradientInterpolation.OKLAB)
@@ -311,7 +312,7 @@ object GuideLetterStyleLayerTransformDemo : StyleSettingsDemo<Layer>(
         this += last().copy(vOffsetRfh = -8.0 / 32.0)
         this += last().copy(
             offsetCoordinateSystem = CoordinateSystem.POLAR,
-            offsetAngleDeg = 14.0,
+            offsetAngleDeg = 346.0,
             offsetDistanceRfh = 1.03
         )
         this += last().copy(hScaling = 1.125)

@@ -323,7 +323,7 @@ private fun generateFmtStrDesign(layers: List<Layer>, stdFont: FormattedString.F
                 val angleRad = Math.toRadians(layer.offsetAngleDeg)
                 val distancePx = layer.offsetDistanceRfh * fh
                 hOffsetPx = cos(angleRad) * distancePx
-                vOffsetPx = -sin(angleRad) * distancePx
+                vOffsetPx = sin(angleRad) * distancePx
             }
         }
 

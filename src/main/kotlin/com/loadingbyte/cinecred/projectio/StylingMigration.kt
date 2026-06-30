@@ -384,14 +384,14 @@ fun migrateStylingFrom181(ctx: StylingReaderContext, rawStyling: RawStyling) {
                 "LAST" -> contentStyle["${prefix}VJustifyBodyFragment"] = "LAST_ROW_FIRST_LINE"
             }
 
-    // 1.8.1 -> 1.9.0: Angles must now be mod 360, gradients now supports stops & their interpolation default changed.
+    // 1.8.1 -> 1.9.0: Angles have changed & must now be mod 360; gradients get stops & a new interpolation default.
     for (letterStyle in rawStyling.letterStyles)
         (letterStyle["layers"] as? List<*>)?.forEach { layer ->
             if (layer is MutableMap<*, *>) {
                 @Suppress("UNCHECKED_CAST")
                 layer as MutableMap<String, Any>
-                for (key in arrayOf("gradientAngleDeg", "offsetAngleDeg"))
-                    (layer[key] as? Number)?.toDouble()?.let { if (it !in 0.0..<360.0) layer[key] = it.mod(360.0) }
+                (layer["gradientAngleDeg"] as? Number)?.let { layer["gradientAngleDeg"] = 90 - it.toDouble() }
+                (layer["offsetAngleDeg"] as? Number)?.let { layer["offsetAngleDeg"] = (-it.toDouble()).mod(360.0) }
                 when (layer["coloring"]) {
                     "PLAIN" ->
                         layer["color1"]?.let { layer["plainColor"] = it }
