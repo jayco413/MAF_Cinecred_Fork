@@ -1131,8 +1131,8 @@ private val MISSING_RECT = Rectangle2D.Double(0.0, 0.0, 200.0, 200.0)
 
 private fun DeferredImage.drawMissing(x: Double, y: Y) = drawShape(
     Coat.Gradient(
-        Color4f.MISSING_MEDIA_TOP, Color4f.MISSING_MEDIA_BOT,
-        Point2D.Double(0.0, 0.0), Point2D.Double(0.0, MISSING_RECT.height)
+        Point2D.Double(0.0, 0.0), Point2D.Double(0.0, MISSING_RECT.height),
+        listOf(Coat.Gradient.Stop(Color4f.MISSING_MEDIA_TOP, 0.0), Coat.Gradient.Stop(Color4f.MISSING_MEDIA_BOT, 1.0))
     ),
     MISSING_RECT, x, y, fill = true
 )

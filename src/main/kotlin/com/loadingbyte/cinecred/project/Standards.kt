@@ -177,11 +177,12 @@ val PRESET_LAYER = Layer(
     name = "",
     collapsed = true,
     coloring = LayerColoring.PLAIN,
-    color1 = Color4f.WHITE,
-    color2 = Color4f.GRAY,
+    plainColor = Color4f.WHITE,
     gradientAngleDeg = 0.0,
     gradientExtentRfh = 1.0,
     gradientShiftRfh = 0.0,
+    gradientInterpolation = GradientInterpolation.OKLAB,
+    gradientStops = persistentListOf(GradientStop(Color4f.RED, 0.0), GradientStop(Color4f.GREEN, 1.0)),
     shape = LayerShape.STRIPE,
     stripePreset = StripePreset.UNDERLINE,
     stripeHeightRfh = 0.05,
@@ -293,12 +294,12 @@ val PLACEHOLDER_LETTER_STYLE
         name = l10n("project.placeholder"),
         layers = persistentListOf(
             PRESET_LAYER.copy(
-                color1 = Color4f.ORANGE,
+                plainColor = Color4f.ORANGE,
                 shape = LayerShape.STRIPE,
                 stripePreset = StripePreset.BACKGROUND
             ),
             PRESET_LAYER.copy(
-                color1 = Color4f.BLACK,
+                plainColor = Color4f.BLACK,
                 shape = LayerShape.TEXT
             )
         )

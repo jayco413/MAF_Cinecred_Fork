@@ -150,6 +150,10 @@ class StyleForm<S : Style>(
                     )
                 else -> TextListWidget(widthSpec)
             }
+            setting.type == GradientStop::class.java -> ColorGradientWidget(
+                widthSpec = widthSpec,
+                minSize = minSizeConstr?.minSize ?: 2
+            )
             layerListWidgetSpec != null -> makeLayerListWidget(
                 @Suppress("UNCHECKED_CAST")
                 (setting as ListStyleSetting<S, LayerStyle>),
@@ -536,7 +540,7 @@ class StyleForm<S : Style>(
     }
 
     fun setSwatchColors(swatchColors: List<Color4f>) {
-        val configurator = { w: Widget<*> -> if (w is ColorWellWidget) w.swatchColors = swatchColors }
+        val configurator = { w: Widget<*> -> if (w is AbstractColorWidget) w.swatchColors = swatchColors }
         for (widget in valueWidgets.values)
             widget.applyConfigurator(configurator)
     }
@@ -635,6 +639,13 @@ class StyleForm<S : Style>(
         valueWidgets.getValue(setting).applyConfigurator { widget ->
             if (widget is AbstractListWidget<*, *>)
                 widget.elementCount = size
+        }
+    }
+
+    fun setGradientInterpolation(setting: ListStyleSetting<S, *>, interpolation: GradientInterpolation) {
+        valueWidgets.getValue(setting).applyConfigurator { widget ->
+            if (widget is ColorGradientWidget)
+                widget.interpolation = interpolation
         }
     }
 

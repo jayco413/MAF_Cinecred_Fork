@@ -687,6 +687,9 @@ class Canvas private constructor(
                 val colors = FloatArray(shader.colors.size * 4)
                 var i = 0
                 for (color in shader.colors) {
+                    // We deliberately clamp colors to the canvas color space prior to defining the gradient. This is to
+                    // avoid that portions of the gradient are just constant due to clamping when rendering in a color
+                    // space smaller than that of the gradient's stop colors.
                     val c = color.convert(canvasCS, clamp = true, ceiling)
                     colors[i++] = c.r
                     colors[i++] = c.g
@@ -694,11 +697,12 @@ class Canvas private constructor(
                     colors[i++] = c.a
                 }
                 val colorsSeg = arena.allocateFrom(colors)
-                val posSeg = if (shader.pos == null) NULL else arena.allocateFrom(shader.pos)
+                val posSeg =
+                    if (shader.pos == null) NULL else arena.allocateFrom(shader.pos.mapToFloatArray(Double::toFloat))
                 return SkGradientShader_MakeLinear(
                     p[0].toFloat(), p[1].toFloat(), p[2].toFloat(), p[3].toFloat(),
-                    colorsSeg, canvasCS.skiaHandle, posSeg, colors.size / 4,
-                    TileMode.CLAMP.code, SkGradientShaderInterpolationColorSpace_SRGB()
+                    colorsSeg, canvasCS.skiaHandle, posSeg, shader.colors.size,
+                    TileMode.CLAMP.code, shader.interpolation.code
                 )
             }
         }
@@ -942,6 +946,14 @@ class Canvas private constructor(
     }
 
 
+    enum class GradientInterpolation(val code: Byte) {
+        // Note: We don't offer linear RGB, because apart from the famous red-to-green case, it mostly looks bad.
+        // See: https://aras-p.info/blog/2021/11/29/Gradients-in-linear-space-arent-better/
+        OKLAB(SkGradientShaderInterpolationColorSpace_OKLab()),
+        SRGB(SkGradientShaderInterpolationColorSpace_SRGB())
+    }
+
+
     sealed interface Shader {
 
         class Solid(val color: Color4f) : Shader
@@ -950,7 +962,8 @@ class Canvas private constructor(
             val point1: Point2D,
             val point2: Point2D,
             val colors: List<Color4f>,
-            val pos: FloatArray? = null
+            val pos: DoubleArray? = null,
+            val interpolation: GradientInterpolation = GradientInterpolation.OKLAB,
         ) : Shader {
             init {
                 require(colors.size == if (pos == null) 2 else pos.size)

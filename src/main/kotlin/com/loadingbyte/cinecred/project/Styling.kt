@@ -283,11 +283,12 @@ data class Layer(
     override val name: String,
     override val collapsed: Boolean,
     val coloring: LayerColoring,
-    val color1: Color4f,
-    val color2: Color4f,
+    val plainColor: Color4f,
     val gradientAngleDeg: Double,
     val gradientExtentRfh: Double,
     val gradientShiftRfh: Double,
+    val gradientInterpolation: GradientInterpolation,
+    val gradientStops: PersistentList<GradientStop>,
     val shape: LayerShape,
     val stripePreset: StripePreset,
     val stripeHeightRfh: Double,
@@ -324,11 +325,15 @@ data class Layer(
 
 
 enum class LayerColoring { OFF, PLAIN, GRADIENT }
+enum class GradientInterpolation { OKLAB, SRGB }
 enum class LayerShape { TEXT, STRIPE, CLONE }
 enum class StripePreset { BACKGROUND, UNDERLINE, STRIKETHROUGH, CUSTOM }
 enum class LineJoin { MITER, ROUND, BEVEL }
 enum class CoordinateSystem { CARTESIAN, POLAR }
 enum class LayerAnchor { INDIVIDUAL, SIBLING, GLOBAL }
+
+
+data class GradientStop(val color: Color4f, val position: Double)
 
 
 data class TransitionStyle(
@@ -453,6 +458,8 @@ val Enum<*>.label: String
         GridStructure.SQUARE_CELLS -> l10n("ui.styling.content.flowSquareCells")
         Sort.OFF, SmallCaps.OFF, Superscript.OFF -> l10n("off")
         Superscript.CUSTOM, StripePreset.CUSTOM -> l10n("custom")
+        GradientInterpolation.OKLAB -> "Oklab"
+        GradientInterpolation.SRGB -> "sRGB"
         else -> l10n("project.${javaClass.simpleName}.${name}")
     }
 

@@ -248,7 +248,7 @@ object GuideContentStyleFlowLayoutSeparatorDemo : StyleSettingsDemo<ContentStyle
 
     override fun augmentStyling(styling: Styling): Styling {
         var ls = styling.letterStyles.single()
-        ls = ls.copy(name = coloredStyleName, layers = persistentListOf(ls.layers.single().copy(color1 = sepClr)))
+        ls = ls.copy(name = coloredStyleName, layers = persistentListOf(ls.layers.single().copy(plainColor = sepClr)))
         return styling.copy(letterStyles = styling.letterStyles.add(ls))
     }
 }
@@ -271,7 +271,9 @@ object GuideContentStyleFlowLayoutSeparatorVJustifyDemo : StyleSettingsDemo<Cont
 
     override fun augmentStyling(styling: Styling): Styling {
         var ls = styling.letterStyles.single()
-        ls = ls.copy(name = "Sep", heightPx = 16.0, layers = persistentListOf(ls.layers.single().copy(color1 = sepClr)))
+        ls = ls.copy(
+            name = "Sep", heightPx = 16.0, layers = persistentListOf(ls.layers.single().copy(plainColor = sepClr))
+        )
         return styling.copy(letterStyles = styling.letterStyles.add(ls))
     }
 }

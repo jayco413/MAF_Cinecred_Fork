@@ -326,9 +326,8 @@ private val LETTER_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<LetterStyle, *>> = l
 
 private val LAYER_WIDGET_SPECS: List<StyleWidgetSpec<Layer, *>> = listOf(
     UnitWidgetSpec(
-        Layer::coloring.st(), Layer::color1.st(), Layer::color2.st(),
         Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
-        Layer::stripePreset.st(), Layer::stripeHeightRfh.st(), Layer::stripeOffsetRfh.st(),
+        Layer::stripeHeightRfh.st(), Layer::stripeOffsetRfh.st(),
         Layer::stripeWidenLeftRfh.st(), Layer::stripeWidenRightRfh.st(),
         Layer::stripeWidenTopRfh.st(), Layer::stripeWidenBottomRfh.st(),
         Layer::stripeCornerRadiusRfh.st(), Layer::stripeDashPatternRfh.st(),
@@ -351,18 +350,26 @@ private val LAYER_WIDGET_SPECS: List<StyleWidgetSpec<Layer, *>> = listOf(
         }
     ),
     ToggleButtonGroupWidgetSpec(Layer::coloring.st(), ICON),
-    WidthWidgetSpec(Layer::color1.st(), WidthSpec.TINIER),
-    WidthWidgetSpec(Layer::color2.st(), WidthSpec.TINIER),
-    WidthWidgetSpec(Layer::gradientAngleDeg.st(), WidthSpec.TINY),
+    WidthWidgetSpec(Layer::plainColor.st(), WidthSpec.TINIER),
+    WidthWidgetSpec(Layer::gradientAngleDeg.st(), WidthSpec.TINIER),
     NumberWidgetSpec(Layer::gradientAngleDeg.st(), sensitivity = 1.0),
-    WidthWidgetSpec(Layer::gradientExtentRfh.st(), WidthSpec.LITTLE),
+    WidthWidgetSpec(Layer::gradientExtentRfh.st(), WidthSpec.TINY),
     NumberWidgetSpec(Layer::gradientExtentRfh.st(), sensitivity = 1.0),
     WidthWidgetSpec(Layer::gradientShiftRfh.st(), WidthSpec.TINY),
     NumberWidgetSpec(Layer::gradientShiftRfh.st(), sensitivity = 0.5),
+    WidthWidgetSpec(Layer::gradientInterpolation.st(), WidthSpec.NONE),
+    WidthWidgetSpec(Layer::gradientStops.st(), WidthSpec.FILL),
+    GradientWidgetSpec(
+        Layer::gradientStops.st(),
+        getInterpolation = { _, style -> style.gradientInterpolation }
+    ),
     UnionWidgetSpec(
-        Layer::coloring.st(), Layer::color1.st(), Layer::color2.st(),
+        Layer::coloring.st(), Layer::plainColor.st(),
         Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
-        settingIcons = listOf(null, null, null, ANGLE_ICON, SIZE_HEIGHT_ICON, ARROW_DIAGONAL_ICON)
+        Layer::gradientInterpolation.st(), Layer::gradientStops.st(),
+        settingIcons = listOf(null, null, ANGLE_ICON, SIZE_HEIGHT_ICON, ARROW_DIAGONAL_ICON, null, null),
+        settingGaps = listOf(null, null, null, null, "unrel", null),
+        settingNewlines = listOf(6)
     ),
     ToggleButtonGroupWidgetSpec(Layer::shape.st(), ICON_AND_LABEL),
     ToggleButtonGroupWidgetSpec(Layer::stripePreset.st(), ICON),
@@ -775,3 +782,9 @@ class ChoiceWidgetSpec<S : Style>(
     vararg settings: ListStyleSetting<S, Any>,
     val getNoItemsMsg: (() -> String)? = null
 ) : StyleWidgetSpec<S, ListStyleSetting<S, Any>>(*settings)
+
+
+class GradientWidgetSpec<S : Style>(
+    setting: ListStyleSetting<S, GradientStop>,
+    val getInterpolation: (Styling, S) -> GradientInterpolation
+) : StyleWidgetSpec<S, ListStyleSetting<S, GradientStop>>(setting)

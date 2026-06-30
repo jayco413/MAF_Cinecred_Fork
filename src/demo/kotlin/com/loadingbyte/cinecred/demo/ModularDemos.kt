@@ -348,7 +348,7 @@ private fun <S : Style> renderStyleSettings(
 
         val compBounds = Rectangle(0, 0, -1, -1)
         for (sett in settings) {
-            form.getFormRowFor(sett)?.let { row -> compBounds.add(row.labelComp.bounds) }
+            form.getFormRowFor(sett)?.labelComp?.let { label -> if (label.isVisible) compBounds.add(label.bounds) }
             for (label in form.getExternallyManagedLabelsFor(sett))
                 if (label.isVisible)
                     compBounds.add(label.bounds)

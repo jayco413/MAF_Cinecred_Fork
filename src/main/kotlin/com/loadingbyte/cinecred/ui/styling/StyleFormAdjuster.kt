@@ -100,12 +100,12 @@ class StyleFormAdjuster(
         val colorSet = HashSet<Color4f>()
         colorSet.add(styling.global.grounding)
         for (letterStyle in styling.letterStyles)
-            for (layer in letterStyle.layers) {
-                if (layer.coloring != LayerColoring.OFF)
-                    colorSet.add(layer.color1)
-                if (layer.coloring == LayerColoring.GRADIENT)
-                    colorSet.add(layer.color2)
-            }
+            for (layer in letterStyle.layers)
+                when (layer.coloring) {
+                    LayerColoring.OFF -> {}
+                    LayerColoring.PLAIN -> colorSet.add(layer.plainColor)
+                    LayerColoring.GRADIENT -> for (stop in layer.gradientStops) colorSet.add(stop.color)
+                }
 
         swatchColors = colorSet.toList().sortedWith { c1, c2 -> Arrays.compare(c1.toHSB(), c2.toHSB()) }
     }
@@ -225,6 +225,11 @@ class StyleFormAdjuster(
             }
             is OverrideWidgetSpec<S, *> ->
                 updateDefaultValue(curForm, curStyle, spec)
+            is GradientWidgetSpec -> {
+                val interpolation = spec.getInterpolation(styling, curStyle)
+                for (setting in spec.settings)
+                    curForm.setGradientInterpolation(setting, interpolation)
+            }
             else -> {}
         }
 

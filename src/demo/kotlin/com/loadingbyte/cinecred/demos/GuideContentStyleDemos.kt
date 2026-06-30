@@ -330,7 +330,7 @@ object GuideContentStyleHeadLeaderLetterStyleDemo : StyleSettingsDemo<ContentSty
     override fun augmentStyling(styling: Styling): Styling {
         val color = Color4f.fromSRGBHexString("#42BEEF")
         var ls = styling.letterStyles.first { it.name == "Small" }
-        ls = ls.copy(name = coloredStyleName, layers = persistentListOf(ls.layers.single().copy(color1 = color)))
+        ls = ls.copy(name = coloredStyleName, layers = persistentListOf(ls.layers.single().copy(plainColor = color)))
         return styling.copy(letterStyles = styling.letterStyles.add(ls))
     }
 }

@@ -311,11 +311,12 @@ private fun supportsNot(style: LetterStyle, feat: String): Boolean =
 
 private val LAYER_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Layer>> = listOf(
     StyleEffectivitySpec(
-        Layer::color1.st(),
-        isTotallyIneffective = { _, style -> style.coloring == LayerColoring.OFF }
+        Layer::plainColor.st(),
+        isTotallyIneffective = { _, style -> style.coloring != LayerColoring.PLAIN }
     ),
     StyleEffectivitySpec(
-        Layer::color2.st(), Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
+        Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
+        Layer::gradientInterpolation.st(), Layer::gradientStops.st(),
         isTotallyIneffective = { _, style -> style.coloring != LayerColoring.GRADIENT }
     ),
     StyleEffectivitySpec(

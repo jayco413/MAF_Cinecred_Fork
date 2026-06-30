@@ -5,10 +5,9 @@ import com.formdev.flatlaf.ui.FlatBorder
 import com.formdev.flatlaf.ui.FlatButtonUI
 import com.formdev.flatlaf.ui.FlatUIUtils
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.imaging.Color4f
+import com.loadingbyte.cinecred.imaging.*
+import com.loadingbyte.cinecred.imaging.Canvas
 import com.loadingbyte.cinecred.imaging.Font
-import com.loadingbyte.cinecred.imaging.GlyphString
-import com.loadingbyte.cinecred.imaging.Transition
 import com.loadingbyte.cinecred.project.*
 import kotlinx.collections.immutable.mutate
 import kotlinx.collections.immutable.persistentMapOf
@@ -18,10 +17,11 @@ import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
 import java.awt.dnd.*
 import java.awt.event.*
-import java.awt.geom.CubicCurve2D
-import java.awt.geom.Ellipse2D
-import java.awt.geom.Line2D
-import java.awt.geom.Path2D
+import java.awt.event.KeyEvent.VK_BACK_SPACE
+import java.awt.event.KeyEvent.VK_DELETE
+import java.awt.event.KeyListener
+import java.awt.geom.*
+import java.awt.image.BufferedImage
 import java.nio.file.Path
 import java.text.NumberFormat
 import java.text.ParseException
@@ -39,6 +39,7 @@ import kotlin.jvm.optionals.getOrNull
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 
 enum class WidthSpec(val mig: String) {
@@ -1031,11 +1032,36 @@ class ToggleButtonGroupWidget<V : Any>(
 }
 
 
+abstract class AbstractColorWidget<V : Any>(
+    allowNonSRGB: Boolean,
+    allowAlpha: Boolean
+) : Form.AbstractWidget<V>() {
+
+    protected val picker = ColorPicker(allowNonSRGB, allowAlpha)
+    protected val popup = DropdownPopupMenu(
+        preShow = { picker.resetUI(); picker.swatchColors = swatchColors },
+        // Note: Without invokeLater(), the focus is not transferred.
+        postShow = { SwingUtilities.invokeLater { picker.requestFocusInWindow() } }
+    )
+
+    init {
+        popup.add(picker)
+    }
+
+    var swatchColors: List<Color4f> = emptyList()
+
+    companion object {
+        const val CHECKER = 4
+    }
+
+}
+
+
 class ColorWellWidget(
     allowNonSRGB: Boolean = true,
     allowAlpha: Boolean = true,
     widthSpec: WidthSpec? = null
-) : Form.AbstractWidget<Color4f>() {
+) : AbstractColorWidget<Color4f>(allowNonSRGB, allowAlpha) {
 
     private val btn = object : JButton(" ") {
         init {
@@ -1048,31 +1074,21 @@ class ColorWellWidget(
                 // Clip the drawing to the rounded shape of the button (minus some slack).
                 val arc = FlatUIUtils.getBorderArc(this)
                 g2.clip(FlatUIUtils.createComponentRectangle(0.5f, 0.5f, width - 1f, height - 1f, arc))
-                g2.drawCheckerboard(width, height, 6)
+                g2.drawCheckerboard(width, height)
             }
 
             super.paintComponent(g)
         }
     }
 
-    private val picker = ColorPicker(allowNonSRGB, allowAlpha)
-    private val popup = DropdownPopupMenu(
-        preShow = { picker.resetUI(); picker.swatchColors = swatchColors },
-        // Note: Without invokeLater(), the focus is not transferred.
-        postShow = { SwingUtilities.invokeLater { picker.requestFocusInWindow() } }
-    )
-
     init {
         picker.addChangeListener { value = picker.value }
-        popup.add(picker)
         popup.addMouseListenerTo(btn)
         popup.addKeyListenerTo(btn)
     }
 
     override val components = listOf<JComponent>(btn)
     override val constraints = listOf("hmin $STD_HEIGHT, " + (widthSpec ?: WidthSpec.NARROW).mig)
-
-    var swatchColors: List<Color4f> = emptyList()
 
     override var value: Color4f = Color4f.BLACK
         set(value) {
@@ -1082,13 +1098,248 @@ class ColorWellWidget(
             notifyChangeListeners()
         }
 
-    private fun Graphics.drawCheckerboard(width: Int, height: Int, n: Int) {
-        val checkerSize = ceilDiv(height, n)
-        for (x in 0..<width / checkerSize)
-            for (y in 0..<n) {
+    private fun Graphics.drawCheckerboard(width: Int, height: Int) {
+        for (x in 0..<ceilDiv(width, CHECKER))
+            for (y in 0..<ceilDiv(height, CHECKER)) {
                 color = if ((x + y) % 2 == 0) Color.WHITE else Color.LIGHT_GRAY
-                fillRect(x * checkerSize, y * checkerSize, checkerSize, checkerSize)
+                fillRect(x * CHECKER, y * CHECKER, CHECKER, CHECKER)
             }
+    }
+
+}
+
+
+class ColorGradientWidget(
+    allowNonSRGB: Boolean = true,
+    allowAlpha: Boolean = true,
+    widthSpec: WidthSpec? = null,
+    private val minSize: Int = 2
+) : AbstractColorWidget<List<GradientStop>>(allowNonSRGB, allowAlpha) {
+
+    private val track = Track()
+    private var editedBtn: StopButton? = null
+
+    init {
+        picker.addChangeListener {
+            editedBtn?.let { btn ->
+                btn.stop = btn.stop.copy(color = picker.value)
+                onChange()
+            }
+        }
+    }
+
+    override val components = listOf<JComponent>(track)
+    override val constraints = listOf("hmin $STD_HEIGHT, " + (widthSpec ?: WidthSpec.WIDE).mig)
+
+    var interpolation: GradientInterpolation = GradientInterpolation.OKLAB
+        set(interpolation) {
+            if (field == interpolation)
+                return
+            field = interpolation
+            track.rerenderImageAndRepaint()
+        }
+
+    override var value: List<GradientStop>
+        get() =
+            buildList {
+                for (idx in 0..<track.componentCount)
+                    add(track.getComponent(idx).stop)
+                sortBy { it.position }
+            }
+        set(value) {
+            while (track.componentCount > value.size)
+                track.remove(track.componentCount - 1)
+            for ((idx, stop) in value.withIndex())
+                if (idx == track.componentCount)
+                    track.add(StopButton(stop))
+                else
+                    track.getComponent(idx).stop = stop
+            track.revalidate()
+            onChange()
+        }
+
+    private fun onChange() {
+        track.rerenderImageAndRepaint()
+        notifyChangeListeners()
+    }
+
+
+    companion object {
+        const val BTN_W = 16
+    }
+
+
+    private inner class StopButton(stop: GradientStop) :
+        JButton(" "), MouseListener, KeyListener, HighFrequencyDragListener {
+
+        var stop: GradientStop = stop
+            set(stop) {
+                if (field == stop)
+                    return
+                field = stop
+            }
+
+        init {
+            background = Color(0, 0, 0, 0)
+            putClientProperty(STYLE, "borderWidth: 4; borderColor: #999")
+            toolTipText = l10n("ui.form.colorTooltip")
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addMouseListener(this)
+            addKeyListener(this)
+            addHighFrequencyDragListener(this)
+            popup.addKeyListenerTo(this)
+        }
+
+        private fun edit() {
+            editedBtn = null
+            picker.value = stop.color
+            editedBtn = this
+            popup.toggle(this)
+        }
+
+        private fun remove() {
+            if (track.componentCount > minSize) {
+                track.remove(this)
+                onChange()
+            }
+        }
+
+        override fun mouseClicked(e: MouseEvent) {
+            if (SwingUtilities.isLeftMouseButton(e))
+                edit()
+            else if (SwingUtilities.isRightMouseButton(e))
+                remove()
+        }
+
+        override fun mousePressed(e: MouseEvent) {}
+        override fun mouseReleased(e: MouseEvent) {}
+        override fun mouseEntered(e: MouseEvent) {}
+        override fun mouseExited(e: MouseEvent) {}
+
+        override fun keyPressed(e: KeyEvent) {
+            if (e.modifiersEx == 0 && e.keyCode.let { it == VK_DELETE || it == VK_BACK_SPACE })
+                remove()
+        }
+
+        override fun keyReleased(e: KeyEvent) {}
+        override fun keyTyped(e: KeyEvent) {}
+
+        override fun onDrag(startPointer: Point, currentPointer: Point, modifiersEx: Int) {
+            stop = stop.copy(position = track.x2position(SwingUtilities.convertPoint(this, currentPointer, track).x))
+            // Layout immediately for a more fluent look.
+            track.doLayout()
+            onChange()
+        }
+
+    }
+
+
+    private inner class Track : JComponent(), MouseListener {
+
+        private var image: BufferedImage? = null
+
+        init {
+            layout = TrackLayout()
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createEmptyBorder(3, 0, 3, 0),
+                FlatBorder()
+            )
+            toolTipText = l10n("ui.form.gradientTooltip")
+            cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
+            addMouseListener(this)
+        }
+
+        override fun getComponent(n: Int): StopButton =
+            super.getComponent(n) as StopButton
+
+        fun position2x(position: Double): Int = BTN_W / 2 + (position.coerceIn(0.0, 1.0) * (width - BTN_W)).roundToInt()
+        fun x2position(x: Int): Double = ((x - BTN_W / 2) / (width - BTN_W).toDouble()).coerceIn(0.0, 1.0)
+
+        fun rerenderImageAndRepaint() {
+            image = null
+            paintImmediately(0, 0, width, height)
+        }
+
+        override fun mouseClicked(e: MouseEvent) {
+            if (SwingUtilities.isLeftMouseButton(e)) {
+                val btn = StopButton(GradientStop(Color4f.WHITE, x2position(e.x)))
+                add(btn)
+                btn.requestFocusInWindow()
+                // Layout immediately to make the new button appear quicker.
+                doLayout()
+                onChange()
+            }
+        }
+
+        override fun mousePressed(e: MouseEvent) {}
+        override fun mouseReleased(e: MouseEvent) {}
+        override fun mouseEntered(e: MouseEvent) {}
+        override fun mouseExited(e: MouseEvent) {}
+
+        override fun paintComponent(g: Graphics) {
+            val insets = this.insets
+            val w = width - insets.left - insets.right
+            val h = height - insets.top - insets.bottom
+            if (w <= 0 || h <= 0)
+                return
+            if (image.let { it == null || it.width != w || it.height != h }) {
+                val bridge = BitmapJ2DBridge(graphicsConfiguration.colorModel)
+                val res = Resolution(w, h)
+                val canvasRep = Canvas.compatibleRepresentation(bridge.nativeRepresentation.colorSpace!!)
+                Bitmap.allocate(Bitmap.Spec(res, canvasRep)).use { canvasBmp ->
+                    Bitmap.allocate(Bitmap.Spec(res, bridge.nativeRepresentation)).use { nativeBmp ->
+                        Canvas.forBitmap(canvasBmp.zero()).use { canvas ->
+                            val stops = value
+                            // Draw a background checkerboard.
+                            if (stops.isEmpty() || stops.any { it.color.a != 1f }) {
+                                for (x in 0..<ceilDiv(w, CHECKER))
+                                    for (y in 0..<ceilDiv(h, CHECKER)) {
+                                        val rect = Rectangle(x * CHECKER, y * CHECKER, CHECKER, CHECKER)
+                                        val color = if ((x + y) % 2 == 0) Color4f.WHITE else Color4f.LIGHT_GRAY
+                                        canvas.fillShape(rect, Canvas.Shader.Solid(color))
+                                    }
+                            }
+                            // Draw the gradient itself.
+                            if (stops.size == 1)
+                                canvas.fillShape(Rectangle(w, h), Canvas.Shader.Solid(stops[0].color))
+                            else if (stops.size >= 2) {
+                                val interp = when (interpolation) {
+                                    GradientInterpolation.OKLAB -> Canvas.GradientInterpolation.OKLAB
+                                    GradientInterpolation.SRGB -> Canvas.GradientInterpolation.SRGB
+                                }
+                                val d = BTN_W / 2 - insets.left
+                                val shader = Canvas.Shader.LinearGradient(
+                                    Point2D.Double(d.toDouble(), 0.0), Point2D.Double((w - d).toDouble(), 0.0),
+                                    stops.map { it.color }, stops.mapToDoubleArray { it.position }, interp
+                                )
+                                canvas.fillShape(Rectangle(w, h), shader)
+                            }
+                        }
+                        BitmapConverter.convert(canvasBmp, nativeBmp)
+                        image = bridge.toNativeImage(nativeBmp)
+                    }
+                }
+            }
+            g.drawImage(image, insets.left, insets.top, null)
+        }
+
+    }
+
+
+    private class TrackLayout : LayoutManager {
+
+        override fun addLayoutComponent(name: String, comp: Component) {}
+        override fun removeLayoutComponent(comp: Component) {}
+        override fun minimumLayoutSize(parent: Container) = Dimension(1, 1)
+        override fun preferredLayoutSize(parent: Container) = Dimension(1, 1)
+
+        override fun layoutContainer(parent: Container) {
+            for (idx in 0..<parent.componentCount) {
+                val btn = (parent as Track).getComponent(idx)
+                btn.setBounds(parent.position2x(btn.stop.position) - BTN_W / 2, 0, BTN_W, parent.height)
+            }
+        }
+
     }
 
 }

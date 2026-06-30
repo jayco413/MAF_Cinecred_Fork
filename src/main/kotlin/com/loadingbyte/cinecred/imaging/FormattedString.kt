@@ -265,13 +265,13 @@ class FormattedString private constructor(
             // Skip invisible (likely helper) layers early for improved performance.
             val invisible = when (val c = layer.coloring) {
                 is Layer.Coloring.Plain -> c.color.a == 0f
-                is Layer.Coloring.Gradient -> c.color1.a == 0f && c.color2.a == 0f
+                is Layer.Coloring.Gradient -> c.stops.all { it.color.a == 0f }
             }
             if (invisible)
                 continue
             val opaque = when (val c = layer.coloring) {
                 is Layer.Coloring.Plain -> c.color.a == 1f
-                is Layer.Coloring.Gradient -> c.color1.a == 1f && c.color2.a == 1f
+                is Layer.Coloring.Gradient -> c.stops.all { it.color.a == 1f }
             }
             val forms = formLayer(layerIdx)
             val coat = makeCoat(layer.coloring, center)
@@ -353,9 +353,9 @@ class FormattedString private constructor(
                 val offset1 = coloring.shiftPx - ext / 2.0
                 val offset2 = coloring.shiftPx + ext / 2.0
                 DeferredImage.Coat.Gradient(
-                    coloring.color1, coloring.color2,
                     point1 = Point2D.Double(center.x + offset1 * dx, center.y + offset1 * dy),
-                    point2 = Point2D.Double(center.x + offset2 * dx, center.y + offset2 * dy)
+                    point2 = Point2D.Double(center.x + offset2 * dx, center.y + offset2 * dy),
+                    coloring.stops, coloring.interpolation
                 )
             }
         }
@@ -635,11 +635,11 @@ class FormattedString private constructor(
             ) : Coloring
 
             class Gradient(
-                val color1: Color4f,
-                val color2: Color4f,
                 val angleDeg: Double,
                 val extentPx: Double,
-                val shiftPx: Double = 0.0
+                val shiftPx: Double = 0.0,
+                val stops: List<DeferredImage.Coat.Gradient.Stop>,
+                val interpolation: Canvas.GradientInterpolation = Canvas.GradientInterpolation.OKLAB,
             ) : Coloring
 
         }

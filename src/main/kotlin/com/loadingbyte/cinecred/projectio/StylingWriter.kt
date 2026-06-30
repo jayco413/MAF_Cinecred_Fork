@@ -80,6 +80,7 @@ private fun convert(styling: Styling, value: Any): Any? = when (value) {
     is TapeRef -> value.name
     is FontVariations -> value.ifEmpty { null }?.map { (tag, value) -> "$tag=$value" }
     is FontFeature -> "${value.tag}=${value.value}"
+    is GradientStop -> value.color.convert(ColorSpace.XYZD50).rgba().asList() + value.position
     is Transition -> listOf(value.ctrl1X, value.ctrl1Y, value.ctrl2X, value.ctrl2Y)
     is TapeSlice -> listOf(value.inPoint, value.outPoint).joinToString("-") { tc ->
         if (tc == null) "" else if (tc is Timecode.Clock) "${tc.numerator}/${tc.denominator}" else tc.toString()

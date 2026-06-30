@@ -3,13 +3,10 @@ package com.loadingbyte.cinecred.project
 import com.loadingbyte.cinecred.common.indexOfAfter
 import com.loadingbyte.cinecred.common.mapToDoubleArray
 import com.loadingbyte.cinecred.common.mapToIntArray
-import com.loadingbyte.cinecred.imaging.Color4f
-import com.loadingbyte.cinecred.imaging.ColorSpace
-import com.loadingbyte.cinecred.imaging.Font
+import com.loadingbyte.cinecred.imaging.*
 import com.loadingbyte.cinecred.imaging.Font.Companion.CAPITAL_SPACING_FEATURE
 import com.loadingbyte.cinecred.imaging.Font.Companion.PETITE_CAPS_FEATURE
 import com.loadingbyte.cinecred.imaging.Font.Companion.SMALL_CAPS_FEATURE
-import com.loadingbyte.cinecred.imaging.FormattedString
 import java.awt.BasicStroke
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
@@ -237,15 +234,18 @@ private fun generateFmtStrDesign(layers: List<Layer>, stdFont: FormattedString.F
                 )
             LayerColoring.PLAIN ->
                 FormattedString.Layer.Coloring.Plain(
-                    color = layer.color1
+                    color = layer.plainColor
                 )
             LayerColoring.GRADIENT ->
                 FormattedString.Layer.Coloring.Gradient(
-                    color1 = layer.color1,
-                    color2 = layer.color2,
                     angleDeg = layer.gradientAngleDeg,
                     extentPx = layer.gradientExtentRfh * fh,
-                    shiftPx = layer.gradientShiftRfh * fh
+                    shiftPx = layer.gradientShiftRfh * fh,
+                    stops = layer.gradientStops.map { DeferredImage.Coat.Gradient.Stop(it.color, it.position) },
+                    interpolation = when (layer.gradientInterpolation) {
+                        GradientInterpolation.OKLAB -> Canvas.GradientInterpolation.OKLAB
+                        GradientInterpolation.SRGB -> Canvas.GradientInterpolation.SRGB
+                    }
                 )
         }
 

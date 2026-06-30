@@ -142,6 +142,7 @@ private fun convertUntyped(ctx: StylingReaderContext, type: Class<*>, raw: Any):
     TapeRef::class.java -> ctx.tapes[raw as String]?.let(::TapeRef) ?: TapeRef(raw)
     FontVariations::class.java -> fontVariationsFromKVs((raw as List<*>).requireIsInstance<String>())
     FontFeature::class.java -> fontFeatureFromKV(raw as String)
+    GradientStop::class.java -> gradientStopFromList((raw as List<*>).requireIsInstance<Number>())
     Transition::class.java -> transitionFromList((raw as List<*>).requireIsInstance<Number>())
     TapeSlice::class.java -> tapeSliceFromStr(raw as String)
     else -> when {
@@ -164,6 +165,9 @@ private fun fontFeatureFromKV(kv: String): FontFeature {
     require(parts.size == 2)
     return FontFeature(parts[0], parts[1].toInt())
 }
+
+private fun gradientStopFromList(l: List<Number>): GradientStop =
+    GradientStop(Color4f(l.subList(0, 4), ColorSpace.XYZD50), l[4].toDouble())
 
 private fun transitionFromList(l: List<Number>): Transition =
     Transition(l[0].toDouble(), l[1].toDouble(), l[2].toDouble(), l[3].toDouble())

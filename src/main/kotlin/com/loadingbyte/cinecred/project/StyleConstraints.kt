@@ -281,12 +281,12 @@ private const val BLUR_RADIUS_LIMIT = 200
 private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
     JudgeConstr(
         WARN, msg("project.styling.constr.unusedHiddenLayer"),
-        Layer::coloring.st(), Layer::color1.st(), Layer::color2.st()
+        Layer::coloring.st(), Layer::plainColor.st(), Layer::gradientStops.st()
     ) { styling, style ->
         val visible = when (style.coloring) {
             LayerColoring.OFF -> false
-            LayerColoring.PLAIN -> style.color1.a != 0f
-            LayerColoring.GRADIENT -> style.color1.a != 0f || style.color2.a != 0f
+            LayerColoring.PLAIN -> style.plainColor.a != 0f
+            LayerColoring.GRADIENT -> style.gradientStops.any { it.color.a != 0f }
         }
         if (visible)
             return@JudgeConstr true
@@ -298,6 +298,7 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
     },
     DoubleConstr(ERROR, Layer::gradientAngleDeg.st(), mod = 360.0),
     DoubleConstr(ERROR, Layer::gradientExtentRfh.st(), min = 0.0),
+    MinSizeConstr(ERROR, Layer::gradientStops.st(), minSize = 2),
     DoubleConstr(ERROR, Layer::stripeHeightRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::stripeCornerRadiusRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::stripeDashPatternRfh.st(), min = 0.0, minInclusive = false),

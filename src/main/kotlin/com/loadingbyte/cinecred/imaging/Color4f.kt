@@ -70,8 +70,11 @@ data class Color4f(val r: Float, val g: Float, val b: Float, val a: Float, val c
     companion object {
 
         val BLACK = fromSRGBHexString("#000000")
-        val WHITE = fromSRGBHexString("#FFFFFF")
         val GRAY = fromSRGBHexString("#808080")
+        val LIGHT_GRAY = fromSRGBHexString("#C0C0C0")
+        val WHITE = fromSRGBHexString("#FFFFFF")
+        val RED = fromSRGBHexString("#FF0000")
+        val GREEN = fromSRGBHexString("#00FF00")
         val ORANGE = fromSRGBHexString("#FFC800")
 
         val MISSING_MEDIA_TOP = fromSRGBHexString("#E44244")

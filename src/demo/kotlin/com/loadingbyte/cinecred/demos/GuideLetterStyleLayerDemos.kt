@@ -46,7 +46,7 @@ object GuideLetterStyleLayerHandlingDemo : ScreencastDemo("$DIR/handling", Forma
         val oldStyling = projectCtrl.stylingHistory.current
         val oldStyle = oldStyling.letterStyles.first { it.name == l10n("project.template.letterStyleCardName") }
         val newStyle = oldStyle.copy(
-            layers = persistentListOf(oldStyle.layers[0].copy(color1 = Color4f.fromSRGBHexString("#C85050")))
+            layers = persistentListOf(oldStyle.layers[0].copy(plainColor = Color4f.fromSRGBHexString("#C85050")))
         )
         val newStyling = oldStyling.copy(
             letterStyles = oldStyling.letterStyles.map { if (it === oldStyle) newStyle else it }.toPersistentList(),
@@ -104,12 +104,12 @@ object GuideLetterStyleLayerInheritDemo : StyleSettingsDemo<LetterStyle>(
             PRESET_LETTER_STYLE.copy(
                 name = oneStyleName, layers = persistentListOf(
                     PRESET_LAYER.copy(
-                        color1 = Color4f.fromSRGBHexString("#640000"), shape = LayerShape.STRIPE,
+                        plainColor = Color4f.fromSRGBHexString("#640000"), shape = LayerShape.STRIPE,
                         stripePreset = StripePreset.BACKGROUND,
                         stripeWidenLeftRfh = 0.1, stripeWidenRightRfh = 0.1, stripeWidenTopRfh = -0.3,
                         stripeWidenBottomRfh = -0.3, stripeCornerJoin = LineJoin.ROUND, vShearing = -0.3
                     ),
-                    PRESET_LAYER.copy(color1 = Color4f.fromSRGBHexString("#FA785A"), shape = LayerShape.TEXT)
+                    PRESET_LAYER.copy(plainColor = Color4f.fromSRGBHexString("#FA785A"), shape = LayerShape.TEXT)
                 )
             )
         )
@@ -119,8 +119,9 @@ object GuideLetterStyleLayerInheritDemo : StyleSettingsDemo<LetterStyle>(
 object GuideLetterStyleLayerColoringDemo : StyleSettingsDemo<Layer>(
     Layer::class.java, "$DIR/coloring", Format.STEP_GIF,
     listOf(
-        Layer::coloring.st(), Layer::color1.st(), Layer::color2.st(),
-        Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st()
+        Layer::coloring.st(), Layer::plainColor.st(),
+        Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
+        Layer::gradientInterpolation.st(), Layer::gradientStops.st()
     )
 ) {
     // The existence of this layer prevents warning that the demo layer is off but not used.
@@ -131,13 +132,16 @@ object GuideLetterStyleLayerColoringDemo : StyleSettingsDemo<Layer>(
     override fun styles() = buildList<Layer> {
         this += PRESET_LAYER.copy(coloring = LayerColoring.OFF, shape = LayerShape.TEXT)
         this += last().copy(coloring = LayerColoring.PLAIN)
-        this += last().copy(color1 = Color4f.fromSRGBHexString("#DCC382"))
-        this += last().copy(coloring = LayerColoring.GRADIENT, color2 = Color4f.fromSRGBHexString("#502D0D"))
+        this += last().copy(plainColor = Color4f.RED)
+        this += last().copy(
+            coloring = LayerColoring.GRADIENT,
+            gradientStops = persistentListOf(GradientStop(Color4f.RED, 0.0), GradientStop(Color4f.GREEN, 1.0))
+        )
         this += last().copy(gradientAngleDeg = 90.0)
-        this += last().copy(gradientExtentRfh = 2.0)
-        this += last().copy(gradientExtentRfh = 4.0)
-        this += last().copy(gradientShiftRfh = 0.5)
-        this += last().copy(gradientShiftRfh = 1.0)
+        this += last().copy(gradientExtentRfh = 6.0)
+        this += last().copy(gradientInterpolation = GradientInterpolation.SRGB)
+        this += last().copy(gradientInterpolation = GradientInterpolation.OKLAB)
+        this += last().copy(gradientStops = last().gradientStops.add(1, GradientStop(Color4f.WHITE, 0.5)))
         this += last().copy(gradientShiftRfh = 1.5)
     }
 
@@ -166,7 +170,7 @@ object GuideLetterStyleLayerShapeStripeDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) =
-        buildCredits(PRESET_LAYER.copy(color1 = inactiveColor, shape = LayerShape.TEXT), style)
+        buildCredits(PRESET_LAYER.copy(plainColor = inactiveColor, shape = LayerShape.TEXT), style)
 }
 
 
@@ -181,8 +185,8 @@ object GuideLetterStyleLayerShapeCloneDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) = buildCredits(
-        PRESET_LAYER.copy(name = l10n("project.LayerShape.TEXT"), color1 = inactiveColor, shape = LayerShape.TEXT),
-        customStripeLayer.copy(name = l10n("project.StripePreset.UNDERLINE"), color1 = inactiveColor),
+        PRESET_LAYER.copy(name = l10n("project.LayerShape.TEXT"), plainColor = inactiveColor, shape = LayerShape.TEXT),
+        customStripeLayer.copy(name = l10n("project.StripePreset.UNDERLINE"), plainColor = inactiveColor),
         style
     )
 }
@@ -200,7 +204,7 @@ object GuideLetterStyleLayerStripePresetDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) =
-        buildCredits(style, PRESET_LAYER.copy(color1 = inactiveColor, shape = LayerShape.TEXT))
+        buildCredits(style, PRESET_LAYER.copy(plainColor = inactiveColor, shape = LayerShape.TEXT))
 }
 
 
@@ -220,7 +224,7 @@ object GuideLetterStyleLayerStripeWidenDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) =
-        buildCredits(style, PRESET_LAYER.copy(color1 = inactiveColor, shape = LayerShape.TEXT))
+        buildCredits(style, PRESET_LAYER.copy(plainColor = inactiveColor, shape = LayerShape.TEXT))
 }
 
 
@@ -239,7 +243,7 @@ object GuideLetterStyleLayerStripeCornerDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) =
-        buildCredits(style, PRESET_LAYER.copy(color1 = inactiveColor, shape = LayerShape.TEXT))
+        buildCredits(style, PRESET_LAYER.copy(plainColor = inactiveColor, shape = LayerShape.TEXT))
 }
 
 
@@ -255,7 +259,7 @@ object GuideLetterStyleLayerStripeDashPatternDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) =
-        buildCredits(PRESET_LAYER.copy(color1 = inactiveColor, shape = LayerShape.TEXT), style)
+        buildCredits(PRESET_LAYER.copy(plainColor = inactiveColor, shape = LayerShape.TEXT), style)
 }
 
 
@@ -348,8 +352,8 @@ object GuideLetterStyleLayerAnchorCloneDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) = buildCredits(
-        PRESET_LAYER.copy(name = l10n("project.LayerShape.TEXT"), color1 = inactiveColor, shape = LayerShape.TEXT),
-        customThickerStripeLayer.copy(color1 = inactiveColor),
+        PRESET_LAYER.copy(name = l10n("project.LayerShape.TEXT"), plainColor = inactiveColor, shape = LayerShape.TEXT),
+        customThickerStripeLayer.copy(plainColor = inactiveColor),
         style
     )
 }
@@ -371,7 +375,7 @@ object GuideLetterStyleLayerClearingDemo : StyleSettingsDemo<Layer>(
     }
 
     override fun credits(style: Layer) = buildCredits(
-        PRESET_LAYER.copy(name = l10n("project.LayerShape.TEXT"), color1 = inactiveColor, shape = LayerShape.TEXT),
+        PRESET_LAYER.copy(name = l10n("project.LayerShape.TEXT"), plainColor = inactiveColor, shape = LayerShape.TEXT),
         style,
         neque = true
     )

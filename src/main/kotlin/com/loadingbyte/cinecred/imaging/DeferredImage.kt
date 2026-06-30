@@ -8,8 +8,9 @@ import org.apache.pdfbox.cos.*
 import org.apache.pdfbox.io.RandomAccessReadBuffer
 import org.apache.pdfbox.multipdf.LayerUtility
 import org.apache.pdfbox.pdmodel.*
-import org.apache.pdfbox.pdmodel.common.PDRange
 import org.apache.pdfbox.pdmodel.common.PDRectangle
+import org.apache.pdfbox.pdmodel.common.function.PDFunction
+import org.apache.pdfbox.pdmodel.common.function.PDFunctionType0
 import org.apache.pdfbox.pdmodel.common.function.PDFunctionType2
 import org.apache.pdfbox.pdmodel.font.PDType0Font
 import org.apache.pdfbox.pdmodel.graphics.color.PDColor
@@ -26,8 +27,7 @@ import org.apache.pdfbox.pdmodel.graphics.shading.PDShadingType2
 import org.apache.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState
 import org.apache.pdfbox.pdmodel.graphics.state.PDSoftMask
 import org.apache.pdfbox.util.Matrix
-import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_GRAY8
-import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_RGB24
+import org.bytedeco.ffmpeg.global.avutil.*
 import org.w3c.dom.Attr
 import org.w3c.dom.Element
 import org.w3c.dom.traversal.NodeFilter.SHOW_ELEMENT
@@ -39,6 +39,7 @@ import java.io.OutputStream
 import java.lang.Byte.toUnsignedInt
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout.JAVA_BYTE
+import java.nio.ByteBuffer
 import java.text.DecimalFormat
 import java.text.DecimalFormatSymbols
 import java.util.*
@@ -174,37 +175,81 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
         private fun Coat.isVisible(): Boolean = when (this) {
             is Coat.Plain -> color.a != 0f
-            is Coat.Gradient -> color1.a != 0f || color2.a != 0f
+            is Coat.Gradient -> stops.any { it.color.a != 0f }
         }
 
         private fun Coat.transform(tx: AffineTransform): Coat = when (this) {
             is Coat.Plain -> this
-            is Coat.Gradient -> Coat.Gradient(color1, color2, tx.transform(point1, null), tx.transform(point2, null))
+            is Coat.Gradient ->
+                Coat.Gradient(tx.transform(point1, null), tx.transform(point2, null), stops, interpolation)
         }
 
         private fun Coat.toShader() = when (this) {
             is Coat.Plain -> Canvas.Shader.Solid(color)
-            // We interpolate Gradients in the sRGB color space instead of a better alternative (like linear RGB or
-            // Oklab) for a couple of reasons:
-            //   - Gradient interpolation in sRGB is pretty much the default at this point, for better or for worse.
-            //     Artists expect it when they specify a gradient.
-            //   - Implementing a gradient in linear RGB in a PDF or SVG file is surprisingly difficult. While it may be
-            //     possible for PDFs, it seems outright impossible at this point in SVGs; even though the standards are
-            //     in place, it's not supported by any browser or viewer.
-            //   - Apart from the famous red-to-green case, gradients in sRGB actually often look superior to those
-            //     interpolated in linear RGB. This is because sRGB's transfer characteristics kind of model the human
-            //     perception of light intensity, so gradients look more perceptually uniform. For examples, see:
-            //     https://aras-p.info/blog/2021/11/29/Gradients-in-linear-space-arent-better/
-            //   - Still, Oklab seems to be the future of gradient interpolation (i.e., Photoshop already defaults
-            //     to it), so maybe we'll switch to it too.
-            is Coat.Gradient -> Canvas.Shader.LinearGradient(point1, point2, listOf(color1, color2))
+            is Coat.Gradient -> Canvas.Shader.LinearGradient(
+                point1, point2, stops.map { it.color }, stops.mapToDoubleArray { it.position }, interpolation
+            )
         }
+
+        private fun Coat.Gradient.clampAndSubdivide(colorSpace: ColorSpace, grid: Boolean): List<Coat.Gradient.Stop> {
+            val minPos = stops.first().position
+            val maxPos = stops.last().position
+
+            val n = 19
+            val spec = Bitmap.Spec(Resolution(n, 1), Canvas.compatibleRepresentation(colorSpace))
+            check(spec.representation.pixelFormat.code == AV_PIX_FMT_RGBAF32)
+            val subdivArr: FloatArray
+            Bitmap.allocate(spec).use { bitmap ->
+                Canvas.forBitmap(bitmap.zero()).use { canvas ->
+                    val shader = Canvas.Shader.LinearGradient(
+                        // We checked that placing the endpoints like this produces perfectly linearly spaced stops.
+                        point1 = Point2D.Double(-0.5, 0.0),
+                        point2 = Point2D.Double(n + 0.5, 0.0),
+                        // Interpolate the alpha separately so that we don't have to deal with premultiplication.
+                        colors = stops.map { it.color.copy(a = 1f) },
+                        // Remap the positions s.t. the gradient uses the entire bitmap.
+                        pos = stops.mapToDoubleArray { (it.position - minPos) / (maxPos - minPos) },
+                        interpolation
+                    )
+                    canvas.fillShape(Rectangle(n, 1), shader)
+                }
+                subdivArr = bitmap.getF(n * 4)
+            }
+
+            val out = mutableListOf<Coat.Gradient.Stop>()
+            for ((stopIdx, stop) in stops.withIndex()) {
+                if (stopIdx != 0) {
+                    val prevStop = stops[stopIdx - 1]
+                    val pad = if (grid) 0.0 else 0.01
+                    for (subdivIdx in max(0, ceil(subdivIdx(prevStop.position, minPos, maxPos, pad, n)).toInt())
+                            ..min(n - 1, floor(subdivIdx(stop.position, minPos, maxPos, -pad, n)).toInt())) {
+                        val position = (subdivIdx + 1) / (n + 1).toDouble() * (maxPos - minPos) + minPos
+                        if (out.last().position == position)
+                            continue
+                        val t = ((position - prevStop.position) / (stop.position - prevStop.position)).toFloat()
+                        val alpha = (1f - t) * prevStop.color.a + t * stop.color.a
+                        val i = subdivIdx * 4
+                        val color = Color4f(subdivArr[i], subdivArr[i + 1], subdivArr[i + 2], alpha, colorSpace)
+                        out.add(Coat.Gradient.Stop(color, position))
+                    }
+                }
+                if (!grid || stopIdx == 0 || stopIdx == stops.lastIndex)
+                    out.add(stop.copy(color = stop.color.convert(colorSpace, clamp = true)))
+            }
+            return out
+        }
+
+        private fun subdivIdx(pos: Double, minPos: Double, maxPos: Double, pad: Double, n: Int): Double =
+            ((pos - minPos) / (maxPos - minPos) + pad) * (n + 1) - 1.0
 
         private fun MaterializationBackend.materializeMissingMedia(width: Double, height: Double, tr: AffineTransform) {
             val shape = Rectangle2D.Double(0.0, 0.0, width, height).transformedBy(tr)
             val coat = Coat.Gradient(
-                Color4f.MISSING_MEDIA_TOP, Color4f.MISSING_MEDIA_BOT,
-                Point2D.Double(0.0, 0.0), Point2D.Double(0.0, height)
+                Point2D.Double(0.0, 0.0), Point2D.Double(0.0, height),
+                listOf(
+                    Coat.Gradient.Stop(Color4f.MISSING_MEDIA_TOP, 0.0),
+                    Coat.Gradient.Stop(Color4f.MISSING_MEDIA_BOT, 1.0)
+                )
             ).transform(tr)
             materializeShape(shape, coat, fill = true, dash = false, blurRadius = 0.0)
         }
@@ -218,8 +263,28 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
 
     sealed interface Coat {
+
         class Plain(val color: Color4f) : Coat
-        class Gradient(val color1: Color4f, val color2: Color4f, val point1: Point2D, val point2: Point2D) : Coat
+
+        class Gradient(
+            val point1: Point2D,
+            val point2: Point2D,
+            stops: List<Stop>,
+            val interpolation: Canvas.GradientInterpolation = Canvas.GradientInterpolation.OKLAB
+        ) : Coat {
+
+            data class Stop(val color: Color4f, val position: Double)
+
+            val stops: List<Stop> = stops.sortedBy { it.position }
+
+            init {
+                require(stops.size >= 2)
+                for (idx in 1..<stops.size)
+                    require(stops[idx - 1].position <= stops[idx].position)
+            }
+
+        }
+
     }
 
 
@@ -783,7 +848,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         private val picElementIds = HashMap<Picture, String>()
         private var clipPathCtr = 0
         private var gradientCtr = 0
-        private val gradientIds = HashMap<Pair<Color4f, Color4f>, String>()
+        private val gradientIds = HashMap<Pair<List<Coat.Gradient.Stop>, Canvas.GradientInterpolation>, String>()
         private val blurFilterIds = HashMap<Double, String>()
 
         override fun materializeShape(shape: Shape, coat: Coat, fill: Boolean, dash: Boolean, blurRadius: Double) {
@@ -881,7 +946,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 is Coat.Gradient -> {
                     val gradientId = "gradient${++gradientCtr}"
                     coatedElement.setAttribute(if (fill) "fill" else "stroke", "url(#$gradientId)")
-                    val key = Pair(coat.color1, coat.color2)
+                    val key = Pair(coat.stops, coat.interpolation)
                     defs.appendChild(makeLinearGradient(coat, gradientIds[key]).apply {
                         setAttribute("id", gradientId)
                     })
@@ -968,20 +1033,22 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             linearGradient.setAttribute("y2", F.format(coat.point2.y))
             if (refStopsFromId != null)
                 linearGradient.setAttributeNS(XLINK_NS_URI, "xlink:href", "#$refStopsFromId")
-            else {
-                linearGradient.appendChild(makeGradientStop("0", coat.color1))
-                linearGradient.appendChild(makeGradientStop("1", coat.color2))
+            val stops = when (coat.interpolation) {
+                Canvas.GradientInterpolation.SRGB -> if (refStopsFromId != null) null else coat.stops
+                Canvas.GradientInterpolation.OKLAB -> {
+                    linearGradient.setAttribute("color-interpolation", "linearRGB")
+                    if (refStopsFromId != null) null else coat.clampAndSubdivide(ColorSpace.SRGB, grid = false)
+                }
+            }
+            stops?.forEach { stop ->
+                linearGradient.appendChild(doc.createElementNS(SVG_NS_URI, "stop").apply {
+                    setAttribute("offset", F.format(stop.position))
+                    setAttribute("stop-color", stop.color.toSRGBHexString())
+                    if (stop.color.a != 1f)
+                        setAttribute("stop-opacity", F.format(stop.color.a.toDouble()))
+                })
             }
             return linearGradient
-        }
-
-        private fun makeGradientStop(offset: String, color: Color4f): Element {
-            return doc.createElementNS(SVG_NS_URI, "stop").apply {
-                setAttribute("offset", offset)
-                setAttribute("stop-color", color.toSRGBHexString())
-                if (color.a != 1f)
-                    setAttribute("stop-opacity", F.format(color.a.toDouble()))
-            }
         }
 
         private fun makePictureElement(pic: Picture, picElementId: String): Element {
@@ -1275,9 +1342,10 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                     // Notice that we do not cache the COS objects we create for gradients. That is because pattern
                     // coordinates are always global to the page irrespective of any user matrix, so we'd need a new
                     // pattern for every place where we want to use it anyway.
-                    if (coat.color1.a != 1f && coat.color1.a == coat.color2.a)
-                        cs.setGraphicsStateParameters(makeExtGState(fill, coat.color1.a))
-                    else if (coat.color1.a != 1f || coat.color2.a != 1f) {
+                    val a0 = coat.stops[0].color.a
+                    if (a0 != 1f && coat.stops.all { it.color.a == a0 })
+                        cs.setGraphicsStateParameters(makeExtGState(fill, a0))
+                    else if (coat.stops.any { it.color.a != 1f }) {
                         // First construct a form XObject.
                         val bboxW = bbox.width.toFloat()
                         val bboxH = bbox.height.toFloat()
@@ -1332,14 +1400,58 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             }
 
         private fun makeShadingPattern(coat: Coat.Gradient, forAlpha: Boolean): PDShadingPattern {
-            fun makeColorArray(color: Color4f) = COSArray().apply {
-                if (forAlpha)
-                    add(COSFloat(color.a))
+            val interpolationTransfer = when (coat.interpolation) {
+                Canvas.GradientInterpolation.SRGB -> ColorSpace.Transfer.SRGB
+                Canvas.GradientInterpolation.OKLAB -> ColorSpace.Transfer.LINEAR
+            }
+            val interpolationColorSpace = ColorSpace.of(tracker.masterColorSpace.primaries, interpolationTransfer)
+
+            val key = Pair(coat.stops, if (forAlpha) null else coat.interpolation)
+            val pdFunc = tracker.gradientFuncs.computeIfAbsent(key) {
+                val minPos = coat.stops.first().position
+                val maxPos = coat.stops.last().position
+                val domain = COSArray(listOf(COSFloat(minPos.toFloat()), COSFloat(maxPos.toFloat())))
+                if ((forAlpha || coat.interpolation == Canvas.GradientInterpolation.SRGB) &&
+                    coat.stops.size == 2 && minPos == 0.0 && maxPos == 1.0
+                )
+                    PDFunctionType2(COSDictionary().apply {
+                        setInt(COSName.FUNCTION_TYPE, 2)
+                        setItem(COSName.DOMAIN, domain)
+                        setInt(COSName.N, 1)
+                        for ((idx, stop) in coat.stops.withIndex()) {
+                            val arr = COSArray()
+                            if (forAlpha)
+                                arr.add(COSFloat(stop.color.a))
+                            else {
+                                val c = stop.color.convert(interpolationColorSpace, clamp = true)
+                                arr.add(COSFloat(c.r))
+                                arr.add(COSFloat(c.g))
+                                arr.add(COSFloat(c.b))
+                            }
+                            setItem(if (idx == 0) COSName.C0 else COSName.C1, arr)
+                        }
+                    })
                 else {
-                    val c = color.convert(tracker.masterColorSpace, clamp = true)
-                    add(COSFloat(c.r))
-                    add(COSFloat(c.g))
-                    add(COSFloat(c.b))
+                    val stops = coat.clampAndSubdivide(interpolationColorSpace, grid = true)
+                    val buf = ByteBuffer.allocate(stops.size * 2 * if (forAlpha) 1 else 3)
+                    for (stop in stops)
+                        if (forAlpha)
+                            buf.putShort(encodeAsShort(stop.color.a))
+                        else {
+                            val c = stop.color.convert(interpolationColorSpace, clamp = true)
+                            buf.putShort(encodeAsShort(c.r))
+                            buf.putShort(encodeAsShort(c.g))
+                            buf.putShort(encodeAsShort(c.b))
+                        }
+                    PDFunctionType0(COSStream().apply {
+                        setInt(COSName.FUNCTION_TYPE, 0)
+                        setItem(COSName.DOMAIN, domain)
+                        setItem(COSName.RANGE, COSArray(List(if (forAlpha) 2 else 6) { COSFloat((it % 2).toFloat()) }))
+                        setItem(COSName.SIZE, COSArray(listOf(COSInteger.get(stops.size.toLong()))))
+                        // Note: We can't use 32bps because PDFBox itself can't read that, and so may other PDF viewers.
+                        setItem(COSName.BITS_PER_SAMPLE, COSInteger.get(16.toLong()))
+                        createOutputStream().use { it.write(buf.array()) }
+                    })
                 }
             }
 
@@ -1349,17 +1461,10 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 add(COSFloat(coat.point2.x.toFloat()))
                 add(COSFloat(csHeight - coat.point2.y.toFloat()))
             }
-            val pdFunc = PDFunctionType2(COSDictionary().apply {
-                setInt(COSName.FUNCTION_TYPE, 2)
-                setInt(COSName.N, 1)
-                setItem(COSName.DOMAIN, PDRange())
-                setItem(COSName.C0, makeColorArray(coat.color1))
-                setItem(COSName.C1, makeColorArray(coat.color2))
-            })
             val pdShading = PDShadingType2(COSDictionary()).apply {
                 shadingType = PDShading.SHADING_TYPE2
                 extend = COSArray().apply { add(COSBoolean.TRUE); add(COSBoolean.TRUE) }
-                colorSpace = if (forAlpha) PDDeviceGray.INSTANCE else tracker.obtainICCBasedCS(tracker.masterColorSpace)
+                colorSpace = if (forAlpha) PDDeviceGray.INSTANCE else tracker.obtainICCBasedCS(interpolationColorSpace)
                 coords = cosCoords
                 function = pdFunc
             }
@@ -1368,6 +1473,8 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 shading = pdShading
             }
         }
+
+        private fun encodeAsShort(x: Float) = Math.round(x.coerceIn(0f, 1f) * 65535f).toShort()
 
         private fun Any /* PD(Page|Form)ContentStream */.setPattern(patternName: COSName, stroking: Boolean) {
             val opCS = if (stroking) OperatorName.STROKING_COLORSPACE else OperatorName.NON_STROKING_COLORSPACE
@@ -1396,6 +1503,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         }
 
         val extGStates = HashMap<ExtGStateKey, PDExtendedGraphicsState>()
+        val gradientFuncs = HashMap<Pair<List<Coat.Gradient.Stop>, Canvas.GradientInterpolation?>, PDFunction>()
         val pdImages = HashMap<Picture, PDImageXObject>()
         val pdImageResolutions = HashMap<Picture, MutableList<Resolution>>()
         val pdForms = HashMap<Picture.Vector, PDFormXObject>()
