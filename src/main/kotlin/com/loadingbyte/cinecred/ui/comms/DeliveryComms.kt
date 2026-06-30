@@ -49,8 +49,7 @@ interface DeliveryCtrlComms {
 interface DeliveryViewComms {
 
     fun setSpecs(specs: DeliverySpecs) {}
-    fun clearIssues() {}
-    fun addIssue(severity: Severity, msg: String) {}
+    fun setIssues(issues: List<Pair<Severity, String>>) {}
     fun setCanAddToRenderQueue(can: Boolean) {}
     fun setRendering(rendering: Boolean) {}
 

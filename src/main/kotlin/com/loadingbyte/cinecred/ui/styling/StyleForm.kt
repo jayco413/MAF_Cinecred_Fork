@@ -616,7 +616,7 @@ class StyleForm<S : Style>(
         val remaining = facets.toMutableList()
         valueWidgets[setting]!!.applyConfigurator { widget ->
             if (widget is FontFeatureWidget) {
-                widget.facets = remaining
+                widget.facets = remaining.toMutableList()  // Pass in a copy because we're modifying the list.
                 val tag = widget.value.tag
                 remaining.removeIf { it.tag == tag }
             }

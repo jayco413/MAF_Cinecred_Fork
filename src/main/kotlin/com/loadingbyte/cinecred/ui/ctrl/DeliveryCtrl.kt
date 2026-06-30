@@ -197,12 +197,11 @@ class DeliveryCtrl(private val projectCtrl: ProjectController) : DeliveryCtrlCom
 
         for (view in views) view.setSpecs(specs)
 
-        // Clear all previous issues and create new ones if applicable.
-        for (view in views) view.clearIssues()
-        var err = false
-        fun info(msg: String) = views.forEach { view -> view.addIssue(Severity.INFO, msg) }
-        fun warn(msg: String) = views.forEach { view -> view.addIssue(Severity.WARN, msg) }
-        fun error(msg: String) = views.forEach { view -> view.addIssue(Severity.ERROR, msg) }.also { err = true }
+        // Collect and then set the issues.
+        val issues = mutableListOf<Pair<Severity, String>>()
+        fun info(msg: String) = issues.add(Pair(Severity.INFO, msg))
+        fun warn(msg: String) = issues.add(Pair(Severity.WARN, msg))
+        fun error(msg: String) = issues.add(Pair(Severity.ERROR, msg))
         // Reassure the user that scaling means natively rendering in the new resolution.
         if (format.isRaster && spatialScaling != 1.0)
             info(l10n("ui.delivery.issues.nativeScaling", specs.optResolution!!))
@@ -236,8 +235,9 @@ class DeliveryCtrl(private val projectCtrl: ProjectController) : DeliveryCtrlCom
                 .any { stage -> stage.style.behavior == PageBehavior.SCROLL }
         )
             warn(l10n("ui.delivery.issues.poppingScrollPages"))
+        for (view in views) view.setIssues(issues)
 
-        val can = !err && isErrorFree
+        val can = issues.none { it.first == Severity.ERROR } && isErrorFree
         for (view in views) view.setCanAddToRenderQueue(can)
     }
 

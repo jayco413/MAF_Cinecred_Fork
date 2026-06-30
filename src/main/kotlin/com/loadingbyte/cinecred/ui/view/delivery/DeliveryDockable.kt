@@ -89,15 +89,16 @@ class DeliveryDockable(deliveryCtrl: DeliveryCtrlComms) :
         specsLabels[3].text = specs.optScrollSpeeds ?: "\u2014"
     }
 
-    override fun clearIssues() {
-        while (specsAndIssuesPanel.componentCount > 1)
-            specsAndIssuesPanel.remove(1)
-        specsAndIssuesPanel.revalidate()
-    }
-
-    override fun addIssue(severity: Severity, msg: String) {
-        specsAndIssuesPanel.add(JLabel(msg, severity.icon, JLabel.LEADING))
-        specsAndIssuesPanel.revalidate()
+    override fun setIssues(issues: List<Pair<Severity, String>>) {
+        while (specsAndIssuesPanel.componentCount > 1 + issues.size)
+            specsAndIssuesPanel.remove(specsAndIssuesPanel.componentCount - 1)
+        while (specsAndIssuesPanel.componentCount < 1 + issues.size)
+            specsAndIssuesPanel.add(JLabel("", Severity.INFO.icon, JLabel.LEADING))
+        for ((idx, issue) in issues.withIndex())
+            (specsAndIssuesPanel.getComponent(1 + idx) as JLabel).apply {
+                icon = issue.first.icon
+                text = issue.second
+            }
     }
 
     override fun setCanAddToRenderQueue(can: Boolean) {
