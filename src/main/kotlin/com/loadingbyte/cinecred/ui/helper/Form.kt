@@ -8,10 +8,10 @@ import java.awt.Rectangle
 import javax.swing.*
 
 
-open class Form(insets: String, noticeArea: Boolean, private val constLabelWidth: Boolean) : JPanel(
+open class Form(insets: String, noticeArea: Boolean, constLabelWidth: Boolean) : JPanel(
     MigLayout(
         "hidemode 3, insets $insets",
-        "[" + (if (constLabelWidth) "$LABEL_WIDTH_CONSTRAINT!, " else "") + "align right][grow]" +
+        (if (constLabelWidth) "[$LABEL_WIDTH_CONSTRAINT!" else "[::$LABEL_WIDTH_CONSTRAINT") + ", align right][grow]" +
                 if (noticeArea) "150[]" else ""
     )
 ), Scrollable {
@@ -261,9 +261,7 @@ open class Form(insets: String, noticeArea: Boolean, private val constLabelWidth
     }
 
     private fun addLabelComp(labelComp: JLabel, labelId: String, invisibleSpace: Boolean) {
-        val labelConstraints = mutableListOf("id $labelId")
-        if (constLabelWidth)
-            labelConstraints.add("wmax $LABEL_WIDTH_CONSTRAINT")
+        val labelConstraints = mutableListOf("id $labelId, wmax $LABEL_WIDTH_CONSTRAINT")
         if (componentCount != 0 /* is not the first widget */)
             labelConstraints.add("newline")
         if (invisibleSpace)

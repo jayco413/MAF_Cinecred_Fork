@@ -1879,7 +1879,7 @@ class FontFeatureWidget : Form.AbstractWidget<FontFeature>() {
     }
 
     override val components = listOf<JComponent>(cb, JLabel("="), scrubber)
-    override val constraints = listOf("hmin $STD_HEIGHT, wmax 200", "", "hmin $STD_HEIGHT, ${WidthSpec.TINIER.mig}")
+    override val constraints = listOf("hmin $STD_HEIGHT, wmax 150", "", "hmin $STD_HEIGHT, ${WidthSpec.TINIER.mig}")
 
     var facets: List<Font.Facet> = listOf()
         set(items) {
