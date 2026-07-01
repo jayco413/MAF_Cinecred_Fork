@@ -382,7 +382,7 @@ private object JULFormatter : Formatter() {
     override fun format(record: LogRecord): String {
         val millis = record.millis - startMillis
         val threadName = getThreadByID(record.longThreadID)?.name ?: "???"
-        val exc = record.thrown?.stackTraceToString() ?: ""
+        val exc = record.thrown?.let(::formatThrowable) ?: ""
         val msg = formatMessage(record)
         return "$millis [$threadName] ${record.level} ${record.loggerName} - $msg\n$exc"
     }
@@ -398,6 +398,18 @@ private object JULFormatter : Formatter() {
             allThreads = arrayOfNulls(allThreads.size * 2)
         // Find the thread we are looking for.
         return allThreads.find { it != null && it.threadId() == threadID }
+    }
+
+    private fun formatThrowable(t: Throwable): String {
+        val stacktrace = t.stackTraceToString()
+        var t = t
+        while (true) t = t.cause ?: break
+        val inner = when (t) {
+            is ch.rabanti.nanoxlsx4j.exceptions.FormatException -> t.innerException
+            is ch.rabanti.nanoxlsx4j.exceptions.IOException -> t.innerException
+            else -> return stacktrace
+        }
+        return "${stacktrace}Inner exception: ${formatThrowable(inner)}"
     }
 }
 

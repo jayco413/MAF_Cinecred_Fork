@@ -453,7 +453,6 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
             } catch (_: InterruptedException) {
                 // Let the thread come to a stop.
             } catch (e: Exception) {
-                val e = (e as? ch.rabanti.nanoxlsx4j.exceptions.IOException)?.innerException ?: e
                 LOGGER.error("Could not create a new project in '{}'.", projectDir, e)
                 SwingUtilities.invokeLater { welcomeView.projects_createWait_setError(e.userNotification) }
             }
