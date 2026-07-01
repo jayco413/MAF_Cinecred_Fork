@@ -353,8 +353,8 @@ fun HttpRequest.Builder.basicAuth(username: String, password: String): HttpReque
 
 
 val TRANSLATED_LOCALES: List<Locale> =
-    useResourceStream("/locales") { it.reader().readAllLines() }
-        .filter(String::isNotEmpty).sorted().map(Locale::forLanguageTag)
+    useResourceStream("/translators.properties") { Properties().apply { load(it.reader()) } }
+        .keys.sortedBy { it as String }.map { Locale.forLanguageTag(it as String) }
 
 val FALLBACK_TRANSLATED_LOCALE: Locale = Locale.ENGLISH
 

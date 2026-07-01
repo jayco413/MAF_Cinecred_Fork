@@ -36,7 +36,8 @@ val addOpens = javaProperties.getProperty("addOpens").split(' ')
 val splashScreen = javaProperties.getProperty("splashScreen")!!
 val javaOptions = javaProperties.getProperty("javaOptions")!!
 
-val locales = listOf("cs", "de", "en", "es", "fr", "zh-CN").map(Locale::forLanguageTag)
+val locales = Properties().apply { srcMainResources.file("translators.properties").asFile.reader().use(::load) }
+    .keys.sortedBy { it as String }.map { Locale.forLanguageTag(it as String) }
 val url = "https://cinecred.com"
 val vendor = "Felix Mujkanovic"
 val email = "felix@cinecred.com"
@@ -150,11 +151,6 @@ val writeVersionFile by tasks.registering(WriteFile::class) {
     outputFile = layout.buildDirectory.file("generated/version/version")
 }
 
-val writeLocalesFile by tasks.registering(WriteFile::class) {
-    text = locales.joinToString("\n", transform = Locale::toLanguageTag)
-    outputFile = layout.buildDirectory.file("generated/locales/locales")
-}
-
 val writeCopyrightFile by tasks.registering(WriteFile::class) {
     text = copyright
     outputFile = layout.buildDirectory.file("generated/copyright/copyright")
@@ -177,7 +173,6 @@ val collectPOMLicenses by tasks.registering(CollectPOMLicenses::class) {
 
 tasks.processResources {
     from(writeVersionFile)
-    from(writeLocalesFile)
     from(writeCopyrightFile)
     from(drawSplash)
     from("CHANGELOG.md")

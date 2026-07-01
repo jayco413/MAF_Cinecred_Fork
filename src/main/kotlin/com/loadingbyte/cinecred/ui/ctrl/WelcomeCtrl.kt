@@ -764,6 +764,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         private fun aboutHtml(): String {
             val translators = useResourceStream("/translators.properties") { Properties().apply { load(it.reader()) } }
                 .entries
+                .filter { (_, people) -> (people as String).isNotBlank() }
                 .map { (tag, people) -> Locale.forLanguageTag(tag as String).displayName to people }
                 .sortedWithCollator(caseInsensitiveCollator()) { (lang, _) -> lang }
                 .joinToString("  \u2022  ") { (lang, people) ->
