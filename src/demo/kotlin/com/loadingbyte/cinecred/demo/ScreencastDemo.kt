@@ -24,6 +24,7 @@ import java.awt.image.BufferedImage
 import java.lang.Thread.sleep
 import java.nio.file.Path
 import java.text.AttributedString
+import java.text.MessageFormat
 import javax.swing.*
 import javax.swing.text.JTextComponent
 import kotlin.math.ceil
@@ -344,8 +345,10 @@ class Screencast(
         }
     }
 
-    fun caption(l10nKey: String, holdAction: (() -> Unit)? = null) {
-        val text = l10nDemo(l10nKey)
+    fun caption(l10nKey: String, vararg args: String, holdAction: (() -> Unit)? = null) {
+        var text = l10nDemo(l10nKey)
+        if (args.isNotEmpty())
+            text = MessageFormat(text).format(args)
         val attrs = mapOf(
             TextAttribute.FONT to CAPTION_FONT,
             TextAttribute.KERNING to TextAttribute.KERNING_ON,

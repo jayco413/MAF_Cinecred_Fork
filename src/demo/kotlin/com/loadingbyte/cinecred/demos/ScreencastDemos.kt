@@ -2,6 +2,7 @@ package com.loadingbyte.cinecred.demos
 
 import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.common.l10nKeyword
+import com.loadingbyte.cinecred.common.l10nQuoted
 import com.loadingbyte.cinecred.delivery.ImageSequenceRenderJob
 import com.loadingbyte.cinecred.demo.FileBrowserVirtualWindow
 import com.loadingbyte.cinecred.demo.ScreencastDemo
@@ -11,6 +12,7 @@ import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.projectio.Spreadsheet
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
 import com.loadingbyte.cinecred.projectio.XlsxFormat
+import com.loadingbyte.cinecred.ui.Shortcut
 import com.loadingbyte.cinecred.ui.helper.BUNDLED_FAMILIES
 import kotlinx.collections.immutable.persistentListOf
 import java.awt.Dimension
@@ -45,7 +47,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.mouseTo(welcomeWin.desktopPosOf(projectsPanel.leakedStartPanel))
         dt.mouseUp()
         sc.hold()
-        sc.caption("screencast.caption.create.config")
+        sc.caption("screencast.caption.create.config", "XLSX")
         sc.mouseTo(welcomeWin.desktopPosOf(projectsPanel.leakedCreCfgFormatWidget.components[0]))
         sc.click(4 * hold)
         sc.click()
@@ -90,7 +92,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.click()
         sc.mouseTo(prjWin.desktopPosOf(plyCtl.leakedPlayButton))
         sc.click { edt { plyCtl.leakedFrameSlider.value += 1; plyCtl.setPlaybackDirection(1) } }
-        sc.caption("screencast.caption.video.play") {
+        sc.caption("screencast.caption.video.play", Shortcut.PLAYBACK_PLAY.hint) {
             edt { plyCtl.leakedFrameSlider.value += 1; plyCtl.setPlaybackDirection(1) }
         }
         sc.click { edt { plyCtl.leakedFrameSlider.value += 2; plyCtl.setPlaybackDirection(1) } }
@@ -138,8 +140,8 @@ object ScreencastScreencastDemo : ScreencastDemo(
         dt.dragWindow(fileBrowserWin)
         sc.mouseTo(Point(dt.width * 3 / 4, (dt.height - fileBrowserWin.size.height) / 2))
         dt.dropWindow()
-        sc.caption("screencast.caption.files.list1")
-        sc.caption("screencast.caption.files.list2")
+        sc.caption("screencast.caption.files.list1", "XLSX", l10nQuoted("Logos"))
+        sc.caption("screencast.caption.files.list2", l10nQuoted("Styling.toml"))
         sc.caption("screencast.caption.files.credits")
         sc.mouseTo(fileBrowserWin.desktopPosOfFile("${projectDir.name}.xlsx"))
         fileBrowserWin.selectedFileName = "${projectDir.name}.xlsx"
@@ -190,7 +192,10 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.caption("screencast.caption.assign.content")
         sc.caption("screencast.caption.assign.block")
         sc.mouseTo(spreadsheetEditorWin.desktopPosOfCell(32, 1))
-        sc.caption("screencast.caption.assign.assist")
+        sc.caption(
+            "screencast.caption.assign.assist",
+            l10nQuoted("Charly"), l10nQuoted("Luke"), l10nQuoted("2nd Assistent Camera")
+        )
         sc.caption("screencast.caption.assign.guides1")
         sc.caption("screencast.caption.assign.guides2")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedGuidesButton))
@@ -205,7 +210,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.type(spreadsheetEditorWin, 30, 4, l10n("project.template.contentStyleBullets"), 4 * hold)
         sc.type(spreadsheetEditorWin, 27, 4, l10n("project.template.contentStyleBlurb"), 4 * hold)
         sc.mouseTo(prjWin.desktopPosOf(logDok.leakedLogTable))
-        sc.caption("screencast.caption.assign.heads")
+        sc.caption("screencast.caption.assign.heads", l10nQuoted(l10n("project.template.contentStyleBlurb")))
         sc.type(spreadsheetEditorWin, 27, 4, l10n("project.template.contentStyleGutter"))
         sc.type(spreadsheetEditorWin, 30, 4, "")
         sc.type(spreadsheetEditorWin, 35, 4, "")
@@ -287,7 +292,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.caption("screencast.caption.gutter.head")
         sc.demonstrateSetting(prjWin, styContForm, ContentStyle::hasHead.st(), 0, 0)
 
-        sc.caption("screencast.caption.bullets.open")
+        sc.caption("screencast.caption.bullets.open", l10nQuoted(l10n("project.BodyLayout.FLOW")))
         sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y += 80 })
         dt.mouseDown()
         sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y -= 80 })
@@ -303,7 +308,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.type(prjWin, styFlowSep, "\u2013", 4 * hold)
         sc.type(prjWin, styFlowSep, "\u2022")
 
-        sc.caption("screencast.caption.blurb.open")
+        sc.caption("screencast.caption.blurb.open", l10nQuoted(l10n("project.BodyLayout.PARAGRAPHS")))
         sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y += 300 })
         dt.mouseDown()
         sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y -= 300 })
@@ -336,7 +341,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.click()
         sc.caption("screencast.caption.letter.caps")
         sc.demonstrateSetting(prjWin, styLetrForm, LetterStyle::uppercase.st(), 0)
-        sc.caption("screencast.caption.letter.except")
+        sc.caption("screencast.caption.letter.except", l10nQuoted("de"))
         sc.demonstrateSetting(prjWin, styLetrForm, LetterStyle::useUppercaseExceptions.st(), 0, 0)
         sc.mouseTo(prjWin.desktopPosOfSetting(styLetrForm, LetterStyle::uppercase.st()))
         sc.click()
@@ -363,7 +368,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.hold()
         sc.caption("screencast.caption.letter.advanced")
 
-        sc.caption("screencast.caption.picture.insert")
+        sc.caption("screencast.caption.picture.insert", l10nQuoted("Cinecred H.svg"))
         sc.mouseTo(prjWin.desktopPosOfTab(preDok.leakedPageTabs, 2))
         sc.click()
         sc.caption("screencast.caption.picture.cell")
@@ -379,7 +384,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.mouseTo(prjWin.desktopPosOfSetting(styPictForm, PictureStyle::heightPx.st(), 0))
         sc.click()
         sc.type(prjWin, styPicHeight, "120", 2 * hold)
-        sc.caption("screencast.caption.picture.videos")
+        sc.caption("screencast.caption.picture.videos", l10nQuoted("{{${l10nKeyword("video")}}}"))
         sc.hold(4 * hold)
 
         edt { KeyboardFocusManager.getCurrentKeyboardFocusManager().clearFocusOwner() }
