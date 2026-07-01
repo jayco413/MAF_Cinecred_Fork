@@ -41,7 +41,6 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.io.path.notExists
 import kotlin.math.max
-import kotlin.math.roundToInt
 
 
 object GoogleService : Service {
@@ -380,31 +379,23 @@ object GoogleService : Service {
                         .setItalic(rowLook.italic)
                     cellFormat
                         .setTextFormat(textFormat)
-                        .setWrapStrategy(if (rowLook.wrap) "WRAP" else null)
-                        .setBorders(if (rowLook.borderBottom) Borders().setBottom(Border().setStyle("SOLID")) else null)
                 }
                 val cellData = mutableListOf<CellData>()
                 for (col in 0..<spreadsheet.numColumns)
                     cellData += CellData()
                         .setUserEnteredFormat(cellFormat)
                         .setUserEnteredValue(record?.let { ExtendedValue().setStringValue(it.cells[col]) })
+                        .apply { look.comments.find { it.row == row && it.col == col }?.let { setNote(it.text) } }
                 rowData += RowData().setValues(cellData)
             }
             val gridData = GridData().setRowData(rowData)
-            if (look.rowLooks.isNotEmpty())
-                gridData.rowMetadata = buildList {
-                    for (row in 0..look.rowLooks.asSequence().filter { it.value.height != -1 }.maxOf { it.key }) {
-                        val rowLook = look.rowLooks[row]
-                        val pixelHeight = if (rowLook == null || rowLook.height == -1) null else
-                            (rowLook.height * 3.75).roundToInt()
-                        add(DimensionProperties().setPixelSize(pixelHeight))
-                    }
-                }
             if (look.colWidths.isNotEmpty())
                 gridData.columnMetadata = look.colWidths.map { DimensionProperties().setPixelSize(it * 4) }
             val gridProps = GridProperties()
                 .setRowCount(rowData.size)
                 .setColumnCount(spreadsheet.numColumns)
+            if (look.frozenRows > 0)
+                gridProps.setFrozenRowCount(look.frozenRows)
             val sheet = Sheet()
                 .setProperties(SheetProperties().setTitle(spreadsheet.name).setGridProperties(gridProps))
                 .setData(listOf(gridData))

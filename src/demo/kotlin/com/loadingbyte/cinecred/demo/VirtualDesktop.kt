@@ -654,8 +654,7 @@ class FileBrowserVirtualWindow : FakeVirtualWindow() {
 
 class SpreadsheetEditorVirtualWindow(
     private val file: Path,
-    private val format: SpreadsheetFormat,
-    skipRows: Int = 0
+    private val format: SpreadsheetFormat
 ) : FakeVirtualWindow() {
 
     companion object {
@@ -672,7 +671,7 @@ class SpreadsheetEditorVirtualWindow(
     init {
         val spreadsheet = format.read(file, "").single()
         sheetName = spreadsheet.name
-        matrix = spreadsheet.drop(skipRows).map { it.cells.toMutableList() }
+        matrix = spreadsheet.records.map { it.cells.toMutableList() }
     }
 
     var rowOffset = 0

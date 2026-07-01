@@ -78,20 +78,20 @@ Content-Type: multipart/mixed; boundary=SocialCalcSpreadsheetControlSave
 Content-type: text/plain; charset=UTF-8
 
 version:1.0
-part:sheet
---SocialCalcSpreadsheetControlSave
-Content-type: text/plain; charset=UTF-8
-
-version:1.5"""
+part:sheet"""
             )
+            if (look.frozenRows > 0)
+                body.appendLine("part:edit")
+            body.appendLine("--SocialCalcSpreadsheetControlSave")
+                .appendLine("Content-type: text/plain; charset=UTF-8")
+                .appendLine()
+                .appendLine("version:1.5")
             val fontNumbers = HashMap<FontKey, Int>()
             val rSty = StringBuilder()
             for (record in spreadsheet) {
                 val rowLook = look.rowLooks[record.recordNo]
                 for (col in 0..<spreadsheet.numColumns) {
                     if (rowLook != null) {
-                        if (rowLook.borderBottom)
-                            rSty.append(":b:::1:")
                         if (rowLook.fontSize != -1 || rowLook.bold || rowLook.italic) {
                             val fontKey = FontKey(rowLook.fontSize, rowLook.bold, rowLook.italic)
                             rSty.append(":f:").append(fontNumbers.computeIfAbsent(fontKey) { fontNumbers.size + 1 })
@@ -119,7 +119,14 @@ version:1.5"""
                 body.appendLine(" *")
             }
             body.appendLine("layout:1:padding:* * * *;vertical-align:bottom;")
-                .appendLine("--SocialCalcSpreadsheetControlSave--")
+            if (look.frozenRows > 0)
+                body.appendLine("--SocialCalcSpreadsheetControlSave")
+                    .appendLine("Content-type: text/plain; charset=UTF-8")
+                    .appendLine()
+                    .appendLine("version:1.0")
+                    .append("rowpane:0:1:").appendLine(look.frozenRows)
+                    .append("rowpane:1:").append(look.frozenRows + 1).append(':').appendLine(look.frozenRows + 1)
+            body.appendLine("--SocialCalcSpreadsheetControlSave--")
 
             val req = httpRequestBuilder(server.resolve("_"))
                 .basicAuth(credentials)

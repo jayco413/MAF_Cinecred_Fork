@@ -1,4 +1,3 @@
-{projectIO.credits.table.headDesc},{projectIO.credits.table.bodyDesc},{projectIO.credits.table.tailDesc},{projectIO.credits.table.vGapDesc},{projectIO.credits.table.contentStyleDesc},{projectIO.credits.table.breakHarmonizationDesc},{projectIO.credits.table.spinePosDesc},{projectIO.credits.table.pageStyleDesc},{projectIO.credits.table.pageRuntimeDesc},{projectIO.credits.table.pageGapDesc}
 @{head},@{body},@{tail},@{vGap},@{contentStyle},@{breakHarmonization},@{spinePos},@{pageStyle},@{pageRuntime},@{pageGap}
 ,,,,,,,,,
 ,,,,,,,,,

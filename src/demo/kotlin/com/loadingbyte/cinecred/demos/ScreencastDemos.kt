@@ -64,7 +64,6 @@ object ScreencastScreencastDemo : ScreencastDemo(
         run {
             val sheet = XlsxFormat.read(creditsFile, "").single()
             val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
-            matrix.removeAt(0)
             val kw = l10nKeyword("pic")
             val indices = matrix.withIndex().filter { (_, cells) -> cells.any { "{{$kw" in it } }.map { (i, _) -> i }
             check(indices.isNotEmpty()) { "Expected there to be at least one picture." }
@@ -72,7 +71,8 @@ object ScreencastScreencastDemo : ScreencastDemo(
             picLineIdx = indices.first()
             matrix[picLineIdx] = matrix[picLineIdx].map { cell -> cell.replace(Regex("\\{\\{$kw.*}}"), "TODO: LOGO") }
             matrix.subList(picLineIdx + 1, indices.last() + 1).clear()
-            XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), SpreadsheetLook(emptyMap(), emptyList()))
+            val look = SpreadsheetLook(0, emptyMap(), emptyList(), emptyList())
+            XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), look)
         }
         edt {
             val newStyling = projectCtrl.stylingHistory.current.copy(pictureStyles = persistentListOf())

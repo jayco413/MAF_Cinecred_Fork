@@ -56,12 +56,14 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
         addProjectWindows(dockedTrees.apply { leaf(LOG).collapsed = true }, prepareProjectDir = {
             val sheet = XlsxFormat.read(creditsFile, "").single()
             val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
-            val firstDataRow = matrix.subList(2, matrix.size).first { row -> row[1] != "" }
-            matrix.subList(3, matrix.size).clear()
+            val firstDataRow = matrix.subList(1, matrix.size).first { row -> row[1] != "" }
+            matrix.subList(1, matrix.size).clear()
+            matrix.add(emptyList())
             matrix.add(listOf("", "Iris Imaginer", "") + firstDataRow.subList(3, firstDataRow.size))
             repeat(100) { matrix.add(emptyList()) }
             matrix.add(listOf("", "", "", "0"))
-            XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), SpreadsheetLook(emptyMap(), emptyList()))
+            val look = SpreadsheetLook(0,emptyMap(), emptyList(), emptyList())
+            XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), look)
 
             val logosDir = projectDir.resolve("Logos")
             logosDir.resolve("Cinecred H.svg").moveTo(logosDir.resolve("Cinecred.svg"))
@@ -87,7 +89,7 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
         }
         sleep(500)
 
-        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat, skipRows = 1).apply {
+        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat).apply {
             size = Dimension(600, 350)
             colWidths = intArrayOf(100, 200, 50, 100, 100, 50, 50, 50, 50, 50)
         }

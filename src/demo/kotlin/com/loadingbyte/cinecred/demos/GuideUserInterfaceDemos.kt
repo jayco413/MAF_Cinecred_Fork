@@ -270,7 +270,7 @@ object GuideUserInterfaceSnapSpreadsheetEditorDemo : ScreencastDemo(
 
         edt { styTree.selectedRow = 8 }
         val creditsFile = projectDir.resolve("${projectDir.name}.xlsx")
-        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat, skipRows = 1).apply {
+        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat).apply {
             size = Dimension(600, 350)
             colWidths = intArrayOf(100, 100, 50, 100, 100, 50, 50, 50, 50, 50)
         }

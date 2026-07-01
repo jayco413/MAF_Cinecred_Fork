@@ -17,6 +17,8 @@ Cinecred Changelog
   All of them are read in simultaneously and have their sheets presented as
   isolated credits sequences.
 - The spreadsheet may now be hosted on Nextcloud or any other WebDAV server.
+- The column headers in the default spreadsheet now remain fixed when scrolling,
+  and the column descriptions have been moved into tooltips.
 - Manual newlines are now also supported in grid and flow body cells, as well as
   in horizontal heads and tails. As such, they are now supported everywhere.
     - When employing manual newlines, one can control in detail which body lines

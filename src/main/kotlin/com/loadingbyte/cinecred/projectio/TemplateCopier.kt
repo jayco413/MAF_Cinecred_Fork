@@ -74,16 +74,20 @@ private fun tryCopyCreditsTemplate(
     var csv = useResourceStream("/template/credits.csv") { it.bufferedReader().readLines() }
     // If desired, cut off the sample credits and only keep the table header.
     if (!template.sample)
-        csv = csv.subList(0, 2)
+        csv = csv.subList(0, 1)
     val fileName = destDir.name
     val spreadsheetName = l10n("project.template.spreadsheetName", template.locale)
-    val spreadsheet = CsvFormat.read(csv.joinToString("\n"), spreadsheetName).map { fillIn(it, template) }
+    val spreadsheetTemplate = CsvFormat.read(csv.joinToString("\n"), spreadsheetName)
+    val spreadsheet = spreadsheetTemplate.map { fillIn(it, template) }
     val look = SpreadsheetLook(
-        rowLooks = mapOf(
-            0 to SpreadsheetLook.RowLook(height = 140, fontSize = 8, italic = true, wrap = true),
-            1 to SpreadsheetLook.RowLook(bold = true, borderBottom = true)
-        ),
-        colWidths = listOf(45, 45, 15, 15, 25, 15, 40, 20, 25, 25)
+        frozenRows = 1,
+        rowLooks = mapOf(0 to SpreadsheetLook.RowLook(bold = true)),
+        colWidths = listOf(45, 45, 15, 15, 25, 15, 40, 20, 25, 25),
+        comments = spreadsheetTemplate[0].cells.mapIndexed { col, cell ->
+            // Derive the comment keys from the CSV's first row.
+            val text = fillIn("{projectIO.credits.table.${cell.substring(2, cell.length - 1)}Desc}", template)
+            SpreadsheetLook.Comment(0, col, text)
+        }
     )
     when {
         creditsAccount == null && creditsFormat != null -> {

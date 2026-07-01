@@ -1,11 +1,10 @@
 package com.loadingbyte.cinecred.projectio
 
 import ch.rabanti.nanoxlsx4j.Address
-import ch.rabanti.nanoxlsx4j.styles.CellXf
 import ch.rabanti.nanoxlsx4j.styles.NumberFormat
 import ch.rabanti.nanoxlsx4j.styles.NumberFormat.FormatNumber
 import com.formdev.flatlaf.util.SystemInfo
-import com.github.miachm.sods.Borders
+import com.github.miachm.sods.OfficeAnnotation
 import com.loadingbyte.cinecred.common.LOGGER
 import com.loadingbyte.cinecred.common.execProcess
 import com.loadingbyte.cinecred.common.l10n
@@ -14,17 +13,14 @@ import de.siegmar.fastcsv.reader.StringArrayHandler
 import de.siegmar.fastcsv.writer.CsvWriter
 import jxl.CellView
 import jxl.WorkbookSettings
-import jxl.format.BorderLineStyle
-import jxl.write.Label
-import jxl.write.NumberFormats
-import jxl.write.WritableCellFormat
-import jxl.write.WritableFont
+import jxl.write.*
 import org.slf4j.LoggerFactory
-import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
-import java.io.Reader
+import java.io.*
 import java.nio.file.Path
+import java.time.LocalDateTime
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 import kotlin.io.path.*
 
 
@@ -90,19 +86,20 @@ interface SpreadsheetFormat {
 
 
 class SpreadsheetLook(
+    val frozenRows: Int,
     val rowLooks: Map<Int, RowLook>,
     /** Width of the columns, in characters. */
-    val colWidths: List<Int>
+    val colWidths: List<Int>,
+    val comments: List<Comment>
 ) {
 
     class RowLook(
-        val height: Int = -1,
         val fontSize: Int = -1,
         val bold: Boolean = false,
-        val italic: Boolean = false,
-        val wrap: Boolean = false,
-        val borderBottom: Boolean = false
+        val italic: Boolean = false
     )
+
+    class Comment(val row: Int, val col: Int, val text: String)
 
 }
 
@@ -112,8 +109,16 @@ object XlsxFormat : SpreadsheetFormat {
     override val fileExt get() = "xlsx"
     override val label get() = "Microsoft Excel 2007+"
 
-    override fun read(stream: InputStream, defaultName: String): List<Spreadsheet> {
-        val workbook = stream.use { ch.rabanti.nanoxlsx4j.Workbook.load(stream) }
+    // Note: We have observed at least one case were ZipFile managed to read an XLSX while ZipInputStream failed.
+    // Since NanoXLSX4j uses ZipFile when called with a file, we take that code path when we indeed want to read a file.
+    // This maximizes our chances of evading the error case.
+    override fun read(file: Path, defaultName: String) =
+        read(ch.rabanti.nanoxlsx4j.Workbook.load(file.absolutePathString()))
+
+    override fun read(stream: InputStream, defaultName: String): List<Spreadsheet> =
+        read(stream.use { ch.rabanti.nanoxlsx4j.Workbook.load(stream) })
+
+    private fun read(workbook: ch.rabanti.nanoxlsx4j.Workbook): List<Spreadsheet> {
         return List(workbook.worksheets.size) { sheetIdx ->
             val sheet = workbook.worksheets[sheetIdx]
             val numRows = (sheet.lastRowNumber + 1).coerceAtMost(MAX_ROWS)
@@ -138,10 +143,12 @@ object XlsxFormat : SpreadsheetFormat {
                 if (cell.isNotEmpty())
                     sheet.addCell(cell, col, record.recordNo)
 
+        // Set the frozen rows.
+        if (look.frozenRows > 0)
+            sheet.setHorizontalSplit(1, true, Address(0, 1), null)
+
         // Set the row heights & styles.
         for ((row, rowLook) in look.rowLooks) {
-            if (rowLook.height != -1)
-                sheet.setRowHeight(row, rowLook.height * 2.85f)
             sheet.setStyle(Address(0, row), Address(numCols - 1, row), createStyle(rowLook))
         }
 
@@ -152,7 +159,11 @@ object XlsxFormat : SpreadsheetFormat {
             look.colWidths.getOrNull(col)?.let { sheet.setColumnWidth(col, it * 0.5f) }
         }
 
-        workbook.saveAsStream(stream)
+        val baos = ByteArrayOutputStream()
+        workbook.saveAsStream(baos)
+
+        // NanoXLSX4j doesn't yet have the ability to write comments, so we patch the generated XLSX file ourselves.
+        addComments(stream, baos.toByteArray(), look)
     }
 
     private fun createStyle() =
@@ -166,11 +177,145 @@ object XlsxFormat : SpreadsheetFormat {
                 font.size = rowLook.fontSize.toFloat()
             font.isBold = rowLook.bold
             font.isItalic = rowLook.italic
-            if (rowLook.wrap)
-                cellXf.alignment = CellXf.TextBreakValue.wrapText
-            if (rowLook.borderBottom)
-                border.bottomStyle = ch.rabanti.nanoxlsx4j.styles.Border.StyleValue.thin
         }
+
+    private fun addComments(stream: OutputStream, xlsx: ByteArray, look: SpreadsheetLook) {
+        val zis = ZipInputStream(ByteArrayInputStream(xlsx))
+        val zos = ZipOutputStream(stream)
+
+        while (true) {
+            val ze = zis.nextEntry ?: break
+            zos.putNextEntry(ZipEntry(ze.name))
+            when (ze.name) {
+                "[Content_Types].xml" -> {
+                    val insert = """
+                       <Default ContentType="application/vnd.openxmlformats-officedocument.vmlDrawing" Extension="vml" />
+                       <Override ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"
+                                 PartName="/xl/comments1.xml"/>
+                    """.trimIndent()
+                    var xml = zis.reader().readAllAsString()
+                    val idx = xml.lastIndexOf("</Types>")
+                    xml = "${xml.substring(0, idx)}$insert${xml.substring(idx)}"
+                    zos.write(xml.toByteArray())
+                }
+                "xl/worksheets/sheet1.xml" -> {
+                    val insert1 = " xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\""
+                    val insert2 = "<legacyDrawing r:id=\"d\"/>"
+                    var xml = zis.reader().readAllAsString()
+                    val idx1 = xml.indexOf("<worksheet xmlns=") + 10
+                    val idx2 = xml.lastIndexOf("</worksheet>")
+                    xml = "${xml.substring(0, idx1)}$insert1${xml.substring(idx1, idx2)}$insert2${xml.substring(idx2)}"
+                    zos.write(xml.toByteArray())
+                }
+                else -> zis.transferTo(zos)
+            }
+            zos.closeEntry()
+        }
+
+        zos.putNextEntry(ZipEntry("xl/worksheets/_rels/sheet1.xml.rels"))
+        """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+            <Relationship Id="c" Target="../comments1.xml"
+                          Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" />
+            <Relationship Id="d" Target="../drawings/vmlDrawing1.vml"
+                          Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing" />
+            </Relationships>
+        """.trimIndent().toByteArray().let(zos::write)
+        zos.closeEntry()
+
+        zos.putNextEntry(ZipEntry("xl/comments1.xml"))
+        zos.write(buildString {
+            """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+                <authors><author/></authors>
+                <commentList>
+            """.trimIndent().let(::append)
+            for (comment in look.comments)
+                """
+<comment ref="${'A' + comment.col}${comment.row + 1}" authorId="0">
+<text><t>${escapeXMLChars(comment.text).replace("\n", "\r\n")}</t></text>
+</comment>""".let(::append)
+            append("</commentList></comments>")
+        }.toByteArray())
+        zos.closeEntry()
+
+        zos.putNextEntry(ZipEntry("xl/drawings/vmlDrawing1.vml"))
+        zos.write(buildString {
+            """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <xml xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:v="urn:schemas-microsoft-com:vml"
+                     xmlns:x="urn:schemas-microsoft-com:office:excel">
+                <o:shapelayout v:ext="edit"><o:idmap v:ext="edit" data="1"/></o:shapelayout>
+                <v:shapetype id="_x0000_t1" coordsize="21600,21600" o:spt="202" path="m,l,21600r21600,l21600,xe">
+                <v:stroke joinstyle="miter"/><v:path gradientshapeok="t" o:connecttype="rect"/>
+                </v:shapetype>
+            """.trimIndent().let(::append)
+            for ((idx, comment) in look.comments.withIndex()) {
+                var endColIdx = comment.col
+                var width = 0
+                while (width < 90)
+                    width += look.colWidths.getOrElse(endColIdx++) { 17 }
+                """
+                    <v:shape id="_x0000_s$idx" type="#_x0000_t1" style="position: absolute; visibility:hidden"
+                             fillcolor="infoBackground [80]" strokecolor="none [81]" o:insetmode="auto">
+                    <v:fill color2="infoBackground [80]"/>
+                    <v:shadow color="none [81]" obscured="t"/>
+                    <v:path o:connecttype="none"/>
+                    <v:textbox style="mso-direction-alt:auto"/>
+                    <x:ClientData ObjectType="Note">
+                    <x:MoveWithCells/><x:SizeWithCells/>
+                    <x:Anchor>${comment.col},0,${comment.row},0,$endColIdx,0,${comment.row + 30},0</x:Anchor>
+                    <x:AutoFill>False</x:AutoFill><x:Row>${comment.row}</x:Row><x:Column>${comment.col}</x:Column>
+                    </x:ClientData>
+                    </v:shape>
+                """.trimIndent().let(::append)
+            }
+            append("</xml>")
+        }.toByteArray())
+        zos.closeEntry()
+
+        zos.close()
+    }
+
+    // Taken from XlsxWriter.
+    private fun escapeXMLChars(input: String): String {
+        val len = input.length
+        val illegalCharacters = ArrayList<Int>(len)
+        val characterTypes = ArrayList<Int>(len)
+        for (i in 0..<len) {
+            val c = input[i].code
+            if (c < 0x9 || c in 0xb..<0xD || c in 0xe..<0x20 || c in 0xd800..<0xE000 || c > 0xFFFD) {
+                illegalCharacters.add(i)
+                characterTypes.add(0)
+                continue
+            }
+            // @formatter:off
+            when (c) {
+                0x3C -> { illegalCharacters.add(i); characterTypes.add(1) }
+                0x3E -> { illegalCharacters.add(i); characterTypes.add(2) }
+                0x26 -> { illegalCharacters.add(i); characterTypes.add(3) }
+            }
+            // @formatter:on
+        }
+        if (illegalCharacters.isEmpty())
+            return input
+        val sb = StringBuilder(len)
+        var lastIndex = 0
+        for ((i, j) in illegalCharacters.withIndex()) {
+            sb.append(input, lastIndex, j)
+            when (characterTypes[i]) {
+                0 -> sb.append(' ')
+                1 -> sb.append("&lt;")
+                2 -> sb.append("&gt;")
+                3 -> sb.append("&amp;")
+            }
+            lastIndex = j + 1
+        }
+        sb.append(input.substring(lastIndex))
+        return sb.toString()
+    }
 
 }
 
@@ -196,17 +341,24 @@ object XlsFormat : SpreadsheetFormat {
         val sheet = workbook.createSheet(spreadsheet.name, 0)
         val defaultStyle = createStyle()
 
-        // Add the sheet content, and set the row heights & styles.
+        // Add the sheet content, set the row looks, and add the comments.
         for (record in spreadsheet) {
             val row = record.recordNo
             val rowLook = look.rowLooks[row]
             val style = rowLook?.let(::createStyle) ?: defaultStyle
             for ((col, cell) in record.cells.withIndex())
-                if (cell.isNotEmpty())
-                    sheet.addCell(Label(col, row, cell, style))
-            if (rowLook != null && rowLook.height != -1)
-                sheet.setRowView(row, rowLook.height * 56)
+                if (cell.isNotEmpty()) {
+                    val label = Label(col, row, cell, style)
+                    look.comments.find { it.row == row && it.col == col }?.let { comment ->
+                        label.setCellFeatures(WritableCellFeatures().apply { setComment(comment.text) })
+                    }
+                    sheet.addCell(label)
+                }
         }
+
+        // Set the frozen rows.
+        if (look.frozenRows > 0)
+            sheet.settings.verticalFreeze = look.frozenRows
 
         // Set the column widths & make them use the raw text data format.
         for (col in 0..<spreadsheet.numColumns)
@@ -227,14 +379,10 @@ object XlsFormat : SpreadsheetFormat {
             val font = WritableFont(
                 WritableFont.ARIAL,
                 if (rowLook.fontSize != -1) rowLook.fontSize else WritableFont.DEFAULT_POINT_SIZE,
-                @Suppress("INACCESSIBLE_TYPE")
                 if (rowLook.bold) WritableFont.BOLD else WritableFont.NO_BOLD,
                 rowLook.italic
             )
             setFont(font)
-            wrap = rowLook.wrap
-            if (rowLook.borderBottom)
-                setBorder(jxl.format.Border.BOTTOM, BorderLineStyle.THIN)
         }
 
 }
@@ -266,12 +414,13 @@ object OdsFormat : SpreadsheetFormat {
         val cellMatrix = Array(numRows) { row -> Array(numCols) { col -> spreadsheet[row, col].ifEmpty { null } } }
         sheet.dataRange.values = cellMatrix
 
-        // Set the row heights & styles.
-        for ((row, rowLook) in look.rowLooks) {
-            if (rowLook.height != -1)
-                sheet.setRowHeight(row, rowLook.height.toDouble())
+        // Set the frozen rows.
+        if (look.frozenRows > 0)
+            sheet.freezeRows(look.frozenRows)
+
+        // Set the row looks.
+        for ((row, rowLook) in look.rowLooks)
             sheet.getRange(row, 0, 1, numCols).style = createStyle(rowLook)
-        }
 
         // Set the column widths & make them use the raw text data format.
         val defaultStyle = createStyle()
@@ -279,6 +428,11 @@ object OdsFormat : SpreadsheetFormat {
             sheet.setDefaultColumnCellStyle(col, defaultStyle)
             look.colWidths.getOrNull(col)?.let { sheet.setColumnWidth(col, it.toDouble()) }
         }
+
+        // Add the comments.
+        for (comment in look.comments)
+            sheet.getRange(comment.row, comment.col).annotation =
+                OfficeAnnotation(comment.text, LocalDateTime.of(2000, 1, 1, 0, 0, 0))
 
         val workbook = com.github.miachm.sods.SpreadSheet()
         workbook.appendSheet(sheet)
@@ -294,9 +448,6 @@ object OdsFormat : SpreadsheetFormat {
                 fontSize = rowLook.fontSize
             isBold = rowLook.bold
             isItalic = rowLook.italic
-            isWrap = rowLook.wrap
-            if (rowLook.borderBottom)
-                borders = Borders(false, null, true, "0.75pt solid #000000", false, null, false, null)
         }
 
 }
