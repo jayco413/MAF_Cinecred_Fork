@@ -738,7 +738,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     companion object {
 
-        private val CHANGELOG_HTML = useResourceStream("/CHANGELOG.md") { it.bufferedReader().readText() }.let { src ->
+        private val CHANGELOG_HTML = useResourceStream("/CHANGELOG.md") { it.reader().readAllAsString() }.let { src ->
             val doc = Parser.builder().build().parse(src)
             // Remove the first heading which just says "Changelog".
             doc.firstChild.unlink()

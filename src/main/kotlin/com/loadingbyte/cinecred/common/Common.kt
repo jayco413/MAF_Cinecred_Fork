@@ -42,8 +42,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 
-val VERSION = useResourceStream("/version") { it.bufferedReader().readText().trim() }
-val COPYRIGHT = useResourceStream("/copyright") { it.bufferedReader().readText().trim() }
+val VERSION = useResourceStream("/version") { it.reader().readAllAsString().trim() }
+val COPYRIGHT = useResourceStream("/copyright") { it.reader().readAllAsString().trim() }
 
 val USER_AGENT =
     "Cinecred/$VERSION (" + when {
@@ -353,7 +353,7 @@ fun HttpRequest.Builder.basicAuth(username: String, password: String): HttpReque
 
 
 val TRANSLATED_LOCALES: List<Locale> =
-    useResourceStream("/locales") { it.bufferedReader().readLines() }
+    useResourceStream("/locales") { it.reader().readAllLines() }
         .filter(String::isNotEmpty).sorted().map(Locale::forLanguageTag)
 
 val FALLBACK_TRANSLATED_LOCALE: Locale = Locale.ENGLISH

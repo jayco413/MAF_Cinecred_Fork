@@ -590,15 +590,20 @@ class Canvas private constructor(
                 if (pointCountX2 + verbCoordCount > points.size)
                     points = points.copyOf(points.size * 2)
                 verbs[verbCount++] = verb
-                for (i in 0..<verbCoordCount)
-                    points[pointCountX2++] = coords[i]
+                System.arraycopy(coords, 0, points, pointCountX2, verbCoordCount)
+                pointCountX2 += verbCoordCount
                 pi.next()
             }
 
+            val verbsSeg = arena.allocate(JAVA_BYTE, verbCount.toLong())
+            val pointsSeg = arena.allocate(JAVA_FLOAT, pointCountX2.toLong())
+            MemorySegment.copy(verbs, 0, verbsSeg, JAVA_BYTE, 0L, verbCount)
+            MemorySegment.copy(points, 0, pointsSeg, JAVA_FLOAT, 0L, pointCountX2)
+
             val path = Path.allocate(arena)
-            Path.verbs(path, arena.allocateFrom(verbs))
+            Path.verbs(path, verbsSeg)
             Path.verbCount(path, verbCount)
-            Path.points(path, arena.allocateFrom(points))
+            Path.points(path, pointsSeg)
             Path.pointCount(path, pointCountX2 / 2)
             Path.isEvenOdd(path, pi.windingRule == PathIterator.WIND_EVEN_ODD)
             return path

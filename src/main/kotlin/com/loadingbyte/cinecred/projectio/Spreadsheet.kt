@@ -496,7 +496,7 @@ object NumbersFormat : SpreadsheetFormat {
 
     override fun read(stream: InputStream, defaultName: String) = stream.use {
         withTempFile("cinecred-numbers2xlsx-", ".numbers") { tmpFile ->
-            tmpFile.outputStream().use(stream::copyTo)
+            tmpFile.outputStream().use(stream::transferTo)
             read(tmpFile, defaultName)
         }
     }
@@ -525,7 +525,7 @@ object NumbersFormat : SpreadsheetFormat {
     override fun write(stream: OutputStream, spreadsheet: Spreadsheet, look: SpreadsheetLook) = stream.use {
         withTempFile("cinecred-xlsx2numbers-", ".numbers") { tmpFile ->
             write(tmpFile, spreadsheet, look)
-            tmpFile.inputStream().use { it.copyTo(stream) }; Unit
+            tmpFile.inputStream().use { it.transferTo(stream) }; Unit
         }
     }
 

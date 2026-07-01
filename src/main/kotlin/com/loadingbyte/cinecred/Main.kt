@@ -296,7 +296,7 @@ private object UncaughtHandler : Thread.UncaughtExceptionHandler {
         } else {
             val process = ProcessBuilder(listOf("ps", "-o", "rss=", "-p", pid.toString())).start()
             if (process.waitFor() == 0)
-                rss = process.inputReader().use { it.readText() }.trim().toLongOrNull()?.times(1024)
+                rss = process.inputReader().use { it.readAllAsString() }.trim().toLongOrNull()?.times(1024)
         }
 
         return """---- SYSTEM INFO ----

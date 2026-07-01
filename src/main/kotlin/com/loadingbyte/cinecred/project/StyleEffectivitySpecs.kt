@@ -19,7 +19,7 @@ import com.loadingbyte.cinecred.project.PageBehavior.SCROLL
 
 @Suppress("UNCHECKED_CAST")
 fun <S : Style> getStyleEffectivitySpecs(styleClass: Class<S>): List<StyleEffectivitySpec<S>> = when (styleClass) {
-    Global::class.java -> GLOBAL_EFFECTIVITY_SPECS
+    Global::class.java -> emptyList()
     PageStyle::class.java -> PAGE_STYLE_EFFECTIVITY_SPECS
     ContentStyle::class.java -> CONTENT_STYLE_EFFECTIVITY_SPECS
     LetterStyle::class.java -> LETTER_STYLE_EFFECTIVITY_SPECS
@@ -29,9 +29,6 @@ fun <S : Style> getStyleEffectivitySpecs(styleClass: Class<S>): List<StyleEffect
     TapeStyle::class.java -> TAPE_STYLE_EFFECTIVITY_SPECS
     else -> throw IllegalArgumentException("${styleClass.name} is not a style class.")
 } as List<StyleEffectivitySpec<S>>
-
-
-private val GLOBAL_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Global>> = emptyList()
 
 
 private val PAGE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<PageStyle>> = listOf(

@@ -76,7 +76,7 @@ private fun loadTemplateProject(modifyCsv: (Path) -> Unit = {}): Project =
 val LOGO_PIC by lazy {
     val tmpFile = Path(System.getProperty("java.io.tmpdir")).resolve("cinecred-logo.svg")
     tmpFile.toFile().deleteOnExit()
-    tmpFile.writeLines(useResourceStream("/logo.svg") { it.bufferedReader().readLines() }.filter { "#000000" !in it })
+    tmpFile.writeLines(useResourceStream("/logo.svg") { it.reader().readAllLines() }.filter { "#000000" !in it })
     Picture.Loader.recognize(tmpFile)!!.apply { picture }
 }
 

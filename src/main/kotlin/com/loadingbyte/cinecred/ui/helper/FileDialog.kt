@@ -169,7 +169,7 @@ private fun consumeOutPath(outPathPtr: MemorySegment): Path? {
 private fun showFileOrFolderDialogViaAppleScript(script: String): Path? {
     val process = ProcessBuilder(listOf("osascript", "-")).start()
     process.outputWriter().use { it.write(script) }
-    return if (process.waitFor() != 0) null else Path(process.inputReader().use { it.readText() }.removeSuffix("\n"))
+    return if (process.waitFor() != 0) null else Path(process.inputReader().use { it.readAllAsString() }.trimEnd('\n'))
 }
 
 

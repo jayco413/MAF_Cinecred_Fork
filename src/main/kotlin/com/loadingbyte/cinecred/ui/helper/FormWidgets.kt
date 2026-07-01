@@ -698,6 +698,10 @@ class FPSWidget(
     widthSpec: WidthSpec? = null
 ) : EditableComboBoxWidget<FPS>(FPS::class.java, SUGGESTED_FPS, ::toDisplayString, ::fromDisplayString, widthSpec) {
 
+    init {
+        value = FPS(24, 1)
+    }
+
     companion object {
 
         private val SUGGESTED_FRAC_FPS = listOf(

@@ -71,7 +71,7 @@ private fun tryCopyCreditsTemplate(
     creditsFilename: String?,
     creditsFormat: SpreadsheetFormat?
 ) {
-    var csv = useResourceStream("/template/credits.csv") { it.bufferedReader().readLines() }
+    var csv = useResourceStream("/template/credits.csv") { it.reader().readAllLines() }
     // If desired, cut off the sample credits and only keep the table header.
     if (!template.sample)
         csv = csv.subList(0, 1)

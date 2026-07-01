@@ -507,7 +507,7 @@ object GoogleService : Service {
             }
 
             private fun landingHtml(error: String?): String {
-                val html = useResourceStream("/accountAuthorization.html") { it.bufferedReader().readText() }
+                val html = useResourceStream("/accountAuthorization.html") { it.reader().readAllAsString() }
                 val title = when (error) {
                     null -> l10n("ui.preferences.accounts.authorize.success.title")
                     else -> l10n("ui.preferences.accounts.authorize.failure.title")

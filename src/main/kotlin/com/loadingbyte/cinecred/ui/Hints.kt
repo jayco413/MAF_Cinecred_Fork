@@ -123,6 +123,7 @@ private fun showHint(track: HintTrack, idx: Int, onPass: () -> Unit) {
         }
 
         fun JButton.style() = apply {
+            isFocusable = false
             val style = "foreground: #0F0F0F; background: #FFCC8C; borderColor: #C47F2C; " +
                     "hoverBorderColor: #AD6F21; focusedBorderColor: #AD6F21; focusColor: lighten(#AD6F21,10%)"
             putClientProperty(STYLE, style)
