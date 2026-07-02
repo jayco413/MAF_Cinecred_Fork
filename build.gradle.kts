@@ -16,8 +16,8 @@ group = "com.loadingbyte"
 version = "1.9.0-SNAPSHOT"
 
 val jdkVersion = 25
-val slf4jVersion = "2.0.17"
-val twelveMonkeysVersion = "3.12.0"
+val slf4jVersion = "2.0.18"
+val twelveMonkeysVersion = "3.13.1"
 val javacppVersion = "1.5.12"
 val ffmpegVersion = "7.1.1-$javacppVersion"
 val flatlafVersion = "3.7.1"
@@ -82,22 +82,22 @@ dependencies {
     implementation("ch.rabanti:nanoxlsx4j:2.5.7")
     implementation("net.sourceforge.jexcelapi:jxl:2.6.12")
     implementation("com.github.miachm.sods:SODS:1.10.1")
-    implementation("de.siegmar:fastcsv:3.6.0")
+    implementation("de.siegmar:fastcsv:4.3.0")
 
     // Spreadsheet Services
-    implementation("com.googlecode.plist:dd-plist:1.28")
+    implementation("com.googlecode.plist:dd-plist:1.29")
     implementation("com.google.oauth-client:google-oauth-client-jetty:1.39.0")
-    implementation("com.google.apis:google-api-services-sheets:v4-rev20250415-2.0.0")
+    implementation("com.google.apis:google-api-services-sheets:v4-rev20260610-2.0.0")
 
     // Raster Image IO
     implementation(dependencyFactory.create("com.twelvemonkeys.imageio", "imageio-psd", twelveMonkeysVersion))
     implementation(dependencyFactory.create("com.twelvemonkeys.imageio", "imageio-tga", twelveMonkeysVersion))
     // JBIG2 and JPEG2000 are commonly found in PDF files.
-    implementation("org.apache.pdfbox:jbig2-imageio:3.0.4")
+    implementation("org.apache.pdfbox:jbig2-imageio:3.0.5")
     implementation("com.github.jai-imageio:jai-imageio-jpeg2000:1.4.0")
 
     // PDF IO
-    implementation("org.apache.pdfbox:pdfbox:3.0.5")
+    implementation("org.apache.pdfbox:pdfbox:3.0.7")
 
     // Video IO
     implementation(dependencyFactory.create("org.bytedeco", "javacpp", javacppVersion))
@@ -109,17 +109,17 @@ dependencies {
     }
 
     // UI
-    implementation("com.miglayout:miglayout-swing:11.4.2")
+    implementation("com.miglayout:miglayout-swing:11.4.3")
     implementation(dependencyFactory.create("com.formdev", "flatlaf", flatlafVersion, "no-natives", null))
     for (p in Platform.entries) {
         val nat = natives.getValue(p)
         nat(dependencyFactory.create("com.formdev", "flatlaf", flatlafVersion, p.slugFlatLaf, p.os.codeLibExt))
     }
-    implementation("com.github.weisj:jsvg:2.0.0")
-    implementation("org.commonmark:commonmark:0.25.0")
+    implementation("com.github.weisj:jsvg:2.1.0")
+    implementation("org.commonmark:commonmark:0.29.0")
 
     // Testing
-    testImplementation("org.junit.jupiter:junit-jupiter:5.13.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.1")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
