@@ -13,7 +13,11 @@ import java.awt.BorderLayout
 import java.awt.Font
 import java.awt.Insets
 import java.awt.event.ItemEvent
+import java.awt.font.FontRenderContext
+import java.awt.font.LineBreakMeasurer
+import java.awt.font.TextAttribute
 import java.net.URI
+import java.text.AttributedString
 import javax.swing.*
 import javax.swing.SwingConstants.LEFT
 import javax.swing.SwingConstants.TOP
@@ -127,13 +131,27 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             putClientProperty(TABBED_PANE_TAB_INSETS, Insets(10, 14, 10, 14))
             putClientProperty(TABBED_PANE_MINIMUM_TAB_WIDTH, 110)
             putClientProperty(TABBED_PANE_LEADING_COMPONENT, brandPanel)
-            addTab(l10n("ui.welcome.projects"), FOLDER_ICON, projectsPanel)
-            addTab(l10n("ui.welcome.preferences"), PREFERENCES_ICON, preferencesPanel)
-            addTab(l10n("ui.welcome.changelog"), GIFT_ICON, changelogPanel)
-            addTab(l10n("ui.welcome.about"), INFO_ICON.getRecoloredIcon(PALETTE_GRAY_COLOR), aboutPanel)
+            addTab(breakTitle(l10n("ui.welcome.projects")), FOLDER_ICON, projectsPanel)
+            addTab(breakTitle(l10n("ui.welcome.preferences")), PREFERENCES_ICON, preferencesPanel)
+            addTab(breakTitle(l10n("ui.welcome.changelog")), GIFT_ICON, changelogPanel)
+            addTab(breakTitle(l10n("ui.welcome.about")), INFO_ICON.getRecoloredIcon(PALETTE_GRAY_COLOR), aboutPanel)
         }
         layout = BorderLayout()
         add(tabPane, BorderLayout.CENTER)
+    }
+
+    private fun JTabbedPane.breakTitle(title: String): String {
+        val iter = AttributedString(title, mapOf(TextAttribute.FONT to font)).iterator
+        val lbm = LineBreakMeasurer(iter, FontRenderContext(null, true, true))
+        val lines = mutableListOf<String>()
+        while (lbm.position != title.length) {
+            val lineEndPos = lbm.nextOffset(100f)
+            if (lbm.position == 0 && lineEndPos == title.length)
+                return title
+            lines.add(title.substring(lbm.position, lineEndPos))
+            lbm.position = lineEndPos
+        }
+        return "<html><center>${lines.joinToString("<br>")}</center></html>"
     }
 
 
