@@ -1261,7 +1261,9 @@ class ColorGradientWidget(
 
         fun rerenderImageAndRepaint() {
             image = null
-            paintImmediately(0, 0, width, height)
+            // We must not use paintImmediately(), because when the overall layout changes at the same time and hence
+            // the component is relocated, that would paint the component too early, flashing it at the wrong location.
+            repaint()
         }
 
         override fun mouseClicked(e: MouseEvent) {
