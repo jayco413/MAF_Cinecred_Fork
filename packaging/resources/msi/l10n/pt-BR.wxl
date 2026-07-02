@@ -1,0 +1,7 @@
+﻿<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="pt-BR">
+  <String Id="Slogan" Value="@SLOGAN_PT_BR@"/>
+  <String Id="ShortcutDlgTitle" Value="{\WixUI_Font_Title}Atalhos"/>
+  <String Id="ShortcutDlgDescription" Value="Selecione os atalhos a serem criados."/>
+  <String Id="ShortcutDlgDesktop" Value="Criar atalho na área de trabalho"/>
+  <String Id="ShortcutDlgStartMenu" Value="Criar atalho no menu Iniciar"/>
+</WixLocalization>

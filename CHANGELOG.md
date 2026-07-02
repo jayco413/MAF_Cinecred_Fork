@@ -52,6 +52,8 @@ Cinecred Changelog
 - Whole page exports now feature full-resolution thumbnails of embedded videos.
 - PDF exports now subset their embedded fonts, drastically reducing file size.
 - On Windows, installation is now also possible for individual non-admin users.
+- Added translations to Norwegian, European and Brazilian Portuguese, Russian,
+  and Ukrainian.
 
 ### Fixes
 
