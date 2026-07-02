@@ -19,7 +19,7 @@ class StyleForm<S : Style>(
     insets: String = "18",
     noticeArea: Boolean = true,
     constLabelWidth: Boolean = true
-) : Form.Storable<S>(insets, noticeArea, constLabelWidth) {
+) : Form.Storable<S>(insets, noticeArea, maxLabelWidth = "min(25%, 250)", constLabelWidth) {
 
     private val valueWidgets = LinkedHashMap<StyleSetting<S, *>, Widget<*>>() // must retain order
     private val rootFormRows = mutableListOf<Pair<FormRow, List<StyleSetting<S, *>>>>()

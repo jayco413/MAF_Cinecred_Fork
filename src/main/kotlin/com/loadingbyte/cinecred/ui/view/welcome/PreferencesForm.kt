@@ -9,7 +9,7 @@ import java.util.*
 
 
 class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
-    EasyForm(insets = "0", noticeArea = false, constLabelWidth = false) {
+    EasyForm(insets = "0", noticeArea = false, maxLabelWidth = "50%", constLabelWidth = false) {
 
     private val uiLocaleWishWidget = addWidget(
         l10n("ui.preferences.uiLocaleWish"),

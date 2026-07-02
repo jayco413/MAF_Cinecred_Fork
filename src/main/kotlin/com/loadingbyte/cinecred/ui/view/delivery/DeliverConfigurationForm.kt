@@ -47,7 +47,7 @@ import kotlin.jvm.optionals.getOrNull
 
 
 class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
-    EasyForm(insets = "dialog", noticeArea = true, constLabelWidth = false), DeliveryViewComms {
+    EasyForm(insets = "dialog", noticeArea = true, maxLabelWidth = "250", constLabelWidth = false), DeliveryViewComms {
 
     companion object {
 

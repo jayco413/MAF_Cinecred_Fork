@@ -8,16 +8,22 @@ import java.awt.Rectangle
 import javax.swing.*
 
 
-open class Form(insets: String, noticeArea: Boolean, constLabelWidth: Boolean) : JPanel(
+open class Form(
+    insets: String,
+    noticeArea: Boolean,
+    private val maxLabelWidth: String,
+    constLabelWidth: Boolean
+) : JPanel(
     MigLayout(
         "hidemode 3, insets $insets",
-        (if (constLabelWidth) "[$LABEL_WIDTH_CONSTRAINT!" else "[::$LABEL_WIDTH_CONSTRAINT") + ", align right][grow]" +
+        (if (constLabelWidth) "[$maxLabelWidth!" else "[::$maxLabelWidth") + ", align right][grow]" +
                 if (noticeArea) "150[]" else ""
     )
 ), Scrollable {
 
-    abstract class Storable<O : Any /* non-null */>(insets: String, noticeArea: Boolean, constLabelWidth: Boolean) :
-        Form(insets, noticeArea, constLabelWidth) {
+    abstract class Storable<O : Any /* non-null */>(
+        insets: String, noticeArea: Boolean, maxLabelWidth: String, constLabelWidth: Boolean
+    ) : Form(insets, noticeArea, maxLabelWidth, constLabelWidth) {
         abstract fun open(stored: O)
         abstract fun save(): O
     }
@@ -166,10 +172,6 @@ open class Form(insets: String, noticeArea: Boolean, constLabelWidth: Boolean) :
     }
 
 
-    companion object {
-        private const val LABEL_WIDTH_CONSTRAINT = "min(25%, 250)"
-    }
-
     val changeListeners = mutableListOf<(Widget<*>) -> Unit>()
 
     protected val formRows = mutableListOf<FormRow>()
@@ -261,7 +263,7 @@ open class Form(insets: String, noticeArea: Boolean, constLabelWidth: Boolean) :
     }
 
     private fun addLabelComp(labelComp: JLabel, labelId: String, invisibleSpace: Boolean) {
-        val labelConstraints = mutableListOf("id $labelId, wmax $LABEL_WIDTH_CONSTRAINT")
+        val labelConstraints = mutableListOf("id $labelId, wmax $maxLabelWidth")
         if (componentCount != 0 /* is not the first widget */)
             labelConstraints.add("newline")
         if (invisibleSpace)
