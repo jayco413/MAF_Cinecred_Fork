@@ -62,11 +62,11 @@ update, which means:
 This process is fully automated using Gradle. On Windows, macOS x86, and Linux
 respectively, run
 
-    gradlew[.bat] build(CLib|Skia|SkiaCAPI|HarfBuzz|Zimg|NFD|DeckLinkCAPI)For(Windows|MacX86|MacARM|Linux)
+    gradlew[.bat] build(CLib|Skia|SkiaCAPI|HarfBuzz|Clipper|Zimg|NFD|DeckLinkCAPI)For(Windows|MacX86|MacARM|Linux)
 
 to build the native libraries and put them into the source tree. Then, on any
 machine, run
 
-    gradlew[.bat] jextract(CLib|SkiaCAPI|Skcms|HarfBuzz|Zimg|NFD|DeckLinkCAPI)
+    gradlew[.bat] jextract(CLib|SkiaCAPI|Skcms|HarfBuzz|ClipperCAPI|Zimg|NFD|DeckLinkCAPI)
 
 to regenerate the Java bindings and also put them into the source tree.
