@@ -8,10 +8,7 @@ import com.loadingbyte.cinecred.projectio.tryCopyTemplate
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.ctrl.MasterCtrl
 import com.loadingbyte.cinecred.ui.ctrl.WelcomeCtrl
-import com.loadingbyte.cinecred.ui.helper.DockingFrame
-import com.loadingbyte.cinecred.ui.helper.Scrubber
-import com.loadingbyte.cinecred.ui.helper.setExtraSystemScaleFactor
-import com.loadingbyte.cinecred.ui.helper.withG2
+import com.loadingbyte.cinecred.ui.helper.*
 import com.loadingbyte.cinecred.ui.styling.StyleForm
 import com.loadingbyte.cinecred.ui.view.welcome.WelcomeFrame
 import sun.font.FontUtilities
@@ -56,6 +53,7 @@ abstract class ScreencastDemo(
             masterCtrl = UIFactory().master() as MasterCtrl
 
             setExtraSystemScaleFactor(desktopScale)
+            setDemoMouseLocCallback(dt::mouse)
             edt { ToolTipManager.sharedInstance().isEnabled = false }
             val backedUpProjectDirs = PROJECT_DIRS_PREFERENCE.get()
             val backedUpDefaultWindowLayout = DEFAULT_WINDOW_LAYOUT_PREFERENCE.get()
@@ -73,6 +71,7 @@ abstract class ScreencastDemo(
                 sleep(100)
             } finally {
                 setExtraSystemScaleFactor(1.0)
+                setDemoMouseLocCallback(null)
                 edt { ToolTipManager.sharedInstance().isEnabled = true }
                 PROJECT_DIRS_PREFERENCE.set(backedUpProjectDirs)
                 DEFAULT_WINDOW_LAYOUT_PREFERENCE.set(backedUpDefaultWindowLayout)
@@ -125,10 +124,6 @@ abstract class ScreencastDemo(
         dt.add(prjWin)
 
         sleep(500)
-        if (fullscreenPrjWin && existingProjectCtrl != null) {
-            dt.fullscreen(prjWin)
-            sleep(500)
-        }
         edt {
             plyCtl.leakedPlayButton.actionListeners.forEach(plyCtl.leakedPlayButton::removeActionListener)
             styDok.leakedSplitPane.setDividerLocation(styWinSplitRatio)
@@ -189,6 +184,7 @@ abstract class ScreencastDemo(
     protected val styDok get() = projectCtrl.stylingDockable
     protected val plyDok get() = projectCtrl.leakedPlaybackDockable
     protected val dlvDok get() = projectCtrl.leakedDeliveryDockable
+    protected fun collapseBtn(dok: JPanel) = (dok.parent.getComponent(0) as JPanel).getComponent(2) as JButton
     protected fun prjImagePnl(pageIdx: Int) = preDok.leakedImagePanels[pageIdx]
     protected val prjCtl get() = tolDok.leakedPlaybackControls
     protected val plyCtl get() = plyDok.leakedControlsPanel
@@ -201,19 +197,12 @@ abstract class ScreencastDemo(
     protected fun styLayrForm(i: Int): StyleForm<Layer> =
         ((styLayrPnl(i).getComponent(6) as JPanel).getComponent(0) as StyleForm<*>).castToStyle(Layer::class.java)
 
-    protected val styIncUnitVGap
-        get() = styGlobForm.getWidgetFor(Global::unitVGapPx.st()).components[0].getComponent(0)!!
-    protected val styRuntime get() = styGlobForm.getWidgetFor(Global::runtimeFrames.st()).components[0] as Scrubber<*>
     protected val styGridCols get() = styContForm.getWidgetFor(ContentStyle::gridCols.st()).components[0] as Scrubber<*>
     protected val styFlowSep
         get() = styContForm.getWidgetFor(ContentStyle::flowSeparator.st()).components[0] as JTextComponent
     protected val styLetrFormScrollBar get() = (styLetrForm.parent.parent as JScrollPane).verticalScrollBar
-    protected val styIncFontHeight
-        get() = styLetrForm.getWidgetFor(LetterStyle::heightPx.st()).components[0].getComponent(0)!!
     protected val styLayrList
         get() = styLetrForm.getWidgetFor(LetterStyle::layers.st()).components[0] as JPanel
-    protected val styPicHeight
-        get() = styPictForm.getWidgetFor(PictureStyle::heightPx.st()).components[1] as Scrubber<*>
 
     protected fun styLayrAddBtn(i: Int) = styLayrList.let { it.getComponent(it.componentCount - 1 - 2 * i) } as JButton
     protected fun styLayrPnl(i: Int) = styLayrList.let { it.getComponent(it.componentCount - 2 - 2 * i) } as JPanel
@@ -264,13 +253,19 @@ class Screencast(
     fun frame(action: (() -> Unit)? = null) {
         action?.invoke()
         desktop.tick(1.0 / fps.frac)
-        writeFrame(BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
+        val captureHeight = imageHeight - captionHeight
+        // Paint the desktop on a separate image because ScaledGraphics2D doesn't support clip.
+        val capture = BufferedImage(imageWidth, captureHeight, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
             // Paint wallpaper
             g2.color = Color(24, 24, 24)
-            g2.fillRect(0, 0, imageWidth, imageHeight - captionHeight)
+            g2.fillRect(0, 0, imageWidth, captureHeight)
             // Paint desktop
             desktop.paint(ScaledGraphics2D(g2, desktopScale))
+        }
+        writeFrame(BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g2.drawImage(capture, 0, 0, null)
             // Paint caption
             g2.color = Color.WHITE
             var captionY = (imageHeight - captionHeight + captionGap).toFloat()
@@ -354,7 +349,7 @@ class Screencast(
             TextAttribute.KERNING to TextAttribute.KERNING_ON,
             TextAttribute.LIGATURES to TextAttribute.LIGATURES_ON
         )
-        for (ratio in floatArrayOf(0.5f, 0.6f, 0.7f, 0.8f)) {
+        for (ratio in floatArrayOf(0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f)) {
             caption.clear()
             val lbm = LineBreakMeasurer(AttributedString(text, attrs).iterator, FontRenderContext(null, true, true))
             while (lbm.position != text.length)

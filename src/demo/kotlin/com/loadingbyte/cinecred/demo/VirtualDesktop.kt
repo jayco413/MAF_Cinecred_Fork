@@ -37,6 +37,7 @@ class VirtualDesktop(val width: Int, val height: Int) {
     private var mouseTarget: Point? = null
     private var mouseSpeed = 0.0  // px per second
     private var mousePressed = false
+    private var mouseScrubbing = false
     private var dragOrigin: VirtualWindow? = null
     private var draggedTransferable: Transferable? = null
     private var draggingFolder: Boolean = false
@@ -94,6 +95,9 @@ class VirtualDesktop(val width: Int, val height: Int) {
     fun isMouseMoving(): Boolean =
         mouseTarget != null
 
+    fun mouse(): Point =
+        Point(mouse.x.roundToInt(), mouse.y.roundToInt())
+
     fun mouseTo(point: Point, jump: Boolean = false) {
         if (jump) {
             mouse = Point2D.Double(point.x.toDouble(), point.y.toDouble())
@@ -107,6 +111,7 @@ class VirtualDesktop(val width: Int, val height: Int) {
     fun mouseDown() {
         mousePressed = true
         windowContainingMouse()?.mousePressOrRelease(mouse, press = true)
+        mouseScrubbing = windowContainingMouse()?.isOverScrubber(mouse) == true
     }
 
     fun mouseDownAndDrag() {
@@ -128,6 +133,7 @@ class VirtualDesktop(val width: Int, val height: Int) {
 
     fun mouseUp() {
         mousePressed = false
+        mouseScrubbing = false
         val window = windowContainingMouse()
         (dragOrigin ?: window)?.mousePressOrRelease(mouse, press = false)
         if (window != null)
@@ -193,12 +199,17 @@ class VirtualDesktop(val width: Int, val height: Int) {
         }
         // Paint mouse cursor
         g2.preserveTransform {
-            g2.translate(mouse.x, mouse.y)
-            g2.color = Color.WHITE
-            g2.fill(CURSOR_ICON)
-            g2.color = Color.BLACK
-            g2.stroke = BasicStroke(1.5f)
-            g2.draw(CURSOR_ICON)
+            if (mouseScrubbing || windowContainingMouse()?.isOverScrubber(mouse) == true) {
+                g2.translate(mouse.x.roundToInt(), mouse.y.roundToInt())
+                g2.drawImage(SCRUB_CURSOR_IMAGE, -24, -10, null)
+            } else {
+                g2.translate(mouse.x, mouse.y)
+                g2.color = Color.WHITE
+                g2.fill(CURSOR_ICON)
+                g2.color = Color.BLACK
+                g2.stroke = BasicStroke(1.5f)
+                g2.draw(CURSOR_ICON)
+            }
         }
     }
 
@@ -229,6 +240,7 @@ abstract class VirtualWindow {
         mouse.x.toInt() - pos.x in 0..size.width && mouse.y.toInt() - pos.y in 0..size.height
 
     abstract fun paint(g2: Graphics2D)
+    open fun isOverScrubber(mouse: Point2D.Double): Boolean = false
     open fun mousePressOrRelease(mouse: Point2D.Double, press: Boolean) {}
     open fun mouseMove(mouse: Point2D.Double, pressed: Boolean) {}
     open fun dnd(mouse: Point2D.Double) {}
@@ -332,6 +344,9 @@ class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
             }
         }
     }
+
+    override fun isOverScrubber(mouse: Point2D.Double): Boolean =
+        awtWinContaining(mouse)?.findComponentAt(Point(mouse.x.roundToInt(), mouse.y.roundToInt())) is Scrubber<*>
 
     override fun mousePressOrRelease(mouse: Point2D.Double, press: Boolean) {
         val win = dragOrigin ?: awtWinContaining(mouse) ?: return
@@ -775,6 +790,8 @@ private val CURSOR_ICON = Path2D.Double().apply {
     lineTo(18.9, 13.5)
     closePath()
 }
+
+private val SCRUB_CURSOR_IMAGE = SVGIcon.load("/icons/scrub.svg").renderIcon(48, 48)
 
 private const val FILE_ICON_WIDTH = 52
 private const val FILE_ICON_HEIGHT = 60

@@ -257,6 +257,15 @@ fun Component.addHighFrequencyDragListener(listener: HighFrequencyDragListener) 
     addMouseMotionListener(managingListener)
 }
 
+// ========== ENCAPSULATION LEAKS ==========
+@Deprecated("ENCAPSULATION LEAK")
+fun setDemoMouseLocCallback(callback: (() -> Point)?) {
+    demoMouseLocCallback = callback
+}
+// =========================================
+
+@Volatile private var demoMouseLocCallback: (() -> Point)? = null
+
 private class HighFrequencyDragManagingListener(
     private val component: Component, private val listener: HighFrequencyDragListener
 ) : MouseAdapter(), KeyEventDispatcher, WindowFocusListener {
@@ -268,7 +277,7 @@ private class HighFrequencyDragManagingListener(
     private var window: Window? = null
 
     private val timer = Timer(10) {
-        val currentPointer = MouseInfo.getPointerInfo().location
+        val currentPointer = demoMouseLocCallback?.invoke() ?: MouseInfo.getPointerInfo().location
         SwingUtilities.convertPointFromScreen(currentPointer, component)
         if (previousPointer != currentPointer) {
             previousPointer = currentPointer

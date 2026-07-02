@@ -12,7 +12,7 @@ import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.projectio.Spreadsheet
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
 import com.loadingbyte.cinecred.projectio.XlsxFormat
-import com.loadingbyte.cinecred.ui.Shortcut
+import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.helper.BUNDLED_FAMILIES
 import kotlinx.collections.immutable.persistentListOf
 import java.awt.Dimension
@@ -38,6 +38,10 @@ object ScreencastScreencastDemo : ScreencastDemo(
 ) {
     @Suppress("DEPRECATION")
     override fun generate() {
+        val layout = ConfigurableWindowLayout("Demo", PresetWindowLayout.PRESET_DOCKED.trees(dt.fullscreen))
+        DEFAULT_WINDOW_LAYOUT_PREFERENCE.set(layout.name)
+        WINDOW_LAYOUTS_PREFERENCE.set(listOf(layout))
+
         addWelcomeWindow()
 
         sc.caption("screencast.caption.create.welcome")
@@ -100,7 +104,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
             sc.frame { edt { plyCtl.leakedFrameSlider.value += 4; plyCtl.setPlaybackDirection(1) } }
         plyCtl.setPlaybackDirection(0)
         sc.hold()
-        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedPlaybackButton))
+        sc.mouseTo(prjWin.desktopPosOf(collapseBtn(plyDok)))
         sc.click()
 
         sc.caption("screencast.caption.delivery.look")
@@ -115,7 +119,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.click()
         sc.caption("screencast.caption.delivery.transparent")
         sc.click()
-        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedDeliveryButton))
+        sc.mouseTo(prjWin.desktopPosOf(collapseBtn(dlvDok)))
         sc.click()
 
         sc.caption("screencast.caption.pages.explore")
@@ -155,7 +159,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         dt.center(spreadsheetEditorWin)
         sc.hold(2 * hold)
         sc.caption("screencast.caption.files.hide")
-        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
+        sc.mouseTo(prjWin.desktopPosOf(collapseBtn(styDok)))
         sc.click()
         sc.caption("screencast.caption.files.snap")
         sc.mouseTo(spreadsheetEditorWin.desktopPosOfTitleBar())
@@ -230,16 +234,16 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.click()
         sc.mouseTo(prjWin.desktopPosOfSetting(styGlobForm, Global::unitVGapPx.st()))
         sc.caption("screencast.caption.styling.vGap")
-        sc.mouseTo(prjWin.desktopPosOf(styIncUnitVGap))
-        repeat(7) { sc.click(10) }
-        sc.click()
+        dt.mouseDownAndDrag()
+        sc.mouseTo(prjWin.desktopPosOfSetting(styGlobForm, Global::unitVGapPx.st()).apply { x += 130 })
+        dt.mouseUp()
         sc.caption("screencast.caption.styling.global")
         sc.caption("screencast.caption.styling.runtime")
-        sc.mouseTo(prjWin.desktopPosOfSetting(styGlobForm, Global::runtimeFrames.st(), 0))
+        sc.mouseTo(prjWin.desktopPosOfSetting(styGlobForm, Global::runtimeFrames.st(), 1))
         sc.click()
-        sc.mouseTo(prjWin.desktopPosOf(styRuntime))
+        sc.mouseTo(prjWin.desktopPosOfSetting(styGlobForm, Global::runtimeFrames.st(), 0))
         dt.mouseDownAndDrag()
-        sc.mouseTo(prjWin.desktopPosOf(styRuntime).apply { x += 48 })
+        sc.mouseTo(prjWin.desktopPosOfSetting(styGlobForm, Global::runtimeFrames.st(), 0).apply { x -= 48 })
         dt.mouseUp()
         sc.caption("screencast.caption.styling.reset")
         sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedResetStylingButton))
@@ -268,7 +272,7 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.caption("screencast.caption.gutter.orient")
         sc.demonstrateSetting(prjWin, styContForm, ContentStyle::blockOrientation.st(), 1, 0)
         sc.caption("screencast.caption.gutter.spine1")
-        sc.demonstrateSetting(prjWin, styContForm, ContentStyle::spineAttachment.st(), 1, 4)
+        sc.demonstrateSetting(prjWin, styContForm, ContentStyle::spineAttachment.st(), 1, 2, 7, 4)
         sc.caption("screencast.caption.gutter.spine2")
         sc.caption("screencast.caption.gutter.letterRef")
         sc.mouseTo(prjWin.desktopPosOfSetting(styContForm, ContentStyle::bodyLetterStyleName.st(), 0))
@@ -288,14 +292,13 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.caption("screencast.caption.gutter.columns")
         sc.type(prjWin, styGridCols, "2", 4 * hold)
         sc.type(prjWin, styGridCols, "1")
-        styGridCols.transferFocusBackward()  // Avoid that the moving mouse selects text in the scrubber text field.
         sc.caption("screencast.caption.gutter.head")
         sc.demonstrateSetting(prjWin, styContForm, ContentStyle::hasHead.st(), 0, 0)
 
         sc.caption("screencast.caption.bullets.open", l10nQuoted(l10n("project.BodyLayout.FLOW")))
         sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y += 80 })
         dt.mouseDown()
-        sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y -= 80 })
+        sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y -= 150 })
         dt.mouseUp()
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, l10n("project.template.contentStyleBullets")))
         sc.click()
@@ -309,9 +312,9 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.type(prjWin, styFlowSep, "\u2022")
 
         sc.caption("screencast.caption.blurb.open", l10nQuoted(l10n("project.BodyLayout.PARAGRAPHS")))
-        sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y += 300 })
+        sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y += 250 })
         dt.mouseDown()
-        sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y -= 300 })
+        sc.mouseTo(prjWin.desktopPosOf(preDok.leakedPageTabs).apply { y -= 350 })
         dt.mouseUp()
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, l10n("project.template.contentStyleBlurb")))
         sc.click()
@@ -336,9 +339,10 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.mouseTo(prjWin.desktopPosOfDropdownItem(fontFamily.getFont(fontName)!!))
         sc.click(4 * hold)
         sc.caption("screencast.caption.letter.height")
-        sc.mouseTo(prjWin.desktopPosOf(styIncFontHeight))
-        repeat(19) { sc.click(10) }
-        sc.click()
+        sc.mouseTo(prjWin.desktopPosOfSetting(styLetrForm, LetterStyle::heightPx.st()))
+        dt.mouseDownAndDrag()
+        sc.mouseTo(prjWin.desktopPosOfSetting(styLetrForm, LetterStyle::heightPx.st()).apply { x += 300 })
+        dt.mouseUp()
         sc.caption("screencast.caption.letter.caps")
         sc.demonstrateSetting(prjWin, styLetrForm, LetterStyle::uppercase.st(), 0)
         sc.caption("screencast.caption.letter.except", l10nQuoted("de"))
@@ -351,6 +355,11 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.mouseTo(prjWin.desktopPosOf(styLayrAddBtn(1)))
         sc.click(0)
         edt { KeyboardFocusManager.getCurrentKeyboardFocusManager().clearFocusOwner() }
+        sc.hold()
+        sc.mouseTo(prjWin.desktopPosOf(styLetrFormScrollBar))
+        dt.mouseDown()
+        sc.mouseTo(prjWin.desktopPosOf(styLetrFormScrollBar).apply { y += 50 })
+        dt.mouseUp()
         sc.hold(4 * hold)
         sc.caption("screencast.caption.letter.layers")
         sc.mouseTo(prjWin.desktopPosOf(styLayrGrip(1)))
@@ -381,9 +390,13 @@ object ScreencastScreencastDemo : ScreencastDemo(
         sc.click()
         sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred H"))
         sc.click()
-        sc.mouseTo(prjWin.desktopPosOfSetting(styPictForm, PictureStyle::heightPx.st(), 0))
+        sc.mouseTo(prjWin.desktopPosOfSetting(styPictForm, PictureStyle::heightPx.st(), 1))
         sc.click()
-        sc.type(prjWin, styPicHeight, "120", 2 * hold)
+        sc.mouseTo(prjWin.desktopPosOfSetting(styPictForm, PictureStyle::heightPx.st()))
+        dt.mouseDownAndDrag()
+        sc.mouseTo(prjWin.desktopPosOfSetting(styPictForm, PictureStyle::heightPx.st()).apply { x -= 136 })
+        dt.mouseUp()
+        sc.hold(2 * hold)
         sc.caption("screencast.caption.picture.videos", l10nQuoted("{{${l10nKeyword("video")}}}"))
         sc.hold(4 * hold)
 
