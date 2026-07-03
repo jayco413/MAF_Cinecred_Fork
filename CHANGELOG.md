@@ -5,6 +5,10 @@ Cinecred Changelog
 1.9.1-SNAPSHOT
 --------------
 
+### Fixes
+
+- In newly created projects, gutter heads are now vertically centered again.
+
 
 1.9.0
 -----

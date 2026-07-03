@@ -311,7 +311,6 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             headLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
             headHarmonizeWidth = HarmonizeExtent.ACROSS_BLOCKS,
             headHJustify = HJustify.RIGHT,
-            headVJustify = VJustifyText.TOP,
             headGapPx = 24.0
         ),
         PRESET_CONTENT_STYLE.copy(
