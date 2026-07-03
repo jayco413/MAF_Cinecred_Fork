@@ -25,6 +25,7 @@ private val migrations = listOf(
     "1.8.0" to null,
     "1.8.1" to ::migrateStylingFrom181,
     "1.9.0" to null,
+    "1.9.1" to null,
 ).also { migrations ->
     val appVersion = VERSION.removeSuffix("-SNAPSHOT")
     if (migrations.none { (version, _) -> version == appVersion })
