@@ -13,7 +13,6 @@ import com.loadingbyte.cinecred.projectio.service.*
 import java.io.IOException
 import java.net.URI
 import java.nio.channels.FileChannel
-import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.Executors
@@ -85,13 +84,7 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         }.get()
 
         // Load the initially present credits files in the executor thread.
-        val creditsFiles = try {
-            projectDir.listDirectoryEntries()
-        } catch (e: IOException) {
-            if (e !is NoSuchFileException)
-                LOGGER.error("Cannot list files in project dir '{}'.", projectDir, e)
-            emptyList()
-        }.filter { file -> file.isRegularFile() && hasCreditsFilename(file) }
+        val creditsFiles = projectDir.walkSafely().filter { file -> file.isRegularFile() && hasCreditsFilename(file) }
         reloadOrRemoveCreditsFilesOnceReadable(creditsFiles, delay = 0, attempt = 0)
 
         // Watch for future changes in the new project dir.
