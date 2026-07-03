@@ -411,7 +411,7 @@ private fun drawBodyImageWithFlowBodyLayout(
     val style = block.style
     val horGap = style.flowCellHGapPx
 
-    val sepLetterStyleName = style.flowSeparatorLetterStyleName.orElse { style.bodyLetterStyleName }
+    val sepLetterStyleName = style.flowSeparatorLetterStyleName.value ?: style.bodyLetterStyleName
     val sepLetterStyle = styling.letterStyles.find { it.name == sepLetterStyleName } ?: PLACEHOLDER_LETTER_STYLE
     val sepStr = style.flowSeparator
     val sepFmtStr = if (sepStr.isBlank()) null else format(sepStr, sepLetterStyle, styling)

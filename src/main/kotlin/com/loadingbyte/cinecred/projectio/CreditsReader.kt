@@ -676,8 +676,10 @@ private class CreditsReader(
         val bodyElem = getBodyElement("body", contentStyle?.bodyLetterStyleName, false)
 
         // Get the head and tail, which may only be styled strings.
-        val newHead = (getBodyElement("head", contentStyle?.headLetterStyleName, true) as BodyElement.Str?)?.lines
-        val newTail = (getBodyElement("tail", contentStyle?.tailLetterStyleName, true) as BodyElement.Str?)?.lines
+        val headLetterStyleName = contentStyle?.run { headLetterStyleName.value ?: bodyLetterStyleName }
+        val tailLetterStyleName = contentStyle?.run { tailLetterStyleName.value ?: bodyLetterStyleName }
+        val newHead = (getBodyElement("head", headLetterStyleName, true) as BodyElement.Str?)?.lines
+        val newTail = (getBodyElement("tail", tailLetterStyleName, true) as BodyElement.Str?)?.lines
 
         // If either head or tail is available, or if a body is available and the conclusion of the previous block
         // has been marked, conclude the previous block (if there was any) and start a new one.

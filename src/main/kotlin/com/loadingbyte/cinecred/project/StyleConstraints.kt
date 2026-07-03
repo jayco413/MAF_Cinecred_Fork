@@ -180,7 +180,7 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
     DoubleConstr(ERROR, ContentStyle::flowRowGapPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::flowCellHGapPx.st(), min = 0.0),
     StyledStringConstr(WARN, ContentStyle::flowSeparator.st()) { _, style ->
-        style.flowSeparatorLetterStyleName.orElse { style.bodyLetterStyleName }
+        style.flowSeparatorLetterStyleName.value ?: style.bodyLetterStyleName
     },
     DynChoiceConstr(WARN, ContentStyle::flowSeparatorVJustify.st()) { _, style ->
         if (style.flowTextVJustifyFragments == VTextFragment.ALL_LINES ||
@@ -208,7 +208,7 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
     },
     DoubleConstr(ERROR, ContentStyle::headGapPx.st(), min = 0.0),
     StyledStringConstr(WARN, ContentStyle::headLeader.st()) { _, style ->
-        style.headLeaderLetterStyleName.orElse { style.headLetterStyleName }
+        style.headLeaderLetterStyleName.value ?: style.headLetterStyleName.value ?: style.bodyLetterStyleName
     },
     DoubleConstr(ERROR, ContentStyle::headLeaderMarginLeftPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::headLeaderMarginRightPx.st(), min = 0.0),
@@ -230,7 +230,7 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
     },
     DoubleConstr(ERROR, ContentStyle::tailGapPx.st(), min = 0.0),
     StyledStringConstr(WARN, ContentStyle::tailLeader.st()) { _, style ->
-        style.tailLeaderLetterStyleName.orElse { style.tailLetterStyleName }
+        style.tailLeaderLetterStyleName.value ?: style.tailLetterStyleName.value ?: style.bodyLetterStyleName
     },
     DoubleConstr(ERROR, ContentStyle::tailLeaderMarginLeftPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::tailLeaderMarginRightPx.st(), min = 0.0),

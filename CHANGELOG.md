@@ -9,6 +9,11 @@ Cinecred Changelog
 
 - In newly created projects, gutter heads are now vertically centered again.
 
+### UI Fixes
+
+- The letter style references in a content style are now overridable, defaulting
+  to the body letter style.
+
 
 1.9.0
 -----

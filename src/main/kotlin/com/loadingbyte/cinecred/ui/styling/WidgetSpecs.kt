@@ -171,12 +171,14 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     NumberWidgetSpec(ContentStyle::flowRowGapPx.st(), sensitivity = 0.2),
     NumberWidgetSpec(ContentStyle::flowCellHGapPx.st(), sensitivity = 0.2),
     WidthWidgetSpec(ContentStyle::flowSeparator.st(), WidthSpec.NARROW),
+    OverrideWidgetSpec(ContentStyle::flowSeparatorLetterStyleName.st()) { _, style -> style.bodyLetterStyleName },
     ToggleButtonGroupWidgetSpec(ContentStyle::flowSeparatorVJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::paragraphsLineHJustify.st(), ICON),
     NumberWidgetSpec(ContentStyle::paragraphsLineWidthPx.st(), sensitivity = 1.0),
     NumberWidgetSpec(ContentStyle::paragraphsParaGapPx.st(), sensitivity = 0.2),
     NumberWidgetSpec(ContentStyle::paragraphsLineGapPx.st(), sensitivity = 0.2),
     NewSectionWidgetSpec(ContentStyle::hasHead.st()),
+    OverrideWidgetSpec(ContentStyle::headLetterStyleName.st()) { _, style -> style.bodyLetterStyleName },
     WidthWidgetSpec(ContentStyle::headForceWidthPx.st(), WidthSpec.LITTLE),
     NumberWidgetSpec(ContentStyle::headForceWidthPx.st(), sensitivity = 1.0),
     ToggleButtonGroupWidgetSpec(ContentStyle::headHarmonizeWidth.st(), ICON),
@@ -195,6 +197,9 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     ),
     NumberWidgetSpec(ContentStyle::headGapPx.st(), sensitivity = 0.2),
     WidthWidgetSpec(ContentStyle::headLeader.st(), WidthSpec.NARROW),
+    OverrideWidgetSpec(ContentStyle::headLeaderLetterStyleName.st()) { _, style ->
+        style.headLetterStyleName.value ?: style.bodyLetterStyleName
+    },
     ToggleButtonGroupWidgetSpec(ContentStyle::headLeaderHJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::headLeaderVJustify.st(), ICON),
     UnionWidgetSpec(
@@ -214,6 +219,7 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
         settingIcons = listOf(LEADER_GAP_MARGIN_LEFT_ICON, LEADER_GAP_MARGIN_RIGHT_ICON, LEADER_GAP_SPACING_ICON)
     ),
     NewSectionWidgetSpec(ContentStyle::hasTail.st()),
+    OverrideWidgetSpec(ContentStyle::tailLetterStyleName.st()) { _, style -> style.bodyLetterStyleName },
     WidthWidgetSpec(ContentStyle::tailForceWidthPx.st(), WidthSpec.LITTLE),
     NumberWidgetSpec(ContentStyle::tailForceWidthPx.st(), sensitivity = 1.0),
     ToggleButtonGroupWidgetSpec(ContentStyle::tailHarmonizeWidth.st(), ICON),
@@ -232,6 +238,9 @@ private val CONTENT_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<ContentStyle, *>> =
     ),
     NumberWidgetSpec(ContentStyle::tailGapPx.st(), sensitivity = 0.2),
     WidthWidgetSpec(ContentStyle::tailLeader.st(), WidthSpec.NARROW),
+    OverrideWidgetSpec(ContentStyle::tailLeaderLetterStyleName.st()) { _, style ->
+        style.tailLetterStyleName.value ?: style.bodyLetterStyleName
+    },
     ToggleButtonGroupWidgetSpec(ContentStyle::tailLeaderHJustify.st(), ICON),
     ToggleButtonGroupWidgetSpec(ContentStyle::tailLeaderVJustify.st(), ICON),
     UnionWidgetSpec(

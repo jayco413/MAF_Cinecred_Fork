@@ -241,7 +241,7 @@ object GuideContentStyleFlowLayoutSeparatorDemo : StyleSettingsDemo<ContentStyle
         this += bulletsCS.copy(name = "Demo", flowSeparator = "")
         this += last().copy(flowSeparator = bulletsCS.flowSeparator)
         this += last().copy(flowSeparator = "\u2013")
-        this += last().copy(flowSeparatorLetterStyleName = Opt(true, coloredStyleName))
+        this += last().copy(flowSeparatorLetterStyleName = Override(coloredStyleName))
     }
 
     override fun credits(style: ContentStyle) = FLOW_SPREADSHEET.parseCreditsCS(style)
@@ -260,7 +260,7 @@ object GuideContentStyleFlowLayoutSeparatorVJustifyDemo : StyleSettingsDemo<Cont
 ) {
     override fun styles() = buildList<ContentStyle> {
         this += bulletsCS.copy(
-            name = "Demo", flowSeparator = "X", flowSeparatorLetterStyleName = Opt(true, "Sep")
+            name = "Demo", flowSeparator = "X", flowSeparatorLetterStyleName = Override("Sep")
         )
         this += last().copy(flowSeparatorVJustify = VJustifyText.BASELINE)
         this += last().copy(flowSeparatorVJustify = VJustifyText.BOTTOM)

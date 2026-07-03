@@ -308,7 +308,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             gridHarmonizeColWidths = HarmonizeExtent.ACROSS_BLOCKS,
             gridCellHJustifyPerCol = persistentListOf(HJustify.LEFT),
             hasHead = true,
-            headLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
+            headLetterStyleName = Override(l10n("project.template.letterStyleSmall", template.locale)),
             headHarmonizeWidth = HarmonizeExtent.ACROSS_BLOCKS,
             headHJustify = HJustify.RIGHT,
             headGapPx = 24.0
@@ -320,7 +320,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             flowRowWidthPx = 800.0,
             flowCellHGapPx = 32.0,
             hasHead = true,
-            headLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
+            headLetterStyleName = Override(l10n("project.template.letterStyleSmall", template.locale)),
             headGapPx = 4.0
         ),
         PRESET_CONTENT_STYLE.copy(
@@ -337,7 +337,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             bodyLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
             bodyLayout = BodyLayout.GRID,
             hasHead = true,
-            headLetterStyleName = l10n("project.template.letterStyleSongTitle", template.locale),
+            headLetterStyleName = Override(l10n("project.template.letterStyleSongTitle", template.locale)),
             headGapPx = 0.0
         ),
         PRESET_CONTENT_STYLE.copy(
@@ -361,10 +361,10 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             bodyLetterStyleName = l10n("project.template.letterStyleCardName", template.locale),
             bodyLayout = BodyLayout.GRID,
             hasHead = true,
-            headLetterStyleName = l10n("project.template.letterStyleCardSmall", template.locale),
+            headLetterStyleName = Override(l10n("project.template.letterStyleCardSmall", template.locale)),
             headGapPx = 32.0,
             hasTail = true,
-            tailLetterStyleName = l10n("project.template.letterStyleCardSmall", template.locale),
+            tailLetterStyleName = Override(l10n("project.template.letterStyleCardSmall", template.locale)),
             tailGapPx = 32.0
         )
     ),

@@ -154,8 +154,8 @@ object GuideContentStyleHeadLetterStyleDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::headLetterStyleName.st()), pageGuides = true
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += gutterCS.copy(name = "Demo")
-        this += last().copy(headLetterStyleName = "Normal")
+        this += gutterCS.copy(name = "Demo", headLetterStyleName = Override(null))
+        this += last().copy(headLetterStyleName = Override("Small"))
     }
 
     override fun credits(style: ContentStyle) = """
@@ -212,7 +212,7 @@ Best Boy,Francesco Foreman,
         style,
         gutterCS.copy(
             name = altStyleName, bodyLetterStyleName = "Song Title", gridHarmonizeColWidths = HarmonizeExtent.OFF,
-            headLetterStyleName = "Normal"
+            headLetterStyleName = Override("Normal")
         )
     )
 }
@@ -319,7 +319,7 @@ object GuideContentStyleHeadLeaderLetterStyleDemo : StyleSettingsDemo<ContentSty
 
     override fun styles() = buildList<ContentStyle> {
         this += leaderCS.copy(name = "Demo")
-        this += last().copy(headLeaderLetterStyleName = Opt(true, coloredStyleName))
+        this += last().copy(headLeaderLetterStyleName = Override(coloredStyleName))
     }
 
     override fun credits(style: ContentStyle) = """
@@ -399,8 +399,8 @@ object GuideContentStyleHeadLeaderMarginAndSpacingDemo : StyleSettingsDemo<Conte
 
 private val headBodyTailCS = PRESET_CONTENT_STYLE.copy(
     blockOrientation = BlockOrientation.HORIZONTAL, bodyLetterStyleName = "Name",
-    hasHead = true, headLetterStyleName = "Small",
-    hasTail = true, tailLetterStyleName = "Small",
+    hasHead = true, headLetterStyleName = Override("Small"),
+    hasTail = true, tailLetterStyleName = Override("Small"),
 )
 
 private val gutterCS = TEMPLATE_PROJECT.styling.contentStyles.first { it.name == "Gutter" }
