@@ -9,6 +9,7 @@ import com.loadingbyte.cinecred.common.LOGGER
 import com.loadingbyte.cinecred.common.execProcess
 import com.loadingbyte.cinecred.common.l10n
 import de.siegmar.fastcsv.reader.CsvReader
+import de.siegmar.fastcsv.reader.FieldMismatchStrategy
 import de.siegmar.fastcsv.reader.StringArrayHandler
 import de.siegmar.fastcsv.writer.CsvWriter
 import jxl.CellView
@@ -564,7 +565,11 @@ object CsvFormat : SpreadsheetFormat {
         val trimmed = text.removePrefix(0xFEFF.toChar().toString())
 
         // Parse the CSV file into a string matrix.
-        val matrix = CsvReader.builder().skipEmptyLines(false).build(StringArrayHandler.of(), trimmed).use { reader ->
+        val builder = CsvReader.builder()
+            .skipEmptyLines(false)
+            .extraFieldStrategy(FieldMismatchStrategy.IGNORE)
+            .missingFieldStrategy(FieldMismatchStrategy.IGNORE)
+        val matrix = builder.build(StringArrayHandler.of(), trimmed).use { reader ->
             buildList {
                 var row = 0
                 for (line in reader) {
