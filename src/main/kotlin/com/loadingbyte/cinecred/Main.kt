@@ -100,6 +100,10 @@ fun setupNatives() {
     if (didSetupNatives.getAndSet(true))
         return
 
+    // Make FlatLaf load its native library from java.library.path.
+    // We must st this property before the first usage of SystemInfo, as that sneakily loads the library on Windows 10.
+    System.setProperty(FlatSystemProperties.NATIVE_LIBRARY_PATH, "system")
+
     // On Linux, set glibc's M_MMAP_THRESHOLD to a fixed value. This is the threshold above which malloc() calls are
     // directly forwarded to mmap(), meaning that when the memory is freed again, it's immediately returned to the OS.
     // We desire this behavior for all our bigger allocations (e.g., bitmaps), since if they don't go via mmap(), they
@@ -124,11 +128,9 @@ fun setupNatives() {
         System.loadLibrary("nfd")
     System.loadLibrary("decklinkcapi")
 
-    // Make JavaCPP and FlatLaf load their native libraries from java.library.path.
+    // Make JavaCPP load its native libraries from java.library.path.
     System.setProperty("org.bytedeco.javacpp.cacheLibraries", "false")
     System.setProperty("org.bytedeco.javacpp.findLibraries", "false")
-    System.setProperty(FlatSystemProperties.NATIVE_LIBRARY_PATH, "system")
-
     // Redirect JavaCPP's logging output to slf4j.
     System.setProperty("org.bytedeco.javacpp.logger", "slf4j")
     // Load the FFmpeg libs that we require.
