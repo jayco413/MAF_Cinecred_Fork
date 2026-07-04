@@ -138,8 +138,8 @@ fun String.parseCreditsTS(vararg tapeStyles: TapeStyle): Pair<Global, List<Page>
 
 private fun String.parseCredits(styling: Styling): Pair<Global, List<Page>> {
     val spreadsheet = CsvFormat.read(this, "")
-    val picLoaders = if ("logo.svg" in this) mapOf(LOGO_PIC.file.name to LOGO_PIC) else emptyMap()
-    val tapes = if ("rainbow" in this) mapOf(RAINBOW_TAPE.fileOrDir.name to RAINBOW_TAPE) else emptyMap()
+    val picLoaders = if ("logo.svg" in this) mapOf("logo.svg" to LOGO_PIC) else emptyMap()
+    val tapes = if ("rainbow" in this) mapOf("rainbow" to RAINBOW_TAPE) else emptyMap()
     val pages = readCredits("", spreadsheet, styling, picLoaders, tapes).first.pages
     return Pair(styling.global, pages)
 }

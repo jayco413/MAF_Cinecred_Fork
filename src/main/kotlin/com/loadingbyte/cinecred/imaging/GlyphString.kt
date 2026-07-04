@@ -239,12 +239,12 @@ class GlyphString<U> private constructor(
 
     companion object {
 
-        fun of(string: String, fontCase: Font.Case): GlyphString<*> {
+        fun of(string: String, fontCase: Font.Case, locale: Locale = Locale.ROOT): GlyphString<*> {
             val run = Run(0, fontCase, true, true, emptyList(), 1.0, 0.0, null)
-            return layout(string.toCharArray(), 0, string.length, listOf(run), Locale.ROOT, null)
+            return layout(string.toCharArray(), 0, string.length, listOf(run), locale, null)
         }
 
-        fun <U> of(string: String, runs: List<Run<U>>, locale: Locale): GlyphString<U> {
+        fun <U> of(string: String, runs: List<Run<U>>, locale: Locale = Locale.ROOT): GlyphString<U> {
             return layout(string.toCharArray(), 0, string.length, runs, locale, null)
         }
 

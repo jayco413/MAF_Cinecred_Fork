@@ -494,10 +494,9 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
     }
 
     override fun triggerAddRenderJobToQueue() {
-        val format = formatWidget.value
         deliveryCtrl.addRenderJobToQueue(
             creditsIdWidget.value.getOrNull() ?: return,
-            format,
+            formatWidget.value,
             currentConfig() ?: return,
             currentSliders(),
             currentPageIndices(),

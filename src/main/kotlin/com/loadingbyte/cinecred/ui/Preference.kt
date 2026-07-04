@@ -127,7 +127,7 @@ private class LocaleWishPreference(override val key: String) : AbstractPreferenc
 private class WindowLayoutListPreference(override val key: String) :
     AbstractPreference<List<ConfigurableWindowLayout>>() {
 
-    private val decFmt = DecimalFormat("#.##", DecimalFormatSymbols(Locale.ROOT))
+    private val decFmt = DecimalFormat("#.##", DecimalFormatSymbols.getInstance(Locale.ROOT))
 
     override fun doGet() = (PreferencesToml.get(key) as? List<*> ?: emptyList<Any>()).mapNotNull {
         if (it !is Map<*, *>) return@mapNotNull null

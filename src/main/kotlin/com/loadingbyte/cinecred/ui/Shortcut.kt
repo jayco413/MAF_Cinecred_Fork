@@ -65,7 +65,7 @@ enum class Shortcut(val modifiers: Int, val keyCode: Int) {
 
     DELIVERY_ADD_RENDER_JOB(ACTION_DOWN_MASK, VK_B),
 
-    HIDDEN_SHOW_LOG(SHIFT_DOWN_MASK or ACTION_DOWN_MASK or ALT_DOWN_MASK, VK_L);
+    HIDDEN_SHOW_LOG(SHIFT_DOWN_MASK or CTRL_DOWN_MASK or ALT_DOWN_MASK, VK_L);
 
 
     // Note: We have to rebuild this string each time because the default locale can change.

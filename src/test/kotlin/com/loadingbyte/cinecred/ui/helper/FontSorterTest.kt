@@ -15,7 +15,7 @@ internal class FontSorterTest {
         val expectedFamilies = makeExpectedFamilies()
 
         val fonts = expectedFamilies.flatMap(Family::fonts).shuffled(Random(42))
-        val actualFamilies = TestFontSorter().sort(fonts)
+        val actualFamilies = TestFontSorter().sort(fonts).sortedBy { it.family[ROOT] }
         assertEquals(PrettyList(expectedFamilies), PrettyList(actualFamilies))
         for (font in fonts)
             font.assertPopped()

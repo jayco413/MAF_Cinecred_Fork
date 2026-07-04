@@ -78,7 +78,7 @@ class ColorPicker(allowNonSRGB: Boolean, private val allowAlpha: Boolean) : JCom
         layout = MigLayout(
             "wrap",
             "[][]unrel[right][fill]" + if (allowNonSRGB) "unrel[]" else "",
-            "[]8[]unrel[][][]unrel[][][]" + if (allowAlpha) "unrel[top]" else ""
+            "[]8[]unrel[][][]unrel[][][top]" + if (allowAlpha) "unrel[top]" else ""
         )
         add(JLabel(l10n("ui.form.colorSwatches")), "spanx, split 2")
         add(swatches, "growx")

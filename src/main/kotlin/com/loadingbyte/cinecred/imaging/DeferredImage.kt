@@ -168,7 +168,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         val TAPES = object : Layer {}
         val GUIDES = object : Layer {}
 
-        private val F = DecimalFormat("#.####", DecimalFormatSymbols(Locale.ROOT))
+        private val F = DecimalFormat("#.####", DecimalFormatSymbols.getInstance(Locale.ROOT))
 
         private fun FloatArray.isFinite(end: Int): Boolean =
             allBetween(0, end, Float::isFinite)

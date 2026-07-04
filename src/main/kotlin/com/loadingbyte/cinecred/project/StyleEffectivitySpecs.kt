@@ -407,21 +407,21 @@ private val TAPE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<TapeStyle>> 
     ),
     StyleEffectivitySpec(
         TapeStyle::range.st(),
-        isAlmostEffective = { _, style ->
+        isTotallyIneffective = { _, style ->
             val spec = tapeSpec(style)
             spec != null && spec.representation.pixelFormat.isFloat
         }
     ),
     StyleEffectivitySpec(
         TapeStyle::yuvCoefficients.st(),
-        isAlmostEffective = { _, style ->
+        isTotallyIneffective = { _, style ->
             val spec = tapeSpec(style)
             spec != null && spec.representation.pixelFormat.family != Bitmap.PixelFormat.Family.YUV
         }
     ),
     StyleEffectivitySpec(
         TapeStyle::alpha.st(),
-        isAlmostEffective = { _, style ->
+        isTotallyIneffective = { _, style ->
             val spec = tapeSpec(style)
             spec != null && !spec.representation.pixelFormat.hasAlpha
         }
