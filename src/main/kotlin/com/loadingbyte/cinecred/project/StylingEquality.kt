@@ -86,9 +86,12 @@ fun Style.equalsIgnoreIneffectiveSettings(styling: Styling, other: Style): Boole
 
     if (javaClass != other.javaClass)
         return false
-    val excludedSettings = findIneffectiveSettings(styling, this)
-    if (excludedSettings.keys != findIneffectiveSettings(styling, other).keys)
-        return false
+    // If the two styles have different ineffective settings, that can have one of two reasons:
+    //   - Either the styles themselves are different, which will be detected by the following equality procedure.
+    //   - Or the difference stems from context, e.g., because one style has a populated TapeRef while the other one
+    //     doesn't. In this case, we want to ignore the settings that are marked ineffective by the style that has more
+    //     information, hence we take the union of both sets of ineffective settings.
+    val excludedSettings = findIneffectiveSettings(styling, this).keys + findIneffectiveSettings(styling, other).keys
     for (setting in getStyleSettings(javaClass))
         if (setting !in excludedSettings)
             when (setting) {
