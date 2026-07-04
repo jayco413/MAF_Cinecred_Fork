@@ -5,6 +5,10 @@ Cinecred Changelog
 1.9.1-SNAPSHOT
 --------------
 
+### Additions
+
+- Zooming the preview with the scroll wheel now zooms towards the mouse pointer.
+
 ### Fixes
 
 - CSV files where some rows have fewer columns than others are accepted again.

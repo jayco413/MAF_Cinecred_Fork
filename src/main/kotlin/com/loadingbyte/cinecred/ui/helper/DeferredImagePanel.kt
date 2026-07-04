@@ -173,9 +173,16 @@ class DeferredImagePanel(
                         if (SystemInfo.isWindows) getSystemScaleFactor(graphicsConfiguration) else 1.0
             }
             // On macOS, depending on the app, either ctrl or command is used for zooming, so we just support both.
-            if (e.modifiersEx.let { it == CTRL_DOWN_MASK || it == META_DOWN_MASK })
-                zoom *= zoomFactor.pow(-mult)
-            else {
+            if (e.modifiersEx.let { it == CTRL_DOWN_MASK || it == META_DOWN_MASK }) {
+                val zoomMult = zoomFactor.pow(-mult)
+                val c = (1.0 - 1.0 * zoom / (zoom * zoomMult).coerceIn(minZoom, maxZoom)) / imageScaling
+                val mouse = SwingUtilities.convertPoint(e.component, e.point, canvas)
+                val newViewportCenterX = viewportCenterX + c * (mouse.x - canvas.width / 2)
+                val newViewportCenterY = viewportCenterY + c * (mouse.y - canvas.height / 2)
+                zoom *= zoomMult
+                viewportCenterX = newViewportCenterX
+                viewportCenterY = newViewportCenterY
+            } else {
                 val unitIncrement = min(viewportWidth, viewportHeight) * mult / 50.0
                 when (e.modifiersEx) {
                     0 -> viewportCenterY += if (block) viewportHeight * mult else unitIncrement
