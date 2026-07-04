@@ -16,6 +16,7 @@ import java.nio.channels.FileChannel
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -55,10 +56,8 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
     private val creditsLogs = HashMap<Path, List<ParserMsg>>()
     private val linkedCreditsWatchers = HashMap<Path, ServiceWatcher>()
 
-    private val auxFileEventBatchLock = ReentrantLock()
-    private var auxFileEventBatch = HashMap<Path, Pair<RecursiveFileWatcher.Event, Int>>()
-    private var auxFileEventBatchVersion = 0L
-    private var auxFileEventBatchProcessor: ScheduledFuture<*>? = null
+    private val creditsFileEventBatcher = EventBatcher<Int>(executor, ::flushCreditsFileEvents)
+    private val auxFileEventBatcher = EventBatcher<Trial>(executor, ::flushAuxFileEvents)
 
     private val projectFonts = HashMap<Path, List<Font>>()
     private val pictureLoaders = PathTreeMap<Picture.Loader>()
@@ -77,21 +76,21 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         // us to omit locking. Second, reloadAuxFileOrDir() might schedule a task in the executor thread, which we do
         // not want to run before our first push down below is done -- and since we're blocking the executor thread,
         // the scheduled task can't run.
-        executor.submit {
+        executor.submit(throwableAwareTask {
             for (projectFileOrDir in projectDir.walkSafely())
                 reloadAuxFileOrDir(projectFileOrDir, attempt = 0)
             pushAuxiliaryFileChanges()
-        }.get()
+        }).get()
 
         // Load the initially present credits files in the executor thread.
         val creditsFiles = projectDir.walkSafely().filter { file -> file.isRegularFile() && hasCreditsFilename(file) }
-        reloadOrRemoveCreditsFilesOnceReadable(creditsFiles, delay = 0, attempt = 0)
+        creditsFileEventBatcher.pushEvents(creditsFiles.map { it to 0 }, delay = 0)
 
         // Watch for future changes in the new project dir.
         RecursiveFileWatcher.watch(projectDir) { event: RecursiveFileWatcher.Event, file: Path ->
             if (hasCreditsFilename(file)) {
                 // Also wait a moment so that the file has been fully written.
-                reloadOrRemoveCreditsFilesOnceReadable(listOf(file), delay = 100, attempt = 0)
+                creditsFileEventBatcher.pushEvent(file, 0, delay = 100)
             } else
                 reloadOrRemoveAuxFileOrDirLater(file, event, attempt = 0)
         }
@@ -127,14 +126,11 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         executor.shutdown()
     }
 
-    private fun reloadOrRemoveCreditsFilesOnceReadable(changedFiles: List<Path>, delay: Long, attempt: Int) {
-        // Process changes to the credits file in the executor thread.
-        executor.schedule(throwableAwareTask {
-            val (locked, unlocked) = changedFiles.partition { f -> f.isRegularFile() && isFileLocked(f, attempt) }
-            if (locked.isNotEmpty())
-                reloadOrRemoveCreditsFilesOnceReadable(locked, 500, attempt + 1)
-            reloadOrRemoveCreditsFiles(unlocked)
-        }, delay, TimeUnit.MILLISECONDS)
+    private fun flushCreditsFileEvents(events: Map<Path, Int>) {
+        val (locked, unlocked) = events.entries.partition { (f, a) -> f.isRegularFile() && isFileLocked(f, a) }
+        if (locked.isNotEmpty())
+            creditsFileEventBatcher.pushEvents(locked.map { (f, a) -> f to a + 1 }, delay = 500)
+        reloadOrRemoveCreditsFiles(unlocked.map { (f, _) -> f })
     }
 
     private fun reloadOrRemoveCreditsFiles(changedFiles: List<Path>) {
@@ -239,38 +235,19 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
     }
 
     private fun reloadOrRemoveAuxFileOrDirLater(fileOrDir: Path, event: RecursiveFileWatcher.Event, attempt: Int) {
-        auxFileEventBatchLock.withLock {
-            // Changes to auxiliary files are batched to reduce the number of pushes when, e.g., a long image sequence
-            // is copied into the project dir.
-            // For this, we first record the event to a map, overriding the previous event for that file if there was
-            // any. We also record events for the changed file's parent dir to account for image sequences.
-            val batch = auxFileEventBatch
-            val parent = fileOrDir.parent
-            batch[fileOrDir] = Pair(event, attempt)
-            batch[parent] = Pair(if (parent.exists()) MODIFY else DELETE, attempt)
-            val curVersion = ++auxFileEventBatchVersion
-            // We then schedule a task that will later apply the batched changes in one go.
-            // Cancel the previous task if it hasn't started yet
-            auxFileEventBatchProcessor?.cancel(false)
-            auxFileEventBatchProcessor = executor.schedule(throwableAwareTask {
-                val batch = auxFileEventBatchLock.withLock {
-                    // If new aux file events have arrived in the meantime, but this task wasn't canceled in time, abort
-                    // the task now. This makes sure that there's always a delay between when an event arrives and is
-                    // processed. A nice side effect of that delay is waiting until whoever modified the file is done
-                    // writing to it.
-                    if (auxFileEventBatchVersion != curVersion)
-                        return@throwableAwareTask
-                    auxFileEventBatch.also { auxFileEventBatch = HashMap() }
-                }
-                for ((batchFile, batchValue) in batch) {
-                    val (batchEvent, batchAttempt) = batchValue
-                    removeAuxFileOrDir(batchFile)
-                    if (batchEvent == MODIFY)
-                        reloadAuxFileOrDir(batchFile, batchAttempt)
-                }
-                pushAuxiliaryFileChanges()
-            }, 500, TimeUnit.MILLISECONDS)
+        // Also record events for the changed file's parent dir to account for image sequences.
+        val p = fileOrDir.parent
+        val events = listOf(fileOrDir to Trial(event, attempt), p to Trial(if (p.exists()) MODIFY else DELETE, attempt))
+        auxFileEventBatcher.pushEvents(events, delay = 500)
+    }
+
+    private fun flushAuxFileEvents(events: Map<Path, Trial>) {
+        for ((fileOrDir, trial) in events) {
+            removeAuxFileOrDir(fileOrDir)
+            if (trial.event == MODIFY)
+                reloadAuxFileOrDir(fileOrDir, trial.attempt)
         }
+        pushAuxiliaryFileChanges()
     }
 
     private fun reloadAuxFileOrDir(fileOrDir: Path, attempt: Int) {
@@ -416,6 +393,51 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
                     name = "${getName(elem)} (${++counter})"
                 if (name != getName(elem))
                     list[idx] = changeName(elem, name)
+            }
+        }
+
+    }
+
+
+    private data class Trial(val event: RecursiveFileWatcher.Event, val attempt: Int)
+
+
+    private class EventBatcher<E : Any>(
+        private val executor: ScheduledExecutorService,
+        private val flushEvents: (Map<Path, E>) -> Unit
+    ) {
+
+        private val lock = ReentrantLock()
+        private var batch = HashMap<Path, E>()
+        private var version = 0L
+        private var processor: ScheduledFuture<*>? = null
+
+        fun pushEvent(path: Path, event: E, delay: Long) {
+            pushEvents(listOf(path to event), delay)
+        }
+
+        fun pushEvents(events: Iterable<Pair<Path, E>>, delay: Long) {
+            lock.withLock {
+                // Changes to files are batched to reduce the number of pushes when, e.g., a long image sequence is
+                // copied into the project dir.
+                // For this, first record the events, overriding the previous events for those files if there were any.
+                batch.putAll(events)
+                val curVersion = ++version
+                // Cancel the previous task if it hasn't started yet.
+                processor?.cancel(false)
+                // Then schedule a task that will later apply the batched changes in one go.
+                processor = executor.schedule(throwableAwareTask {
+                    val batch = lock.withLock {
+                        // If new file events have arrived in the meantime, but this task wasn't canceled in time, abort
+                        // the task now. This makes sure that there's always a delay between when an event arrives and
+                        // is processed. A nice side effect of that delay is waiting until whoever modified the file is
+                        // done writing to it.
+                        if (version != curVersion)
+                            return@throwableAwareTask
+                        this.batch.also { this.batch = HashMap() }
+                    }
+                    flushEvents(batch)
+                }, delay, TimeUnit.MILLISECONDS)
             }
         }
 
