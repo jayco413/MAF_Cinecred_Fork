@@ -2,25 +2,21 @@
 
 package com.loadingbyte.cinecred
 
-import com.formdev.flatlaf.FlatClientProperties.STYLE_CLASS
 import com.formdev.flatlaf.FlatDarkLaf
 import com.formdev.flatlaf.FlatIconColors
 import com.formdev.flatlaf.FlatSystemProperties
 import com.formdev.flatlaf.util.HSLColor
 import com.formdev.flatlaf.util.SystemInfo
-import com.formdev.flatlaf.util.UIScale
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.DeckLink
+import com.loadingbyte.cinecred.ui.Report
 import com.loadingbyte.cinecred.ui.UIFactory
 import com.loadingbyte.cinecred.ui.UI_LOCALE_PREFERENCE
 import com.loadingbyte.cinecred.ui.comms.MasterCtrlComms
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
 import com.loadingbyte.cinecred.ui.helper.*
 import com.oracle.si.Singleton
-import de.siegmar.fastcsv.reader.CsvReader
-import de.siegmar.fastcsv.reader.StringArrayHandler
 import net.miginfocom.layout.PlatformDefaults
-import net.miginfocom.swing.MigLayout
 import org.bytedeco.ffmpeg.avutil.LogCallback
 import org.bytedeco.ffmpeg.global.avcodec
 import org.bytedeco.ffmpeg.global.avformat
@@ -35,9 +31,6 @@ import java.awt.event.MouseEvent
 import java.lang.foreign.FunctionDescriptor
 import java.lang.foreign.Linker
 import java.lang.foreign.ValueLayout.JAVA_INT
-import java.lang.management.ManagementFactory
-import java.net.URI
-import java.net.URLEncoder
 import java.util.*
 import java.util.Timer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -268,114 +261,23 @@ private fun openUI(args: Array<String>) {
 }
 
 
-private object UncaughtHandler : Thread.UncaughtExceptionHandler {
+fun getLog(): String =
+    JULBuilderHandler.log.toString()
 
+
+private object UncaughtHandler : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(t: Thread, e: Throwable) {
         if (hasCrashed.getAndSet(true))
             return
-        // Immediately collect contextual information before we do anything else.
-        val header = collectReportHeader()
         LOGGER.error("Uncaught exception. Will terminate the program.", e)
+        val report = Report()
         SwingUtilities.invokeLater {
-            sendReport(header)
+            report.showCrashDialog()
             // Once all frames have been disposed, no more non-daemon threads are running and hence Java will terminate.
             if (::masterCtrl.isInitialized)
                 masterCtrl.tryCloseProjectsAndDisposeAllFrames(force = true)
         }
     }
-
-    private fun collectReportHeader(): String {
-        val heap = ManagementFactory.getMemoryMXBean().heapMemoryUsage
-
-        var rss: Long? = null
-        val pid = ProcessHandle.current().pid()
-        if (SystemInfo.isWindows) {
-            val process = ProcessBuilder(listOf("tasklist", "/fo", "csv", "/nh", "/fi", "pid eq $pid")).start()
-            if (process.waitFor() == 0)
-                rss = CsvReader.builder().build(StringArrayHandler.of(), process.inputReader())
-                    .use { it.firstOrNull()?.getOrNull(4) }
-                    ?.removeSuffix(" K")?.replace(".", "")?.replace(",", "")?.toLongOrNull()?.times(1024)
-        } else {
-            val process = ProcessBuilder(listOf("ps", "-o", "rss=", "-p", pid.toString())).start()
-            if (process.waitFor() == 0)
-                rss = process.inputReader().use { it.readAllAsString() }.trim().toLongOrNull()?.times(1024)
-        }
-
-        return """---- SYSTEM INFO ----
-Cinecred: $VERSION
-JVM: ${System.getProperty("java.vm.vendor")} ${System.getProperty("java.vm.name")} ${System.getProperty("java.vm.version")}
-OS: ${System.getProperty("os.name")} ${System.getProperty("os.arch")} ${System.getProperty("os.version")}
-RSS: ${if (rss == null) "?" else mb(rss)} MB
-Heap: Used ${mb(heap.used)} MB, Committed ${mb(heap.committed)} MB, Max ${mb(heap.max)} MB
-Disposable: Used ${mb(disposableBytes())} MB, Max ${mb(maxDisposableBytes())} MB
-Cores: ${ManagementFactory.getOperatingSystemMXBean().availableProcessors}
-Locale: ${Locale.getDefault().toLanguageTag()}
-
----- LOG ----
-"""
-    }
-
-    private fun mb(bytes: Long) = roundingDiv(bytes, 1024 * 1024)
-
-    private fun sendReport(header: String) {
-        val win = FocusManager.getCurrentKeyboardFocusManager().activeWindow
-        // We can't use our own version of getSystemScaleFactor(), as that is defined in Common.kt, which loads a lot of
-        // other classes if it wasn't yet initialized. That loading messes with our startup sequence and crashes the
-        // program again before we can even open this error window.
-        val s = UIScale.getSystemScaleFactor(
-            win?.graphicsConfiguration
-                ?: GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration
-        )
-
-        val log = JULBuilderHandler.log.toString()
-        val logComp = JTextArea("$header$log").apply {
-            isEditable = false
-            putClientProperty(STYLE_CLASS, "monospaced")
-        }
-        val msgComp = JPanel(MigLayout("insets 0, wrap", "[::${50.0 * s}sp]", "[][]unrel[][]")).apply {
-            add(JLabel(l10n("ui.crash.msg.error")))
-            add(JScrollPane(logComp), "hmax ${40.0 * s}sp")
-            add(JLabel(l10n("ui.crash.msg.exit")))
-            add(JLabel(l10n("ui.crash.msg.report")))
-        }
-        val send = JOptionPane.showConfirmDialog(
-            win, msgComp, l10n("ui.crash.title"), JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE
-        ) == JOptionPane.YES_OPTION
-
-        if (send) {
-            val address = encodeMailURIComponent("crashes@cinecred.com")
-            val subject = encodeMailURIComponent("Cinecred Crash Report")
-            val report = "[If possible, please describe what you did leading up to this crash.]\n\n\n$header" +
-                    // We replace tabs by four dots because some email programs trim leading tabs and spaces.
-                    log.replace("\t", "....")
-            val body = encodeMailURIComponent(report)
-            tryMail(URI("mailto:$address?Subject=$subject&Body=$body"))
-        }
-    }
-
-    private fun encodeMailURIComponent(str: String): String =
-        URLEncoder.encode(str, "UTF-8")
-            .replace("+", "%20")
-            .replace("%21", "!")
-            .replace("%27", "'")
-            .replace("%28", "(")
-            .replace("%29", ")")
-            .replace("%7E", "~")
-
-}
-
-
-fun showLog() {
-    val win = FocusManager.getCurrentKeyboardFocusManager().activeWindow
-    val screenBounds = (win?.graphicsConfiguration
-        ?: GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration).usableBounds
-    val log = JULBuilderHandler.log.toString()
-    val msgComp = JScrollPane(JTextArea(log).apply {
-        isEditable = false
-        putClientProperty(STYLE_CLASS, "monospaced")
-    })
-    msgComp.preferredSize = Dimension(screenBounds.width / 2, screenBounds.height / 2)
-    JOptionPane.showMessageDialog(win, msgComp, "Log", JOptionPane.INFORMATION_MESSAGE)
 }
 
 

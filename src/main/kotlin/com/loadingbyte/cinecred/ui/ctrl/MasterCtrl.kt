@@ -1,7 +1,6 @@
 package com.loadingbyte.cinecred.ui.ctrl
 
 import com.loadingbyte.cinecred.common.isSameFileAsSafely
-import com.loadingbyte.cinecred.showLog
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.comms.MasterCtrlComms
 import com.loadingbyte.cinecred.ui.comms.UIFactoryComms
@@ -60,7 +59,7 @@ class MasterCtrl(private val uiFactory: UIFactoryComms) : MasterCtrlComms {
         if (event.isConsumed || event.id != KEY_PRESSED)
             return false
         if (Shortcut.HIDDEN_SHOW_LOG.matches(event)) {
-            showLog()
+            Report.showLogDialog()
             return true
         }
         welcomeCtrl?.let { if (it.onGlobalKeyEvent(event)) return true }

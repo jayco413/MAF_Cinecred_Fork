@@ -4,6 +4,7 @@ import com.formdev.flatlaf.FlatClientProperties.*
 import com.loadingbyte.cinecred.common.VERSION
 import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.common.useResourceStream
+import com.loadingbyte.cinecred.ui.Report
 import com.loadingbyte.cinecred.ui.comms.License
 import com.loadingbyte.cinecred.ui.comms.WelcomeCtrlComms
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
@@ -103,6 +104,18 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             add(licenseScrollPane, "newline, grow, push, gaptop 10")
         }
 
+        val reportButton = JButton(l10n("ui.welcome.report"), EMAIL_ICON.getScaledIcon(2.0)).apply {
+            iconTextGap = 10
+            putClientProperty(STYLE_CLASS, "h2")
+            putClientProperty(BUTTON_TYPE, BUTTON_TYPE_BORDERLESS)
+            addActionListener { Report().send(Report.Type.BUG) }
+        }
+        val reportPanel = JPanel(MigLayout("insets 30", "", "[]25[]")).apply {
+            putClientProperty(STYLE, "background: $CONTENT_BG_COLOR")
+            add(newLabelTextArea(l10n("ui.report.msg")), "growx, pushx")
+            add(reportButton, "newline, center")
+        }
+
         updateMessageTextPane = newLabelTextPane()
         val updateBrowseButton = JButton(l10n("ui.update.browse"), BEARING_BOTTOM_ICON.getScaledIcon(2.0)).apply {
             iconTextGap = 10
@@ -135,6 +148,7 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             addTab(breakTitle(l10n("ui.welcome.preferences")), PREFERENCES_ICON, preferencesPanel)
             addTab(breakTitle(l10n("ui.welcome.changelog")), GIFT_ICON, changelogPanel)
             addTab(breakTitle(l10n("ui.welcome.about")), INFO_ICON.getRecoloredIcon(PALETTE_GRAY_COLOR), aboutPanel)
+            addTab(breakTitle(l10n("ui.welcome.report")), BUG_ICON, reportPanel)
         }
         layout = BorderLayout()
         add(tabPane, BorderLayout.CENTER)

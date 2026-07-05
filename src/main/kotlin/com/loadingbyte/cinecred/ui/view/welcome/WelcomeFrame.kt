@@ -207,7 +207,7 @@ class WelcomeFrame(private val welcomeCtrl: WelcomeCtrlComms) : CcFrame(l10n("ui
 
 
     companion object {
-        var minimumFrameSize = Dimension(700, 500)
+        var minimumFrameSize = Dimension(700, 530)
         private var rememberedBounds: Rectangle? = null
     }
 

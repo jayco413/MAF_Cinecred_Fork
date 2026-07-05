@@ -8,6 +8,7 @@ Cinecred Changelog
 ### Additions
 
 - Zooming the preview with the scroll wheel now zooms towards the mouse pointer.
+- Bug reports can now be submitted via a new button in the welcome window.
 
 ### Fixes
 
