@@ -20,17 +20,14 @@ import com.loadingbyte.cinecred.delivery.RenderFormat.Property.Companion.TRANSFE
 import com.loadingbyte.cinecred.delivery.RenderFormat.Property.Companion.TRANSPARENCY
 import com.loadingbyte.cinecred.delivery.RenderFormat.Sliders
 import com.loadingbyte.cinecred.delivery.RenderFormat.Transparency.*
-import com.loadingbyte.cinecred.imaging.*
 import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.GRAY
 import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.RGB
-import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.BT709
-import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.BLENDING
+import com.loadingbyte.cinecred.imaging.BitmapWriter
+import com.loadingbyte.cinecred.imaging.ColorSpace
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.LINEAR
-import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.STATIC
-import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.TAPES
-import com.loadingbyte.cinecred.project.Scan
+import com.loadingbyte.cinecred.imaging.DeferredImage
+import com.loadingbyte.cinecred.imaging.DeferredVideo
 import com.loadingbyte.cinecred.project.Styling
-import org.bytedeco.ffmpeg.global.avutil.*
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
@@ -83,39 +80,9 @@ class ImageSequenceRenderJob private constructor(
             else -> throw IllegalArgumentException()
         }
 
-        val backendRep = if (!matte) bitmapWriter.representation else {
-            val pxFmtCode = when (bitmapWriter.representation.pixelFormat.code) {
-                AV_PIX_FMT_GRAY8 -> AV_PIX_FMT_GBRAP
-                AV_PIX_FMT_GRAY10BE -> AV_PIX_FMT_GBRAP10BE
-                AV_PIX_FMT_GRAY10LE -> AV_PIX_FMT_GBRAP10LE
-                AV_PIX_FMT_GRAY12BE -> AV_PIX_FMT_GBRAP12BE
-                AV_PIX_FMT_GRAY12LE -> AV_PIX_FMT_GBRAP12LE
-                AV_PIX_FMT_GRAY16BE -> AV_PIX_FMT_GBRAP16BE
-                AV_PIX_FMT_GRAY16LE -> AV_PIX_FMT_GBRAP16LE
-                AV_PIX_FMT_GRAYF32BE -> AV_PIX_FMT_GBRAPF32BE
-                AV_PIX_FMT_GRAYF32LE -> AV_PIX_FMT_GBRAPF32LE
-                else -> throw IllegalArgumentException("No color format of ${bitmapWriter.representation.pixelFormat}.")
-            }
-            Bitmap.Representation(
-                Bitmap.PixelFormat.of(pxFmtCode), ColorSpace.of(BT709, BLENDING), Bitmap.Alpha.PREMULTIPLIED
-            )
-        }
-        val backendSpec = Bitmap.Spec(
-            scaledVideo.resolution, backendRep,
-            scan = when (scan) {
-                Scan.PROGRESSIVE -> Bitmap.Scan.PROGRESSIVE
-                Scan.INTERLACED_TOP_FIELD_FIRST -> Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST
-                Scan.INTERLACED_BOT_FIELD_FIRST -> Bitmap.Scan.INTERLACED_BOT_FIELD_FIRST
-            },
-            content = when (scan) {
-                Scan.PROGRESSIVE -> Bitmap.Content.PROGRESSIVE_FRAME
-                Scan.INTERLACED_TOP_FIELD_FIRST, Scan.INTERLACED_BOT_FIELD_FIRST -> Bitmap.Content.INTERLEAVED_FIELDS
-            }
-        )
-
-        DeferredVideo.BitmapBackend(
-            scaledVideo, listOf(STATIC), listOf(TAPES), grounding, backendSpec, ceiling
-        ).use { backend ->
+        VideoDeliverer(
+            scaledVideo, grounding, bitmapWriter.representation, ceiling, scan, matte
+        ).use { deliverer ->
             val numFrames = scaledVideo.numFrames
             val numWorkers = Runtime.getRuntime().availableProcessors() - 1
             val executor = Executors.newFixedThreadPool(numWorkers) { Thread(it, "ImageSequenceWriter") }
@@ -124,8 +91,7 @@ class ImageSequenceRenderJob private constructor(
                 val backlog = Semaphore(numWorkers * 5)
                 val writerExc = AtomicReference<Exception?>()
                 for (frameIdx in 0..<numFrames) {
-                    val colorBitmap = backend.materializeFrame(frameIdx)!!
-                    val bitmap = if (!matte) colorBitmap else colorBitmap.use(Bitmap::alphaPlaneView)
+                    val bitmap = deliverer.deliverFrame()!!
                     val file = dir.resolve(filenamePattern.format(frameIdx + 1))
                     backlog.acquire()
                     executor.submit(throwableAwareTask {
