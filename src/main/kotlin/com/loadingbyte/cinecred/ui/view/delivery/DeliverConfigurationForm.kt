@@ -39,10 +39,7 @@ import java.time.ZonedDateTime
 import java.time.format.TextStyle
 import java.util.*
 import javax.swing.*
-import kotlin.io.path.Path
-import kotlin.io.path.absolutePathString
-import kotlin.io.path.name
-import kotlin.io.path.pathString
+import kotlin.io.path.*
 import kotlin.jvm.optionals.getOrNull
 
 
@@ -280,6 +277,21 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
         )
     }
 
+    private val slateWidget =
+        CheckBoxWidget().apply { value = true }
+    private val slateTitleWidget =
+        OverrideWidget(TextWidget())
+
+    init {
+        addWidget(
+            l10n("ui.deliverConfig.slate"),
+            UnionWidget(
+                listOf(slateWidget, slateTitleWidget),
+                labels = listOf(null, l10n("ui.deliverConfig.slateTitle"))
+            )
+        )
+    }
+
     private var disableOnChange = false
 
     init {
@@ -300,11 +312,14 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
         } else if (widget == formatWidget) {
             val format = formatWidget.value
             val wholePage = format in RenderFormatCategory.WHOLE_PAGE.formats
+            val video = format in RenderFormatCategory.VIDEO.formats
             pageIndicesWidget.isVisible = wholePage
             firstPageIdxWidget.isVisible = !wholePage
             lastPageIdxWidget.isVisible = !wholePage
             destinationWidget.format = format
             pushFormatPropertyOptions(format.defaultConfig, formatChanged = true)
+            slateWidget.isEnabled = video
+            slateTitleWidget.isEnabled = video && slateWidget.value
         } else if (widget == pageIndicesWidget || widget == firstPageIdxWidget || widget == lastPageIdxWidget) {
             destinationWidget.extremePageIndices = when {
                 formatWidget.value in RenderFormatCategory.WHOLE_PAGE.formats -> pageIndicesWidget.value.let {
@@ -313,9 +328,12 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
                 }
                 else -> Pair(firstPageIdxWidget.value, lastPageIdxWidget.value)
             }
+        } else if (widget == slateWidget) {
+            slateTitleWidget.isEnabled = slateWidget.value
         } else if (widget != destinationWidget) {
             currentConfig(ignoreVolatile = true)?.let { pushFormatPropertyOptions(it, formatChanged = false) }
         }
+        slateTitleWidget.defaultValue = destinationWidget.value.fileOrDir.nameWithoutExtension
         disableOnChange = false
 
         super.onChange(widget)
@@ -443,7 +461,10 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
     }
 
     private fun currentSliders() = Sliders(
-        if (formatWidget.value in RenderFormatCategory.VIDEO.formats) resolutionWidget.value.getOrNull() else null
+        resolution = if (formatWidget.value !in RenderFormatCategory.VIDEO.formats) null else
+            resolutionWidget.value.getOrNull(),
+        slate = if (!slateWidget.value) null else
+            Slate(title = slateTitleWidget.value.value ?: slateTitleWidget.defaultValue ?: "")
     )
 
     private fun currentPageIndices() = when {

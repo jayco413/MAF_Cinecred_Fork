@@ -185,6 +185,7 @@ abstract class RenderFormat(
     }
 
 
-    class Sliders(val resolution: Resolution?)
+    class Sliders(val resolution: Resolution?, val slate: Slate?)
+    class Slate(val title: String)
 
 }

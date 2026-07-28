@@ -93,7 +93,7 @@ class VideoContainerRenderJob private constructor(
             )
 
         val deliverer = VideoDeliverer(
-            scaledVideo, grounding,
+            scaledVideo, styling.global.timecodeFormat, grounding, styling.global.locale, sliders.slate,
             Bitmap.Representation(
                 settings.pixelFormat,
                 if (!yuv) Bitmap.Range.FULL else Bitmap.Range.LIMITED,
@@ -134,12 +134,12 @@ class VideoContainerRenderJob private constructor(
                 // Start the materializer only after the VideoWriter has been successfully created, to not waste compute
                 // when the VideoWriter creation fails and we have to fall back to other VideoWriterSettings.
                 materializer.start()
-                for (frameIdx in 0..<scaledVideo.numFrames) {
+                for (frameIdx in 0..<deliverer.numFrames) {
                     when (val got = queue.take()) {
                         is Bitmap -> videoWriter.write(got)
                         else -> throw RuntimeException((got as Throwable).userNotification, got)
                     }
-                    progressCallback(MAX_RENDER_PROGRESS * (frameIdx + 1) / scaledVideo.numFrames)
+                    progressCallback(MAX_RENDER_PROGRESS * (frameIdx + 1) / deliverer.numFrames)
                     if (Thread.interrupted())
                         throw InterruptedException()
                 }

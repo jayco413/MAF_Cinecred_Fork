@@ -81,9 +81,10 @@ class ImageSequenceRenderJob private constructor(
         }
 
         VideoDeliverer(
-            scaledVideo, grounding, bitmapWriter.representation, ceiling, scan, matte
+            scaledVideo, styling.global.timecodeFormat, grounding, styling.global.locale, sliders.slate,
+            bitmapWriter.representation, ceiling, scan, matte
         ).use { deliverer ->
-            val numFrames = scaledVideo.numFrames
+            val numFrames = deliverer.numFrames
             val numWorkers = Runtime.getRuntime().availableProcessors() - 1
             val executor = Executors.newFixedThreadPool(numWorkers) { Thread(it, "ImageSequenceWriter") }
             try {

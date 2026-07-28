@@ -4,15 +4,11 @@ package com.loadingbyte.cinecred.demos
 
 import com.loadingbyte.cinecred.common.FPS
 import com.loadingbyte.cinecred.common.Resolution
+import com.loadingbyte.cinecred.common.TimecodeFormat
 import com.loadingbyte.cinecred.common.l10n
-import com.loadingbyte.cinecred.delivery.ImageSequenceRenderJob
-import com.loadingbyte.cinecred.delivery.RenderFormat
-import com.loadingbyte.cinecred.delivery.RenderQueue
-import com.loadingbyte.cinecred.delivery.VideoContainerRenderJob
+import com.loadingbyte.cinecred.delivery.*
 import com.loadingbyte.cinecred.demo.*
-import com.loadingbyte.cinecred.imaging.Bitmap
-import com.loadingbyte.cinecred.imaging.ColorSpace
-import com.loadingbyte.cinecred.imaging.DeckLink
+import com.loadingbyte.cinecred.imaging.*
 import com.loadingbyte.cinecred.project.Global
 import com.loadingbyte.cinecred.project.LetterStyle
 import com.loadingbyte.cinecred.project.Scan
@@ -25,10 +21,9 @@ import com.loadingbyte.cinecred.ui.comms.DockableId.*
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
 import com.loadingbyte.cinecred.ui.helper.BUNDLED_FAMILIES
 import com.loadingbyte.cinecred.ui.helper.Scrubber
-import java.awt.Container
-import java.awt.Dimension
-import java.awt.KeyboardFocusManager
-import java.awt.Point
+import java.awt.*
+import java.awt.image.ComponentColorModel
+import java.awt.image.DataBuffer
 import java.lang.Thread.sleep
 import java.lang.foreign.MemorySegment.NULL
 import javax.swing.JComboBox
@@ -36,6 +31,7 @@ import javax.swing.JScrollPane
 import javax.swing.JTextArea
 import javax.swing.JTextField
 import kotlin.io.path.name
+import java.awt.color.ColorSpace as AWTColorSpace
 
 
 private const val DIR = "guide/user-interface"
@@ -54,6 +50,7 @@ val GUIDE_USER_INTERFACE_DEMOS
         GuideUserInterfaceDeckLinkDemo,
         GuideUserInterfaceDeliveryDemo,
         GuideUserInterfaceDeliveryDestTemplateDemo,
+        GuideUserInterfaceDeliverySlateDemo,
         GuideUserInterfaceWarningsDemo,
         GuideUserInterfaceRearrangePanelsDemo,
         GuideUserInterfaceRetractWindowDemo,
@@ -471,6 +468,28 @@ object GuideUserInterfaceDeliveryDestTemplateDemo : ScreencastDemo(
         sc.click(0)
         sleep(500)
         sc.hold(8 * hold)
+    }
+}
+
+
+object GuideUserInterfaceDeliverySlateDemo : Demo("$DIR/delivery-slate", Format.PNG) {
+    override fun doGenerate() {
+        val res = Resolution(850, 480)
+        val cs = AWTColorSpace.getInstance(AWTColorSpace.CS_sRGB)
+        val cm = ComponentColorModel(cs, intArrayOf(8, 8, 8), false, false, Transparency.OPAQUE, DataBuffer.TYPE_BYTE)
+        val bitmapJ2DBridge = BitmapJ2DBridge(cm)
+        VideoDeliverer(
+            DeferredVideo(res, FPS(24, 1)).apply { playBlank(3184) },
+            TimecodeFormat.SMPTE_NON_DROP_FRAME, grounding = null, locale,
+            RenderFormat.Slate("${l10nDemo("projectDir")} ${l10n("project.template.spreadsheetName")} v42"),
+            bitmapJ2DBridge.nativeRepresentation.copy(colorSpace = ColorSpace.BT709),
+            ceiling = 1f, Scan.PROGRESSIVE, matte = false
+        ).use { deliverer ->
+            Bitmap.allocate(Bitmap.Spec(res, bitmapJ2DBridge.nativeRepresentation)).use { sRGBBitmap ->
+                deliverer.deliverFrame()!!.use { bt709Bitmap -> BitmapConverter.convert(bt709Bitmap, sRGBBitmap) }
+                write(bitmapJ2DBridge.toNativeImage(sRGBBitmap))
+            }
+        }
     }
 }
 
