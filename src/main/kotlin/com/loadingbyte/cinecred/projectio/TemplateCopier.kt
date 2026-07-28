@@ -7,9 +7,9 @@ import com.loadingbyte.cinecred.projectio.service.WRITTEN_SERVICE_LINK_EXT
 import com.loadingbyte.cinecred.projectio.service.abort
 import com.loadingbyte.cinecred.projectio.service.writeServiceLink
 import kotlinx.collections.immutable.persistentListOf
-import java.nio.file.Files
 import java.nio.file.Path
 import java.util.*
+import kotlin.io.path.copyTo
 import kotlin.io.path.name
 import kotlin.io.path.notExists
 import kotlin.math.max
@@ -58,8 +58,8 @@ private fun doTryCopyTemplate(
         tryCopyCreditsTemplate(destDir, template, creditsAccount, creditsFilename, creditsFormat)
     tryCopyStylingTemplate(destDir, template)
     if (template.sample) {
-        tryCopyLogoFile(destDir, "cinecredH.svg", "Cinecred H.svg")
-        tryCopyLogoFile(destDir, "cinecredV.svg", "Cinecred V.svg")
+        tryCopyLogoFile(destDir, "/branding/hLockup.svg", "Cinecred H.svg")
+        tryCopyLogoFile(destDir, "/branding/vLockup.svg", "Cinecred V.svg")
     }
 }
 
@@ -135,7 +135,7 @@ private fun tryCopyLogoFile(destDir: Path, from: String, to: String) {
     val logoFile = destDir.resolve("Logos").resolve(to)
     if (logoFile.notExists()) {
         logoFile.parent.createDirectoriesSafely()
-        useResourceStream("/template/$from") { Files.copy(it, logoFile) }
+        useResourcePath(from) { it.copyTo(logoFile) }
     }
 }
 

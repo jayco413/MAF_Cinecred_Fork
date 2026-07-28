@@ -46,9 +46,9 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     private val updateMessageTextPane: JTextPane
 
     init {
-        // We force the whole panel to have an even width so that the logo is guaranteed to be centered in the tab bar.
+        // We force the whole panel to have an even width so that the emblem is always centered in the tab bar.
         val brandPanel = JPanel(MigLayout("center, wrap", "[80, center]", "15[][]-3[]20")).apply {
-            add(JLabel(SVGIcon.load("/logo.svg").getScaledIcon(0.25)))
+            add(JLabel(EMBLEM_ICON.getScaledIcon(0.25)))
             add(JLabel("Cinecred").apply {
                 font = TITILLIUM_SEMI.deriveFont(H2)
                 putClientProperty(STYLE, "foreground: #FFF")
@@ -125,7 +125,7 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         }
         updatePanel = JPanel(MigLayout("insets 60", "[grow 1]15[grow 1]", "[]30[]25[]")).apply {
             putClientProperty(STYLE, "background: $CONTENT_BG_COLOR")
-            add(JLabel(SVGIcon.load("/logo.svg").getScaledIcon(0.4)), "right")
+            add(JLabel(EMBLEM_ICON.getScaledIcon(0.4)), "right")
             add(JLabel("Cinecred").apply {
                 font = TITILLIUM_SEMI.deriveFont(H1)
                 putClientProperty(STYLE, "foreground: #FFF")

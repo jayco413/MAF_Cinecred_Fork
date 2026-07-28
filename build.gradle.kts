@@ -158,7 +158,7 @@ val writeCopyrightFile by tasks.registering(WriteFile::class) {
 
 val drawSplash by tasks.registering(DrawSplash::class) {
     version = project.version.toString()
-    logoFile = srcMainResources.file("logo.svg")
+    logoFile = srcMainResources.file("branding/logo.svg")
     reguFontFile = srcMainResources.file("fonts/Titillium-RegularUpright.otf")
     semiFontFile = srcMainResources.file("fonts/Titillium-SemiboldUpright.otf")
     outputFile = layout.buildDirectory.file("generated/splash/splash.png")
@@ -266,7 +266,7 @@ val drawOSImagesTasks = Platform.OS.entries.associateWith { os ->
     tasks.register<DrawImages>("draw${os.slug.capitalized()}Images") {
         version = project.version.toString()
         forOS = os
-        logoFile = srcMainResources.file("logo.svg")
+        emblemFile = srcMainResources.file("branding/emblem.svg")
         semiFontFile = srcMainResources.file("fonts/Titillium-SemiboldUpright.otf")
         boldFontFile = srcMainResources.file("fonts/Titillium-BoldUpright.otf")
         outputDir = layout.buildDirectory.dir("generated/packaging/${os.slug}")

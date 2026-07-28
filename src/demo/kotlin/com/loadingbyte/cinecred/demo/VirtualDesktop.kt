@@ -295,7 +295,7 @@ abstract class VirtualWindow {
 class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
 
     companion object {
-        private val TITLE_BAR_ICON = WINDOW_ICON.run { getScaledIcon(16.0 / iconWidth) }
+        private val TITLE_BAR_ICON = EMBLEM_ICON.run { getScaledIcon(16.0 / iconWidth) }
         private val TITLE_BAR_BACKGROUND = UIManager.getColor("Panel.background")
         private val TITLE_BAR_FOREGROUND = UIManager.getColor("Panel.foreground")
     }

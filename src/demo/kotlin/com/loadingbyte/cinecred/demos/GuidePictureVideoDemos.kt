@@ -147,7 +147,7 @@ object GuidePictureVideoPictureFileDemo : StyleSettingsDemo<PictureStyle>(
     override val pictureLoaders by lazy {
         val tmpDir = createTempDirectory()
         val picFile = tmpDir.resolve("Cinecred.svg")
-        useResourcePath("/logo.svg") { it.copyTo(picFile) }
+        useResourcePath("/branding/logo.svg") { it.copyTo(picFile) }
         listOf(Picture.Loader.recognize(picFile)!!.apply { picture }).also { tmpDir.toFile().deleteRecursively() }
     }
 

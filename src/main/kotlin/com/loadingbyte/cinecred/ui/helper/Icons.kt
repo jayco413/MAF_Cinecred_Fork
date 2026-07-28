@@ -23,8 +23,8 @@ import kotlin.math.roundToInt
 const val ICON_ICON_GAP = 4
 
 
-val WINDOW_ICON = SVGIcon.load("/logo.svg")
-val WINDOW_ICON_IMAGES = listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).map { size -> WINDOW_ICON.renderIcon(size, size) }
+val EMBLEM_ICON = SVGIcon.load("/branding/emblem.svg")
+val WINDOW_ICON_IMAGES = listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).map { size -> EMBLEM_ICON.renderIcon(size, size) }
 
 
 val SCRUB_CURSOR = SVGIcon.load("/icons/scrub.svg").createCursor(16, 7, "scrub")
