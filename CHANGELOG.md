@@ -18,6 +18,7 @@ Cinecred Changelog
 
 ### UI Fixes
 
+- The preview indicator for embedded videos now also works for Chinese.
 - The letter style references in a content style are now overridable, defaulting
   to the body letter style.
 - On Windows 10, dropdown menus no longer ignore the chosen item, and the native

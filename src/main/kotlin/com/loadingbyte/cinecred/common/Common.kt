@@ -9,7 +9,10 @@ import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.w3c.dom.Node
 import org.w3c.dom.traversal.DocumentTraversal
+import sun.font.FontUtilities
+import java.awt.Font
 import java.awt.Shape
+import java.awt.font.TextAttribute
 import java.awt.geom.AffineTransform
 import java.awt.geom.Path2D
 import java.awt.geom.Rectangle2D
@@ -28,10 +31,7 @@ import java.text.MessageFormat
 import java.text.NumberFormat
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.Callable
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
-import java.util.concurrent.ThreadFactory
+import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JComponent
 import javax.swing.UIManager
@@ -482,3 +482,18 @@ fun Shape.transformedBy(transform: AffineTransform?): Shape = when {
     this is Path2D.Float -> Path2D.Float(this, transform)
     else -> Path2D.Double(this, transform)
 }
+
+
+private val compositeBundledFontCache = ConcurrentHashMap<String, Font>()
+
+fun compositeBundledFont(path: String): Font =
+    compositeBundledFontCache.computeIfAbsent(path) {
+        val attrs = mapOf(
+            TextAttribute.KERNING to TextAttribute.KERNING_ON,
+            TextAttribute.LIGATURES to TextAttribute.LIGATURES_ON
+        )
+        @Suppress("JAVA_MODULE_DOES_NOT_EXPORT_PACKAGE")
+        useResourceStream(path, Font::createFonts)[0]
+            .deriveFont(attrs)
+            .let(FontUtilities::getCompositeFontUIResource)
+    }

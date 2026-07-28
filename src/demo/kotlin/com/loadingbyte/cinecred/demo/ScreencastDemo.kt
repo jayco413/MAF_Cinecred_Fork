@@ -1,7 +1,7 @@
 package com.loadingbyte.cinecred.demo
 
 import com.loadingbyte.cinecred.common.FPS
-import com.loadingbyte.cinecred.common.useResourceStream
+import com.loadingbyte.cinecred.common.compositeBundledFont
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.projectio.XlsxFormat
 import com.loadingbyte.cinecred.projectio.tryCopyTemplate
@@ -11,7 +11,6 @@ import com.loadingbyte.cinecred.ui.ctrl.WelcomeCtrl
 import com.loadingbyte.cinecred.ui.helper.*
 import com.loadingbyte.cinecred.ui.styling.StyleForm
 import com.loadingbyte.cinecred.ui.view.welcome.WelcomeFrame
-import sun.font.FontUtilities
 import java.awt.*
 import java.awt.font.FontRenderContext
 import java.awt.font.LineBreakMeasurer
@@ -242,10 +241,8 @@ class Screencast(
 ) {
 
     companion object {
-        @Suppress("JAVA_MODULE_DOES_NOT_EXPORT_PACKAGE")
-        private val CAPTION_FONT = useResourceStream("/fonts/Titillium-RegularUpright.otf", Font::createFonts)[0]
+        private val CAPTION_FONT: Font = compositeBundledFont("/fonts/Titillium-RegularUpright.otf")
             .deriveFont(48f)
-            .let(FontUtilities::getCompositeFontUIResource)
     }
 
     private var caption = mutableListOf<TextLayout>()
@@ -344,11 +341,7 @@ class Screencast(
         var text = l10nDemo(l10nKey)
         if (args.isNotEmpty())
             text = MessageFormat(text).format(args)
-        val attrs = mapOf(
-            TextAttribute.FONT to CAPTION_FONT,
-            TextAttribute.KERNING to TextAttribute.KERNING_ON,
-            TextAttribute.LIGATURES to TextAttribute.LIGATURES_ON
-        )
+        val attrs = mapOf(TextAttribute.FONT to CAPTION_FONT)
         for (ratio in floatArrayOf(0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f)) {
             caption.clear()
             val lbm = LineBreakMeasurer(AttributedString(text, attrs).iterator, FontRenderContext(null, true, true))

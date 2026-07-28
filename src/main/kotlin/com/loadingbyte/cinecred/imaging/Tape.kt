@@ -2,14 +2,16 @@ package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.*
 import java.awt.Shape
+import java.awt.font.FontRenderContext
+import java.awt.font.TextLayout
 import java.awt.geom.AffineTransform
-import java.awt.geom.Path2D
+import java.awt.geom.Rectangle2D
 import java.io.IOException
 import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
-import javax.swing.UIManager
 import kotlin.concurrent.withLock
 import kotlin.io.path.*
 import kotlin.jvm.optionals.getOrNull
@@ -457,25 +459,25 @@ class Tape private constructor(
 
         @Volatile var previewResolution: Int = 128
 
-        private val PREVIEW_OUTLINE = run {
-            val font = UIManager.getFont("defaultFont")?.let { Font.system(it.getFontName(Locale.ROOT)) }
-                ?: Font.bundled("Source Sans Pro Regular")!!
-            GlyphString.of(l10n("imaging.tapePreview"), font.case())
-                .appendOutlineTo(Path2D.Float(), 0.0, 0.0)
-        }
-        private val PREVIEW_BOUNDS = PREVIEW_OUTLINE.bounds2D
+        private val previewOutlineCache = ConcurrentHashMap<Locale, Pair<Shape, Rectangle2D>>()
 
         fun previewIndicator(x: Double, y: Double, width: Double, height: Double): Shape {
+            val (outline, bounds) = previewOutlineCache.computeIfAbsent(Locale.getDefault()) { locale ->
+                val font = compositeBundledFont("/fonts/SourceSansPro-Regular.ttf").deriveFont(12f)
+                val outline = TextLayout(l10n("imaging.tapePreview", locale), font, FontRenderContext(null, true, true))
+                    .getOutline(null)
+                Pair(outline, outline.bounds2D)
+            }
             val diag = hypot(width, height)
             val maxTextH = hypot(height, height * height / width)
-            val textH = (diag * maxTextH) / (diag + maxTextH * PREVIEW_BOUNDS.width / PREVIEW_BOUNDS.height)
+            val textH = (diag * maxTextH) / (diag + maxTextH * bounds.width / bounds.height)
             val textTransform = AffineTransform().apply {
                 translate(x + width / 2, y + height / 2)
                 rotate(-atan(height / width))
-                scale(textH / PREVIEW_BOUNDS.height)
-                translate(-PREVIEW_BOUNDS.centerX, -PREVIEW_BOUNDS.centerY)
+                scale(textH / bounds.height)
+                translate(-bounds.centerX, -bounds.centerY)
             }
-            return PREVIEW_OUTLINE.transformedBy(textTransform)
+            return outline.transformedBy(textTransform)
         }
 
     }
