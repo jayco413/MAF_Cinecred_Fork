@@ -732,7 +732,11 @@ class FPSWidget(
             } catch (_: ParseException) {
                 // Try the next parser.
             }
-            return FPS.fromString(str)
+            try {
+                return FPS.fromString(str)
+            } catch (_: Exception) {
+                throw ParseException("", 0)
+            }
         }
 
     }

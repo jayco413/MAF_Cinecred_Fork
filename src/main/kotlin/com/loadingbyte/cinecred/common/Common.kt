@@ -96,6 +96,7 @@ class FPS(numerator: Int, denominator: Int) {
     val denominator: Int
 
     init {
+        require(numerator > 0 && denominator > 0) { "FPS must be finite and positive." }
         val gcd = IntMath.gcd(numerator, denominator)
         this.numerator = numerator / gcd
         this.denominator = denominator / gcd

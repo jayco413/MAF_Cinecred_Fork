@@ -34,7 +34,6 @@ fun <S : Style> getStyleConstraints(styleClass: Class<S>): List<StyleConstraint<
 
 private val GLOBAL_CONSTRAINTS: List<StyleConstraint<Global, *>> = listOf(
     ResolutionConstr(ERROR, Global::resolution.st()),
-    FPSConstr(ERROR, Global::fps.st()),
     DynChoiceConstr(ERROR, Global::timecodeFormat.st()) { _, global ->
         global.fps.canonicalTimecodeFormats
     },
@@ -568,12 +567,6 @@ class ResolutionConstr<S : Style>(
 ) : StyleConstraint<S, StyleSetting<S, Resolution>>(setting)
 
 
-class FPSConstr<S : Style>(
-    val severity: Severity,
-    setting: StyleSetting<S, FPS>
-) : StyleConstraint<S, StyleSetting<S, FPS>>(setting)
-
-
 class FontConstr<S : Style>(
     val severity: Severity,
     setting: StyleSetting<S, FontRef>
@@ -799,11 +792,6 @@ fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
                                 log(rootStyle, style, st, idx, cst.severity, msg)
                             }
                         }
-                    }
-                is FPSConstr ->
-                    style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, fps ->
-                        if (fps.run { numerator <= 0 || denominator <= 0 })
-                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.fps"))
                     }
                 is FontConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, fontRef ->
