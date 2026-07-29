@@ -15,6 +15,7 @@ Cinecred Changelog
 
 - CSV files where some rows have fewer columns than others are accepted again.
 - Spreadsheet files in subfolders are now reliably detected.
+- Lock files created by Excel are now properly ignored.
 - In newly created projects, gutter heads are now vertically centered again.
 
 ### UI Fixes

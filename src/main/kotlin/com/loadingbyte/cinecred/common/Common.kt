@@ -222,6 +222,13 @@ fun Path.isAccessibleDirectory(thatContainsNonHiddenFiles: Boolean = false): Boo
             false
         }
 
+fun Path.isHiddenSafely(): Boolean =
+    try {
+        isHidden()
+    } catch (_: IOException) {
+        true
+    }
+
 fun Path.isSameFileAsSafely(other: Path): Boolean =
     try {
         isSameFileAs(other)

@@ -13,7 +13,10 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
-import kotlin.io.path.*
+import kotlin.io.path.extension
+import kotlin.io.path.isRegularFile
+import kotlin.io.path.name
+import kotlin.io.path.useDirectoryEntries
 import kotlin.jvm.optionals.getOrNull
 import kotlin.math.atan
 import kotlin.math.hypot
@@ -402,7 +405,7 @@ class Tape private constructor(
 
             for (file in seq) {
                 // Don't let thumbnail files or similar sabotage us.
-                if (file.isHidden())
+                if (file.isHiddenSafely())
                     continue
 
                 // Require that the directory only houses regular files.

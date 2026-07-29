@@ -134,7 +134,9 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
     }
 
     private fun reloadOrRemoveCreditsFiles(changedFiles: List<Path>) {
-        for (changedFile in changedFiles) if (!changedFile.isRegularFile() || changedFile.isHidden()) {
+        for (changedFile in changedFiles) if (
+            !changedFile.isRegularFile() || changedFile.isHiddenSafely() || changedFile.name.startsWith("~$")
+        ) {
             creditsWorkbooksChanged = creditsWorkbooksChanged ||
                     changedFile in creditsWorkbooks || changedFile in creditsLogs ||
                     changedFile in linkedCreditsWatchers
@@ -259,7 +261,7 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         if (RenderQueue.isRenderedFile(fileOrDir))
             return
 
-        if (fileOrDir.isHidden())
+        if (fileOrDir.isHiddenSafely())
             removeAuxFileOrDir(fileOrDir)
 
         if (fileOrDir.isRegularFile() && hasFontFilename(fileOrDir)) {
