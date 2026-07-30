@@ -1074,7 +1074,7 @@ public class zimg_h extends zimg_h$shared {
            throw new AssertionError("should not reach here", ex$);
         }
     }
-    private static final int ZIMG_API_VERSION = (int)516L;
+    private static final int ZIMG_API_VERSION = (int)517L;
     /**
      * {@snippet lang=c :
      * #define ZIMG_API_VERSION 516

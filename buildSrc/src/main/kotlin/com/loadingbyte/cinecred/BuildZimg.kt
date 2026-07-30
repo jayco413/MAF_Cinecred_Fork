@@ -55,7 +55,8 @@ abstract class BuildZimg : DefaultTask() {
         val obj: String
         val simdFlavors: Map<String, List<String>>
         if (forPlatform.os == WINDOWS) {
-            cc += listOf(Tools.clangCl(execOps), "/c", "/std:c++17", "/EHsc", "/O2", "/GS-", "-flto", "-Wno-assume")
+            cc += listOf(Tools.clangCl(execOps), "/c", "/MD", "/std:c++17", "/EHsc", "/O2", "/GS-", "-flto")
+            cc += "-Wno-assume"
             cc += macros.map { "/D$it" }
             cc += incDirs.flatMap { listOf("/I", it.absolutePath) }
             ld += listOf(Tools.lldLink(execOps), "/DLL", "/NOIMPLIB", "/OUT:${outFile.absolutePath}")

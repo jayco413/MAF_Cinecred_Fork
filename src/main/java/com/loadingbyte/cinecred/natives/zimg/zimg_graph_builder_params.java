@@ -26,6 +26,8 @@ import static java.lang.foreign.MemoryLayout.PathElement.*;
  *     zimg_cpu_type_e cpu_type;
  *     double nominal_peak_luminance;
  *     char allow_approximate_gamma;
+ *     char scene_referred;
+ *     char chromatic_adaptation;
  * }
  * }
  */
@@ -48,7 +50,9 @@ public class zimg_graph_builder_params {
         zimg_h.C_INT.withName("cpu_type"),
         zimg_h.C_DOUBLE.withName("nominal_peak_luminance"),
         zimg_h.C_CHAR.withName("allow_approximate_gamma"),
-        MemoryLayout.paddingLayout(7)
+        zimg_h.C_CHAR.withName("scene_referred"),
+        zimg_h.C_CHAR.withName("chromatic_adaptation"),
+        MemoryLayout.paddingLayout(5)
     ).withName("zimg_graph_builder_params");
 
     /**
@@ -540,6 +544,94 @@ public class zimg_graph_builder_params {
      */
     public static void allow_approximate_gamma(MemorySegment struct, byte fieldValue) {
         struct.set(allow_approximate_gamma$LAYOUT, allow_approximate_gamma$OFFSET, fieldValue);
+    }
+
+    private static final OfByte scene_referred$LAYOUT = (OfByte)$LAYOUT.select(groupElement("scene_referred"));
+
+    /**
+     * Layout for field:
+     * {@snippet lang=c :
+     * char scene_referred
+     * }
+     */
+    public static final OfByte scene_referred$layout() {
+        return scene_referred$LAYOUT;
+    }
+
+    private static final long scene_referred$OFFSET = $LAYOUT.byteOffset(groupElement("scene_referred"));
+
+    /**
+     * Offset for field:
+     * {@snippet lang=c :
+     * char scene_referred
+     * }
+     */
+    public static final long scene_referred$offset() {
+        return scene_referred$OFFSET;
+    }
+
+    /**
+     * Getter for field:
+     * {@snippet lang=c :
+     * char scene_referred
+     * }
+     */
+    public static byte scene_referred(MemorySegment struct) {
+        return struct.get(scene_referred$LAYOUT, scene_referred$OFFSET);
+    }
+
+    /**
+     * Setter for field:
+     * {@snippet lang=c :
+     * char scene_referred
+     * }
+     */
+    public static void scene_referred(MemorySegment struct, byte fieldValue) {
+        struct.set(scene_referred$LAYOUT, scene_referred$OFFSET, fieldValue);
+    }
+
+    private static final OfByte chromatic_adaptation$LAYOUT = (OfByte)$LAYOUT.select(groupElement("chromatic_adaptation"));
+
+    /**
+     * Layout for field:
+     * {@snippet lang=c :
+     * char chromatic_adaptation
+     * }
+     */
+    public static final OfByte chromatic_adaptation$layout() {
+        return chromatic_adaptation$LAYOUT;
+    }
+
+    private static final long chromatic_adaptation$OFFSET = $LAYOUT.byteOffset(groupElement("chromatic_adaptation"));
+
+    /**
+     * Offset for field:
+     * {@snippet lang=c :
+     * char chromatic_adaptation
+     * }
+     */
+    public static final long chromatic_adaptation$offset() {
+        return chromatic_adaptation$OFFSET;
+    }
+
+    /**
+     * Getter for field:
+     * {@snippet lang=c :
+     * char chromatic_adaptation
+     * }
+     */
+    public static byte chromatic_adaptation(MemorySegment struct) {
+        return struct.get(chromatic_adaptation$LAYOUT, chromatic_adaptation$OFFSET);
+    }
+
+    /**
+     * Setter for field:
+     * {@snippet lang=c :
+     * char chromatic_adaptation
+     * }
+     */
+    public static void chromatic_adaptation(MemorySegment struct, byte fieldValue) {
+        struct.set(chromatic_adaptation$LAYOUT, chromatic_adaptation$OFFSET, fieldValue);
     }
 
     /**

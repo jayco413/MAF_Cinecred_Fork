@@ -26,7 +26,7 @@ val flatlafVersion = "3.7.1"
 val skiaVersion = "e2ea2eb" // head of branch chrome/m124
 val harfBuzzVersion = "14.2.0"
 val clipperVersion = "Clipper2_2.0.1"
-val zimgVersion = "fa52dee"
+val zimgVersion = "f6cc75a"
 val nfdVersion = "17b6e8c"
 
 val javaProperties = Properties().apply { file("java.properties").reader().use(::load) }

@@ -1843,6 +1843,7 @@ class BitmapConverter(
                 zimg_graph_builder_params.cpu_type(params, ZIMG_CPU_AUTO_64B())
                 zimg_graph_builder_params.nominal_peak_luminance(params, 203.0)
                 zimg_graph_builder_params.allow_approximate_gamma(params, if (approxTransfer) 1 else 0)
+                zimg_graph_builder_params.chromatic_adaptation(params, 1)
                 // Build the zimg filter graph.
                 val handle = zimg_filter_graph_build(srcFmt, dstFmt, params)
                     .zimgThrowIfNull("Could not build zimg graph")
