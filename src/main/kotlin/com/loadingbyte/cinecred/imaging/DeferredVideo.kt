@@ -587,7 +587,7 @@ class DeferredVideo private constructor(
                 return static
             val composite = if (static.writable) static.bitmap else
                 Bitmap.allocate(if (compInCanvasRep) canvasPWorkSpec else userPWorkSpec)
-                    .apply { blit(static.bitmap, 0, static.shift, workWidth, workHeight, 0, 0, 1) }
+                    .apply { blitLeniently(static.bitmap, 0, static.shift, workWidth, workHeight, 0, 0) }
             for (resp in tapeResponses) {
                 val userData = takeTapeUserData(resp)
                 userData.read(resp.timecode).use { overlay ->

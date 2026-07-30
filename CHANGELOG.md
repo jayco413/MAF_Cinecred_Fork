@@ -17,6 +17,7 @@ Cinecred Changelog
 - Spreadsheet files in subfolders are now reliably detected.
 - Lock files created by Excel are now properly ignored.
 - In newly created projects, gutter heads are now vertically centered again.
+- Fixed the occasional "exceeds source height" error during video export.
 
 ### UI Fixes
 
