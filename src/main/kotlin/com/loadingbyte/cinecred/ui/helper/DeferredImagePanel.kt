@@ -125,7 +125,7 @@ class DeferredImagePanel(
     private val yScrollbar = Scrollbar(JScrollBar.VERTICAL)
 
     private var disableScrollbarListeners = false
-    private var disableRematerialization = false
+    private var disableRematerialization = 0
 
     init {
         add(canvas, "push, grow")
@@ -179,9 +179,12 @@ class DeferredImagePanel(
                 val mouse = SwingUtilities.convertPoint(e.component, e.point, canvas)
                 val newViewportCenterX = viewportCenterX + c * (mouse.x - canvas.width / 2)
                 val newViewportCenterY = viewportCenterY + c * (mouse.y - canvas.height / 2)
+                disableRematerialization++
                 zoom *= zoomMult
                 viewportCenterX = newViewportCenterX
                 viewportCenterY = newViewportCenterY
+                disableRematerialization--
+                rematerialize(contentChanged = false)
             } else {
                 val unitIncrement = min(viewportWidth, viewportHeight) * mult / 50.0
                 when (e.modifiersEx) {
@@ -274,7 +277,7 @@ class DeferredImagePanel(
             xScrollbar.isEnabled = false
             yScrollbar.isEnabled = false
         } else {
-            disableRematerialization = true
+            disableRematerialization++
 
             // These setters do the coercion and update the scrollbar positions:
             viewportCenterX = viewportCenterX
@@ -299,12 +302,12 @@ class DeferredImagePanel(
             viewportCenterX = viewportCenterX
             viewportCenterY = viewportCenterY
 
-            disableRematerialization = false
+            disableRematerialization--
         }
     }
 
     private fun rematerialize(contentChanged: Boolean) {
-        if (disableRematerialization)
+        if (disableRematerialization > 0)
             return
 
         val image = this.image
@@ -416,7 +419,7 @@ class DeferredImagePanel(
                     val curImage = this._image
                     val curViewportCenterX = this.viewportCenterX
                     val curViewportCenterY = this.viewportCenterY
-                    disableRematerialization = true
+                    disableRematerialization++
                     this._image = image
                     this.viewportCenterX = viewportCenterX
                     this.viewportCenterY = viewportCenterY
@@ -424,7 +427,7 @@ class DeferredImagePanel(
                     this._image = curImage
                     this.viewportCenterX = curViewportCenterX
                     this.viewportCenterY = curViewportCenterY
-                    disableRematerialization = false
+                    disableRematerialization--
                 }
             }
         }
