@@ -90,7 +90,7 @@ object GuidePageStyleCardFadeDemo : StyleSettingsVideoDemo<PageStyle>(
     )
 ) {
     override fun styles() = buildList<PageStyle> {
-        val linear = l10n("project.template.transitionStyleLinear")
+        val linear = l10n("linear")
         this += PRESET_PAGE_STYLE.copy(
             name = "Demo", subsequentGapFrames = 0, behavior = PageBehavior.CARD, cardRuntimeFrames = 90,
             cardFadeInFrames = 0, cardFadeInTransitionStyleName = linear,

@@ -461,7 +461,7 @@ private class CreditsReader(
                     "projectIO.credits.illFormattedPageGap",
                     "<i>$timecodeFormatLabel</i>", l10nQuoted(sampleTimecode), l10nQuoted("-$sampleTimecode"),
                     "<i>$fuse</i>", l10nQuoted(fuse),
-                    l10nQuoted("$fuse $sampleTimecode ${l10n("project.template.transitionStyleLinear")}")
+                    l10nQuoted("$fuse $sampleTimecode ${l10n("linear")}")
                 )
             }
 
@@ -963,7 +963,7 @@ private class CreditsReader(
                             isMargin ->
                                 style.copy(leftTemporalMarginFrames = lFrames, rightTemporalMarginFrames = rFrames)
                             else -> {
-                                val linearName = l10n("project.template.transitionStyleLinear")
+                                val linearName = l10n("linear")
                                 style.copy(
                                     fadeInFrames = lFrames, fadeInTransitionStyleName = linearName,
                                     fadeOutFrames = rFrames, fadeOutTransitionStyleName = linearName

@@ -22,7 +22,7 @@ object GuideTransitionStyleNameDemo : StyleSettingsDemo<TransitionStyle>(
     listOf(TransitionStyle::name.st())
 ) {
     override fun styles() = buildList<TransitionStyle> {
-        this += PRESET_TRANSITION_STYLE.copy(name = l10n("project.template.transitionStyleLinear"))
+        this += PRESET_TRANSITION_STYLE.copy(name = l10n("linear"))
     }
 }
 

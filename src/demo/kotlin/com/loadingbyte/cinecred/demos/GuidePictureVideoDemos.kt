@@ -327,7 +327,7 @@ object GuidePictureVideoVideoFadeDemo : StyleSettingsVideoDemo<TapeStyle>(
     ), timeline = true
 ) {
     override fun styles() = buildList<TapeStyle> {
-        val linear = l10n("project.template.transitionStyleLinear")
+        val linear = l10n("linear")
         this += TAPE_STYLE.copy(
             leftTemporalMarginFrames = 42, rightTemporalMarginFrames = 42,
             fadeInTransitionStyleName = linear, fadeOutTransitionStyleName = linear

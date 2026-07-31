@@ -214,7 +214,7 @@ private fun fillIn(string: String, template: Template): String = string
                 )
             "projectIO.credits.table.pageGapDesc" -> {
                 val fuse = l10nKeyword("fuse", template.locale)
-                val linear = l10n("project.template.transitionStyleLinear", template.locale)
+                val linear = l10n("linear", template.locale)
                 l10n(
                     key,
                     l10nQuoted(fuse, template.locale),
@@ -262,7 +262,7 @@ private fun emptyStyling(template: Template) = Styling(
     letterStyles = persistentListOf(),
     transitionStyles = persistentListOf(
         PRESET_TRANSITION_STYLE.copy(
-            name = l10n("project.template.transitionStyleLinear", template.locale)
+            name = l10n("linear", template.locale)
         )
     ),
     pictureStyles = persistentListOf(),
@@ -277,9 +277,9 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             behavior = PageBehavior.CARD,
             cardRuntimeFrames = template.fps.run { roundingDiv(5 * numerator, denominator) },
             cardFadeInFrames = template.fps.run { roundingDiv(numerator, 2 * denominator) },
-            cardFadeInTransitionStyleName = l10n("project.template.transitionStyleLinear", template.locale),
+            cardFadeInTransitionStyleName = l10n("linear", template.locale),
             cardFadeOutFrames = template.fps.run { roundingDiv(numerator, 2 * denominator) },
-            cardFadeOutTransitionStyleName = l10n("project.template.transitionStyleLinear", template.locale)
+            cardFadeOutTransitionStyleName = l10n("linear", template.locale)
         ),
         PRESET_PAGE_STYLE.copy(
             name = l10n("project.PageBehavior.SCROLL", template.locale),

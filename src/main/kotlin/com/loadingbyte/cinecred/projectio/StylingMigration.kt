@@ -351,7 +351,7 @@ fun migrateStylingFrom170(ctx: StylingReaderContext, rawStyling: RawStyling) {
 
     // 1.7.0 -> 1.8.0: There are now transition styles, and card page fades now reference a transition style.
     if (rawStyling.transitionStyles.isEmpty()) {
-        val linearName = l10n("project.template.transitionStyleLinear")
+        val linearName = l10n("linear")
         rawStyling.transitionStyles.add(mutableMapOf("name" to linearName))
         for (pageStyle in rawStyling.pageStyles) {
             if (pageStyle["cardFadeInFrames"].let { it is Number && it.toInt() != 0 })
