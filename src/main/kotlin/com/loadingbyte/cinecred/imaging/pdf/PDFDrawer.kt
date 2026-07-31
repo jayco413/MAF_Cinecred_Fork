@@ -448,7 +448,8 @@ class PDFDrawer(
         val boundsOnCanvas = lazy(LazyThreadSafetyMode.NONE) {
             Rectangle(w, h).transformedBy(totalTransform).bounds.intersection(canvasBounds)
         }
-        val nearestNeigh = !interpolate && (totalTransform.scalingFactorX > 1.0 || totalTransform.scalingFactorY > 1.0)
+        val filter = if (!interpolate && (totalTransform.scalingFactorX > 1.0 || totalTransform.scalingFactorY > 1.0))
+            BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR else BitmapConverter.ResamplingFilter.DEFAULT
         val shader = if (isMask) currentShader(stroking = false, boundsOnCanvas) ?: return else null
         val blendMode = currentBlendMode()
         val matte = if (noSoftMask) null else currentSoftMaskMatte()
@@ -456,10 +457,10 @@ class PDFDrawer(
         val clip = group.clipCache.transform(graphicsState.currentClippingPaths)
         for (canvas in group.canvases)
             if (shader != null)
-                canvas.fillStencil(bitmap, shader, nearestNeigh, alpha, matte, 0.0, blendMode, totalTransform, clip)
+                canvas.fillStencil(bitmap, shader, alpha, matte, 0.0, blendMode, totalTransform, filter, clip)
             else
                 canvas.drawImage(
-                    bitmap, promiseOpaque, promiseClamped, nearestNeigh, alpha, matte, 0.0, blendMode, totalTransform,
+                    bitmap, promiseOpaque, promiseClamped, alpha, matte, 0.0, blendMode, totalTransform, filter,
                     clip
                 )
 
@@ -672,7 +673,7 @@ class PDFDrawer(
         val maskBitmap = Bitmap.allocate(Bitmap.Spec(Resolution(ow, oh), maskRepresentation))
         maskBitmap.put(outPx, ow, byteOrder = ByteOrder.LITTLE_ENDIAN)
         val offset = AffineTransform.getTranslateInstance((tgBounds.x - 1).toDouble(), (tgBounds.y - 1).toDouble())
-        return Canvas.Matte(maskBitmap, offset, Canvas.TileMode.CLAMP, disregardUserTransform = true)
+        return Canvas.Matte(maskBitmap, offset, tileMode = Canvas.TileMode.CLAMP, disregardUserTransform = true)
     }
 
     private fun softMaskAlpha(arg: Float, fn: PDFunction?): Short {

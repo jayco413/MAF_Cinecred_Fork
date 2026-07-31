@@ -388,6 +388,8 @@ abstract class Jextract : DefaultTask() {
             "ZIMG_PRIMARIES_ST432_1",
             "ZIMG_PRIMARIES_EBU3213_E",
             "ZIMG_RESIZE_POINT",
+            "ZIMG_RESIZE_BILINEAR",
+            "ZIMG_RESIZE_BICUBIC",
             "ZIMG_RESIZE_LANCZOS",
             "ZIMG_BUFFER_MAX"
         )

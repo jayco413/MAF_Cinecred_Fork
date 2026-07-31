@@ -2,6 +2,8 @@ package com.loadingbyte.cinecred.imaging
 
 import com.github.ooxi.jdatauri.DataUri
 import com.loadingbyte.cinecred.common.*
+import com.loadingbyte.cinecred.imaging.BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
+import com.loadingbyte.cinecred.imaging.Canvas.CacheImpl.Companion.get
 import com.loadingbyte.cinecred.imaging.pdf.PDFDrawer
 import com.loadingbyte.cinecred.natives.skiacapi.Path
 import com.loadingbyte.cinecred.natives.skiacapi.freeImage_t
@@ -255,19 +257,19 @@ class Canvas private constructor(
     fun fillStencil(
         stencil: Bitmap,
         shader: Shader,
-        nearestNeighbor: Boolean = false,
         alpha: Double = 1.0,
         matte: Matte? = null,
         blurSigma: Double = 0.0,
         blendMode: BlendMode = BlendMode.SRC_OVER,
         transform: AffineTransform? = null,
+        resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
         clip: List<Shape> = emptyList(),
         cache: Cache? = null
     ) {
         require(isAlphaRep(stencil.spec.representation))
         fillStencilOrDrawImage(
             stencil, false, false,
-            nearestNeighbor, shader, alpha, matte, blurSigma, blendMode, transform, clip, cache
+            shader, alpha, matte, blurSigma, blendMode, transform, resamplingFilter, clip, cache
         )
     }
 
@@ -275,19 +277,19 @@ class Canvas private constructor(
         image: Bitmap,
         promiseOpaque: Boolean = false,
         promiseClamped: Boolean = false,
-        nearestNeighbor: Boolean = false,
         alpha: Double = 1.0,
         matte: Matte? = null,
         blurSigma: Double = 0.0,
         blendMode: BlendMode = BlendMode.SRC_OVER,
         transform: AffineTransform? = null,
+        resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
         clip: List<Shape> = emptyList(),
         cache: Cache? = null
     ) {
         require(isColorRep(image.spec.representation))
         fillStencilOrDrawImage(
             image, promiseOpaque, promiseClamped,
-            nearestNeighbor, null, alpha, matte, blurSigma, blendMode, transform, clip, cache
+            null, alpha, matte, blurSigma, blendMode, transform, resamplingFilter, clip, cache
         )
     }
 
@@ -414,13 +416,13 @@ class Canvas private constructor(
         bitmap: Bitmap,
         promiseOpaque: Boolean,
         promiseClamped: Boolean,
-        nearestNeighbor: Boolean,
         shader: Shader?,
         alpha: Double,
         matte: Matte?,
         blurSigma: Double,
         blendMode: BlendMode,
         transform: AffineTransform?,
+        resamplingFilter: BitmapConverter.ResamplingFilter,
         clip: List<Shape>,
         cache: Cache?
     ) {
@@ -428,13 +430,15 @@ class Canvas private constructor(
         val prepared: PreparedBitmap
         var canvasTransform = transform
         var filterMode = SkFilterMode_Nearest()
-        if (nearestNeighbor)
+        if (resamplingFilter == NEAREST_NEIGHBOR)
             prepared = prepareBitmap(
-                bitmap, promiseOpaque, promiseClamped, IDENTITY, colorSpace, ceiling, cache
+                bitmap, promiseOpaque, promiseClamped, IDENTITY, resamplingFilter, colorSpace, ceiling,
+                cache
             )
         else {
             prepared = prepareBitmap(
-                bitmap, promiseOpaque, promiseClamped, transform ?: IDENTITY, colorSpace, ceiling, cache
+                bitmap, promiseOpaque, promiseClamped, transform ?: IDENTITY, resamplingFilter, colorSpace, ceiling,
+                cache
             )
             canvasTransform = prepared.transform
             // If the preparation failed to apply the transform, fall back to Skia's linear interpolation.
@@ -650,7 +654,8 @@ class Canvas private constructor(
                     allocateLinearGradientShader(shader, userTransform, canvasTransform, canvasCS, ceiling)
                 is Shader.Image ->
                     allocateBitmapShader(
-                        shader.bitmap, shader.promiseOpaque, shader.promiseClamped, shader.transform, shader.tileMode,
+                        shader.bitmap, shader.promiseOpaque, shader.promiseClamped,
+                        shader.resamplingFilter, shader.transform, shader.tileMode,
                         shader.disregardUserTransform, userTransform, canvasTransform, canvasCS, ceiling, needsClosing
                     )
             }
@@ -667,8 +672,9 @@ class Canvas private constructor(
         ) {
             if (matte != null) {
                 val shaderHandle = allocateBitmapShader(
-                    matte.bitmap, false, false, matte.transform, matte.tileMode, matte.disregardUserTransform,
-                    userTransform, canvasTransform, null, null, needsClosing
+                    matte.bitmap, promiseOpaque = false, promiseClamped = false,
+                    matte.resamplingFilter, matte.transform, matte.tileMode,
+                    matte.disregardUserTransform, userTransform, canvasTransform, null, null, needsClosing
                 )
                 SkPaint_setShaderMaskFilter(paint, shaderHandle)
                 SkRefCnt_unref(shaderHandle)
@@ -714,6 +720,7 @@ class Canvas private constructor(
 
         private fun allocateBitmapShader(
             bitmap: Bitmap, promiseOpaque: Boolean, promiseClamped: Boolean,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
             shaderTransform: AffineTransform?, tileMode: TileMode, disregardUserTransform: Boolean,
             userTransform: AffineTransform?, canvasTransform: AffineTransform?, canvasCS: ColorSpace?, ceiling: Float?,
             needsClosing: MutableList<Bitmap>
@@ -723,8 +730,9 @@ class Canvas private constructor(
                     userTransform?.let(::concatenate)
                 shaderTransform?.let(::concatenate)
             }
-            val prepared =
-                prepareBitmap(bitmap, promiseOpaque, promiseClamped, physicalTransform, canvasCS, ceiling, null)
+            val prepared = prepareBitmap(
+                bitmap, promiseOpaque, promiseClamped, physicalTransform, resamplingFilter, canvasCS, ceiling, null
+            )
             val shaderBitmap = prepared.bitmap ?: run {
                 // It's difficult to predict the effect of a vanishingly small shader image,
                 // so if that happens, just pass in a transparent 1x1 bitmap.
@@ -750,8 +758,13 @@ class Canvas private constructor(
         }
 
         private fun prepareBitmap(
-            bitmap: Bitmap, promiseOpaque: Boolean, promiseClamped: Boolean,
-            transform: AffineTransform, canvasCS: ColorSpace?, canvasCeiling: Float?,
+            bitmap: Bitmap,
+            promiseOpaque: Boolean,
+            promiseClamped: Boolean,
+            transform: AffineTransform,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
+            canvasCS: ColorSpace?,
+            canvasCeiling: Float?,
             cache: Cache?
         ): PreparedBitmap {
             // Find whether the representation of the passed bitmap is directly supported by Skia.
@@ -805,13 +818,15 @@ class Canvas private constructor(
                     Resolution(scaledRes.heightPx, scaledRes.widthPx)
                 if (scaledRes.widthPx == 0 || scaledRes.heightPx == 0)
                     transformedBitmap = null
-                else transformedBitmap = CacheImpl.get(cache, listOf(bitmap.key(), canvasCS, reorder, transformedRes)) {
+                else transformedBitmap = cache.get(bitmap.key(), canvasCS, reorder, transformedRes, resamplingFilter) {
                     val scaledBitmap: Bitmap
                     if (scaledRes == res && isInRepCompatible)
                         scaledBitmap = bitmap.view()
                     else {
                         scaledBitmap = Bitmap.allocate(Bitmap.Spec(scaledRes, outRep))
-                        BitmapConverter.convert(bitmap, scaledBitmap, promiseOpaque = promiseOpaque)
+                        BitmapConverter.convert(
+                            bitmap, scaledBitmap, promiseOpaque = promiseOpaque, resamplingFilter = resamplingFilter
+                        )
                     }
                     val transformedBitmap: Bitmap
                     if (!reorder.flipH && !reorder.flipV && !reorder.transpose)
@@ -835,7 +850,7 @@ class Canvas private constructor(
                     if (isInRepCompatible)
                         transformedBitmap = bitmap.view()
                     else
-                        transformedBitmap = CacheImpl.get(cache, listOf(bitmap.key())) {
+                        transformedBitmap = cache.get(bitmap.key()) {
                             val transformedBitmap = Bitmap.allocate(Bitmap.Spec(res, outRep))
                             BitmapConverter.convert(bitmap, transformedBitmap, promiseOpaque = promiseOpaque)
                             transformedBitmap
@@ -853,12 +868,14 @@ class Canvas private constructor(
                 if (res1.widthPx <= 0 || res1.heightPx <= 0 || res3.widthPx <= 0 || res3.heightPx <= 0)
                     transformedBitmap = null
                 else
-                    transformedBitmap = CacheImpl.get(cache, listOf(bitmap.key(), canvasCS, TransformKey(transform))) {
+                    transformedBitmap = cache.get(bitmap.key(), canvasCS, TransformKey(transform), resamplingFilter) {
                         val res2 = Resolution(res3.widthPx * 4, res3.heightPx * 4)
                         val bitmap1 = Bitmap.allocate(Bitmap.Spec(res1, outRep))
                         val bitmap2 = Bitmap.allocate(Bitmap.Spec(res2, outRep))
                         val bitmap3 = Bitmap.allocate(Bitmap.Spec(res3, outRep))
-                        BitmapConverter.convert(bitmap, bitmap1, promiseOpaque = promiseOpaque)
+                        BitmapConverter.convert(
+                            bitmap, bitmap1, promiseOpaque = promiseOpaque, resamplingFilter = resamplingFilter
+                        )
                         forBitmap(bitmap2.zero(), canvasCeiling).use { canvas ->
                             canvas.applyTransformAndClip(AffineTransform().apply {
                                 scale(res2.widthPx / res3.widthPx.toDouble(), res2.heightPx / res3.heightPx.toDouble())
@@ -871,7 +888,7 @@ class Canvas private constructor(
                             canvas.callSkDrawImage(bitmap1, promiseOpaque, SkFilterMode_Linear(), paint)
                             SkPaint_delete(paint)
                         }
-                        BitmapConverter.convert(bitmap2, bitmap3)
+                        BitmapConverter.convert(bitmap2, bitmap3, resamplingFilter = resamplingFilter)
                         bitmap1.close()
                         bitmap2.close()
                         bitmap3
@@ -895,7 +912,7 @@ class Canvas private constructor(
             val b = if (clip.isEmpty()) naturalBounds else
                 naturalBounds.intersection(clip.map(Shape::getBounds).reduce(Rectangle::intersection))
             val boundsRelToNatural = Rectangle(b.x - naturalBounds.x, b.y - naturalBounds.y, b.width, b.height)
-            val bitmap = CacheImpl.get(cache, listOf(srcKey, canvasCS, TransformKey(transform), boundsRelToNatural)) {
+            val bitmap = cache.get(srcKey, canvasCS, TransformKey(transform), boundsRelToNatural) {
                 val bitmap =
                     Bitmap.allocate(Bitmap.Spec(Resolution(b.width, b.height), compatibleRepresentation(canvasCS)))
                 val shiftedTransform = AffineTransform.getTranslateInstance(-b.x.toDouble(), -b.y.toDouble())
@@ -981,6 +998,7 @@ class Canvas private constructor(
             val promiseOpaque: Boolean = false,
             val promiseClamped: Boolean = false,
             val transform: AffineTransform? = null,
+            val resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
             val tileMode: TileMode = TileMode.DECAL,
             val disregardUserTransform: Boolean = false
         ) : Shader {
@@ -995,6 +1013,7 @@ class Canvas private constructor(
     class Matte(
         val bitmap: Bitmap,
         val transform: AffineTransform? = null,
+        val resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
         val tileMode: TileMode = TileMode.DECAL,
         val disregardUserTransform: Boolean = false
     ) {
@@ -1115,7 +1134,7 @@ class Canvas private constructor(
                     // Note: We intentionally ignore the MIME type and instead let BitmapReader figure out the format.
                     val bytes = DataUri.parse(uri, Charsets.UTF_8).data
                     val prepared = BitmapReader.read(bytes, planar = false).use { bitmap ->
-                        prepareBitmap(bitmap, false, false, IDENTITY, ColorSpace.SRGB, 1f, null)
+                        prepareBitmap(bitmap, false, false, IDENTITY, NEAREST_NEIGHBOR, ColorSpace.SRGB, 1f, null)
                     }
                     SizedValue(Optional.of(prepared), prepared.bitmap?.bytes ?: 0)
                 } catch (e: Exception) {
@@ -1150,10 +1169,10 @@ class Canvas private constructor(
         override fun close() = dc.close()
 
         companion object {
-            fun get(cache: Cache?, key: Any, compute: () -> Bitmap): Bitmap {
-                if (cache == null)
+            fun Cache?.get(vararg key: Any?, compute: () -> Bitmap): Bitmap {
+                if (this == null)
                     return compute()
-                val cached = (cache as CacheImpl).dc.get(key) {
+                val cached = (this as CacheImpl).dc.get(key.asList()) {
                     val computed = compute()
                     SizedValue(computed, computed.bytes, computed::close)
                 }

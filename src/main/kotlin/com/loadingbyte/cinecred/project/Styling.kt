@@ -355,8 +355,12 @@ data class PictureStyle(
     val cropBlankSpace: Boolean,
     val hFlip: Boolean,
     val vFlip: Boolean,
-    val rotationDeg: Double
+    val rotationDeg: Double,
+    val resamplingFilter: ResamplingFilter
 ) : PopupStyle
+
+
+enum class ResamplingFilter { NEAREST_NEIGHBOR, BILINEAR, BICUBIC_MITCHELL_NETRAVALI, LANCZOS }
 
 
 data class PictureRef(val name: String) {
@@ -384,6 +388,7 @@ data class TapeStyle(
     val hFlip: Boolean,
     val vFlip: Boolean,
     val rotationDeg: Int,
+    val resamplingFilter: ResamplingFilter,
     val slice: TapeSlice,
     val loop: Boolean,
     val temporallyJustify: HJustify,

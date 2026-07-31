@@ -553,6 +553,7 @@ private val TAPE_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<TapeStyle, *>> = listO
     ),
     LabelWidgetSpec(TapeStyle::rotationDeg.st(), labelL10nKey = "ui.styling.picture.rotationDeg"),
     NumberWidgetSpec(TapeStyle::rotationDeg.st(), sensitivity = 1.0),
+    LabelWidgetSpec(TapeStyle::resamplingFilter.st(), labelL10nKey = "ui.styling.picture.resamplingFilter"),
     ToggleButtonGroupWidgetSpec(TapeStyle::temporallyJustify.st(), ICON),
     TimecodeWidgetSpec(
         TapeStyle::leftTemporalMarginFrames.st(), TapeStyle::rightTemporalMarginFrames.st(),

@@ -1,6 +1,7 @@
 package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.*
+import com.loadingbyte.cinecred.imaging.BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
 import com.loadingbyte.cinecred.imaging.Y.Companion.toY
 import org.apache.fontbox.ttf.OTFParser
 import org.apache.pdfbox.contentstream.operator.OperatorName
@@ -319,7 +320,8 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         cropBlankSpace: Boolean = false,
         flipH: Boolean = false,
         flipV: Boolean = false,
-        rotation: Double = 0.0
+        rotation: Double = 0.0,
+        val resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT
     ) {
 
         val width: Double
@@ -424,6 +426,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         val flipH: Boolean = false,
         val flipV: Boolean = false,
         rotation: Int = 0,
+        val resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
         val leftMarginFrames: Int = 0,
         val rightMarginFrames: Int = 0,
         val fadeInFrames: Int = 0,
@@ -470,14 +473,16 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         }
 
         fun withResolution(width: Int?, height: Int?) = EmbeddedTape(
-            tape, width, height, cropLeft, cropRight, cropTop, cropBottom, flipH, flipV, rotation, leftMarginFrames,
-            rightMarginFrames, fadeInFrames, fadeInTransition, fadeOutFrames, fadeOutTransition, range, loop, align
+            tape, width, height, cropLeft, cropRight, cropTop, cropBottom, flipH, flipV, rotation, resamplingFilter,
+            leftMarginFrames, rightMarginFrames, fadeInFrames, fadeInTransition, fadeOutFrames, fadeOutTransition,
+            range, loop, align
         )
 
         fun withAlign(align: Align) = EmbeddedTape(
             tape, resolutionBeforeRotation.widthPx, resolutionBeforeRotation.heightPx,
-            cropLeft, cropRight, cropTop, cropBottom, flipH, flipV, rotation, leftMarginFrames, rightMarginFrames,
-            fadeInFrames, fadeInTransition, fadeOutFrames, fadeOutTransition, range, loop, align
+            cropLeft, cropRight, cropTop, cropBottom, flipH, flipV, rotation, resamplingFilter,
+            leftMarginFrames, rightMarginFrames, fadeInFrames, fadeInTransition, fadeOutFrames, fadeOutTransition,
+            range, loop, align
         )
 
         companion object {
@@ -653,7 +658,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 if (culling == null ||
                     culling.intersects(x, y, universeScaling * embeddedPic.width, universeScaling * embeddedPic.height)
                 )
-                    backend.materializeEmbeddedPicture(x, y, universeScaling, embeddedPic, draft = false)
+                    backend.materializeEmbeddedPicture(x, y, universeScaling, embeddedPic)
             }
         }
 
@@ -680,10 +685,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
         // The default implementations skip materialization.
         fun materializeShape(shape: Shape, coat: Coat, fill: Boolean, dash: Boolean, blurRadius: Double) {}
         fun materializeText(x: Double, yBaseline: Double, scaling: Double, text: Text, coat: Coat) {}
-        fun materializeEmbeddedPicture(
-            x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture, draft: Boolean
-        ) {
-        }
+        fun materializeEmbeddedPicture(x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture) {}
 
         fun materializeEmbeddedTape(x: Double, y: Double, scaling: Double, embeddedTape: EmbeddedTape)
 
@@ -727,11 +729,12 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                     thumbnail, picW.toDouble(), picH.toDouble(),
                     floor(cropMulX * embeddedTape.cropLeft), floor(cropMulX * embeddedTape.cropRight),
                     floor(cropMulY * embeddedTape.cropTop), floor(cropMulY * embeddedTape.cropBottom),
-                    false, embeddedTape.flipH, embeddedTape.flipV, embeddedTape.rotation.toDouble()
+                    false, embeddedTape.flipH, embeddedTape.flipV, embeddedTape.rotation.toDouble(),
+                    // Supplying NEAREST_NEIGHBOR achieves a "pixelated preview" effect and thereby communicates that
+                    // the thumbnail is just a preview, in addition to the preview indicator text.
+                    if (preview) NEAREST_NEIGHBOR else embeddedTape.resamplingFilter
                 )
-                // Supplying draft=true sets the interpolation mode to nearest neighbor to achieve a "pixelated
-                // preview" effect and thereby clearly communicate that the thumbnail is just a preview.
-                materializeEmbeddedPicture(x, y, scaling, embeddedThumbnail, draft = preview)
+                materializeEmbeddedPicture(x, y, scaling, embeddedThumbnail)
 
                 if (preview) {
                     val previewIndicator = Tape.previewIndicator(x, y, w * scaling, h * scaling)
@@ -805,9 +808,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             canvas.fillShape(text.outline, coat.toShader(), transform = transform)
         }
 
-        override fun materializeEmbeddedPicture(
-            x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture, draft: Boolean
-        ) {
+        override fun materializeEmbeddedPicture(x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture) {
             val pic = embeddedPic.picture
             val transform = AffineTransform().apply {
                 // If we cache rendered pictures, we want to reuse them as often as possible. By aligning
@@ -820,7 +821,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 concatenate(embeddedPic.transform)
             }
             try {
-                pic.drawTo(canvas, embeddedPic.crop, nearestNeighbor = draft, transform, cache = cachePictures)
+                pic.drawTo(canvas, embeddedPic.crop, transform, embeddedPic.resamplingFilter, cache = cachePictures)
             } catch (e: Exception) {
                 if (!tolerateErroneousMedia)
                     throw e
@@ -955,9 +956,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             }
         }
 
-        override fun materializeEmbeddedPicture(
-            x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture, draft: Boolean
-        ) {
+        override fun materializeEmbeddedPicture(x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture) {
             val use = doc.createElementNS(SVG_NS_URI, "use")
 
             val picElementId = picElementIds.computeIfAbsent(embeddedPic.picture) {
@@ -1207,7 +1206,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                     }
                     // Place the bitmap in the PDF.
                     val embeddedPic = EmbeddedPicture(Picture.Raster.convert(bitmap))
-                    materializeEmbeddedPicture(xWhole - pad, yWhole - pad, 1.0, embeddedPic, draft = false)
+                    materializeEmbeddedPicture(xWhole - pad, yWhole - pad, 1.0, embeddedPic)
                 }
                 return
             }
@@ -1274,9 +1273,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             cs.restoreGraphicsState()
         }
 
-        override fun materializeEmbeddedPicture(
-            x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture, draft: Boolean
-        ) {
+        override fun materializeEmbeddedPicture(x: Double, y: Double, scaling: Double, embeddedPic: EmbeddedPicture) {
             val pic = embeddedPic.picture
             val q = pic is Picture.Vector || embeddedPic.isCropped
             if (q)
@@ -1296,16 +1293,17 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             }
             when {
                 pic is Picture.Raster || pic is Picture.SVG && tracker.rasterizeSVGs -> {
+                    val filter = embeddedPic.resamplingFilter
                     transform.scale(pic.width, pic.height)
-                    cs.drawImage(tracker.pdImages.computeIfAbsent(pic) {
-                        // Note: The first occurrence decides whether a picture is in draft-mode or not, but that's fine
-                        // since draft true only for tape thumbnails; hence a single picture never mixes both modes.
-                        PDImageXObject(tracker.doc).apply { if (pic is Picture.Raster) interpolate = !draft }
+                    cs.drawImage(tracker.pdImages.computeIfAbsent(Pair(pic, filter)) {
+                        PDImageXObject(tracker.doc)
+                            .apply { if (pic is Picture.Raster) interpolate = filter != NEAREST_NEIGHBOR }
                     }, Matrix(transform))
                     val tr = embeddedPic.transform
                     val w = ceil(scaling * tr.scalingFactorX * pic.width).toInt()
                     val h = ceil(scaling * tr.scalingFactorY * pic.height).toInt()
-                    tracker.pdImageResolutions.computeIfAbsent(pic) { mutableListOf() }.add(Resolution(w, h))
+                    tracker.pdImageResolutions.computeIfAbsent(Pair(pic, filter)) { mutableListOf() }
+                        .add(Resolution(w, h))
                 }
                 pic is Picture.Vector -> {
                     cs.transform(Matrix(transform))
@@ -1504,8 +1502,8 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
 
         val extGStates = HashMap<ExtGStateKey, PDExtendedGraphicsState>()
         val gradientFuncs = HashMap<Pair<List<Coat.Gradient.Stop>, Canvas.GradientInterpolation?>, PDFunction>()
-        val pdImages = HashMap<Picture, PDImageXObject>()
-        val pdImageResolutions = HashMap<Picture, MutableList<Resolution>>()
+        val pdImages = HashMap<Pair<Picture, BitmapConverter.ResamplingFilter>, PDImageXObject>()
+        val pdImageResolutions = HashMap<Pair<Picture, BitmapConverter.ResamplingFilter>, MutableList<Resolution>>()
         val pdForms = HashMap<Picture.Vector, PDFormXObject>()
         val layerUtil by lazy { LayerUtility(doc) }
         private val pdColorSpaces = HashMap<ColorSpace, PDICCBased>()
@@ -1524,8 +1522,10 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 val (font, variations) = key
                 endFont(font, variations, rec)
             }
-            for ((pic, pdImage) in pdImages)
-                endImage(pic, pdImage, pdImageResolutions.getValue(pic))
+            for ((key, pdImage) in pdImages) {
+                val (pic, resamplingFilter) = key
+                endImage(pic, pdImage, pdImageResolutions.getValue(key), resamplingFilter)
+            }
         }
 
         private fun endFont(font: Font, variations: Set<Font.Variation>, rec: FontRecorder) {
@@ -1548,7 +1548,12 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             }
         }
 
-        private fun endImage(pic: Picture, pdImage: PDImageXObject, resolutions: List<Resolution>) {
+        private fun endImage(
+            pic: Picture,
+            pdImage: PDImageXObject,
+            resolutions: List<Resolution>,
+            resamplingFilter: BitmapConverter.ResamplingFilter
+        ) {
             // If the picture shall shrink or is an SVG, find the max res, which is 2x the largest embedded res (so that
             // there's still enough detail when zooming in). However, if the original picture is actually smaller than
             // that, don't blow it up. Notice that reducing the resolution asymmetrically is fine because PDF squeezes
@@ -1569,7 +1574,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                         // If the maximum resolution is actually lower than the original one, shrink the bitmap.
                         if (res != picRes) {
                             bitmap = Bitmap.allocate(Bitmap.Spec(res, rep))
-                            BitmapConverter.convert(pic.bitmap, bitmap)
+                            BitmapConverter.convert(pic.bitmap, bitmap, resamplingFilter = resamplingFilter)
                         }
                     }
                 }

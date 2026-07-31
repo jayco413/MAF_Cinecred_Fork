@@ -7,6 +7,8 @@ Cinecred Changelog
 
 ### Additions
 
+- The resampling filter for embedded pictures and videos is now configurable,
+  which is especially important for avoiding extreme ringing in HDR imagery.
 - Added an optional 1-frame informational slate to exported videos.
 - Zooming the preview with the scroll wheel now zooms towards the mouse pointer.
 - Bug reports can now be submitted via a new button in the welcome window.

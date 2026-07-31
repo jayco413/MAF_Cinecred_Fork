@@ -869,13 +869,17 @@ class DeferredVideo private constructor(
 
             init {
                 val userRep = userSpec.representation
+                val filter = if (usePreview) BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR else
+                    resp.embeddedTape.resamplingFilter
 
                 if (userSpec.scan == Bitmap.Scan.PROGRESSIVE) {
                     val compositedOverlayRes = resp.embeddedTape.resolution
                     frameOverlayer = when (blendInUserColorSpace) {
-                        true -> UserColorSpaceOverlayer(userRep.colorSpace!!, readSpec, compositedOverlayRes)
+                        true -> UserColorSpaceOverlayer(
+                            userRep.colorSpace!!, readSpec, compositedOverlayRes, filter
+                        )
                         else -> QualityOverlayer(
-                            canvasRep, canvasCeiling, userRep, readSpec, compositedOverlayRes, usePreview
+                            canvasRep, canvasCeiling, userRep, readSpec, compositedOverlayRes, filter, usePreview
                         )
                     }
                     topFieldOverlayer = null
@@ -893,10 +897,10 @@ class DeferredVideo private constructor(
                     val botFieldOverlaySpec = topFieldOverlaySpec.copy(content = Bitmap.Content.ONLY_BOT_FIELD)
                     frameOverlayer = null
                     topFieldOverlayer = QualityOverlayer(
-                        canvasRep, canvasCeiling, userRep, topFieldOverlaySpec, compositedOverlayRes, usePreview
+                        canvasRep, canvasCeiling, userRep, topFieldOverlaySpec, compositedOverlayRes, filter, usePreview
                     )
                     botFieldOverlayer = QualityOverlayer(
-                        canvasRep, canvasCeiling, userRep, botFieldOverlaySpec, compositedOverlayRes, usePreview
+                        canvasRep, canvasCeiling, userRep, botFieldOverlaySpec, compositedOverlayRes, filter, usePreview
                     )
                 }
             }
@@ -966,13 +970,17 @@ class DeferredVideo private constructor(
             companion object {
 
                 fun makeOverlayConvAndDst(
-                    overlaySpec: Bitmap.Spec, dstRes: Resolution, dstRep: Bitmap.Representation, usingPreview: Boolean
+                    overlaySpec: Bitmap.Spec,
+                    dstRes: Resolution,
+                    dstRep: Bitmap.Representation,
+                    filter: BitmapConverter.ResamplingFilter,
+                    usingPreview: Boolean
                 ): Pair<BitmapConverter, Bitmap> {
                     val dstSpec = overlaySpec.copy(resolution = dstRes, representation = dstRep)
                     val conv = BitmapConverter(
                         overlaySpec, dstSpec,
                         // srcAligned is false due to potential cropping of the overlay.
-                        srcAligned = false, approxTransfer = usingPreview, nearestNeighbor = usingPreview
+                        srcAligned = false, approxTransfer = usingPreview, resamplingFilter = filter
                     )
                     val dstBitmap = Bitmap.allocate(dstSpec)
                     return Pair(conv, dstBitmap)
@@ -1009,6 +1017,7 @@ class DeferredVideo private constructor(
             protected val canvasCeiling: Float?,
             overlaySpec: Bitmap.Spec,
             compositedOverlayRes: Resolution,
+            filter: BitmapConverter.ResamplingFilter,
             usingPreview: Boolean
         ) : Overlayer {
 
@@ -1016,7 +1025,7 @@ class DeferredVideo private constructor(
             private val canvasBitmap: Bitmap
 
             init {
-                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, canvasRep, usingPreview)
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, canvasRep, filter, usingPreview)
                     .run { overlay2canvas = first; canvasBitmap = second }
             }
 
@@ -1050,12 +1059,17 @@ class DeferredVideo private constructor(
                     userRep: Bitmap.Representation,
                     overlaySpec: Bitmap.Spec,
                     compositedOverlayRes: Resolution,
+                    filter: BitmapConverter.ResamplingFilter,
                     usingPreview: Boolean
                 ) =
                     if (!usingPreview)
-                        QualityReaderOverlayer(canvasRep, canvasCeiling, userRep, overlaySpec, compositedOverlayRes)
+                        QualityReaderOverlayer(
+                            canvasRep, canvasCeiling, userRep, overlaySpec, compositedOverlayRes, filter
+                        )
                     else
-                        QualityPreviewOverlayer(canvasRep, canvasCeiling, userRep, overlaySpec, compositedOverlayRes)
+                        QualityPreviewOverlayer(
+                            canvasRep, canvasCeiling, userRep, overlaySpec, compositedOverlayRes, filter
+                        )
             }
 
         }
@@ -1065,8 +1079,9 @@ class DeferredVideo private constructor(
             canvasCeiling: Float?,
             userRep: Bitmap.Representation,
             overlaySpec: Bitmap.Spec,
-            compositedOverlayRes: Resolution
-        ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, usingPreview = false) {
+            compositedOverlayRes: Resolution,
+            filt: BitmapConverter.ResamplingFilter
+        ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, filt, usingPreview = false) {
 
             private val overlay2user: BitmapConverter
             private val userBitmap: Bitmap
@@ -1075,7 +1090,7 @@ class DeferredVideo private constructor(
                 Overlayer.computeUserCeiling(canvasRep.colorSpace!!, userRep.colorSpace!!, canvasCeiling)
 
             init {
-                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, userRep, usingPreview = false)
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, userRep, filt, usingPreview = false)
                     .run { overlay2user = first; userBitmap = second }
             }
 
@@ -1103,8 +1118,9 @@ class DeferredVideo private constructor(
             canvasCeiling: Float?,
             userRep: Bitmap.Representation,
             overlaySpec: Bitmap.Spec,
-            compositedOverlayRes: Resolution
-        ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, usingPreview = true) {
+            compositedOverlayRes: Resolution,
+            filter: BitmapConverter.ResamplingFilter
+        ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, filter, usingPreview = true) {
 
             private val overlay2prep: BitmapConverter
             private val prepBitmap: Bitmap
@@ -1125,7 +1141,7 @@ class DeferredVideo private constructor(
                     alpha = if (overlaySpec.representation.pixelFormat.hasAlpha)
                         Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
                 )
-                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, prepRep, usingPreview = true)
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, prepRep, filter, usingPreview = true)
                     .run { overlay2prep = first; prepBitmap = second }
 
                 val userSpec = Bitmap.Spec(compositedOverlayRes, userRep)
@@ -1196,7 +1212,8 @@ class DeferredVideo private constructor(
         private class UserColorSpaceOverlayer(
             userColorSpace: ColorSpace,
             overlaySpec: Bitmap.Spec,
-            compositedOverlayRes: Resolution
+            compositedOverlayRes: Resolution,
+            filter: BitmapConverter.ResamplingFilter
         ) : Overlayer {
 
             private val overlay2prep: BitmapConverter
@@ -1209,7 +1226,7 @@ class DeferredVideo private constructor(
                     alpha = if (overlaySpec.representation.pixelFormat.hasAlpha)
                         Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
                 )
-                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, prepRep, usingPreview = true)
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, prepRep, filter, usingPreview = true)
                     .run { overlay2prep = first; prepBitmap = second }
 
                 Overlayer.renderPreviewText(compositedOverlayRes, userColorSpace, userColorSpace)

@@ -263,8 +263,15 @@ class Tape private constructor(
             }
             val pictureRep = Picture.Raster.compatibleRepresentation(tapeRep.colorSpace!!, tapeRep.alpha)
             pictureSpec = Bitmap.Spec(previewRes, pictureRep)
+            // Guess whether the tape is probably HDR. If yes, use bilinear resampling, because other filters have
+            // negative lobes that cause severe ringing near very bright edges.
+            val tapeTrc = tapeRep.colorSpace.transfer
+            val filter = if (tapeRep.pixelFormat.isFloat && tapeTrc == ColorSpace.Transfer.LINEAR || tapeTrc.isHDR)
+                BitmapConverter.ResamplingFilter.BILINEAR else BitmapConverter.ResamplingFilter.DEFAULT
             setupSafely({
-                tape2picture = BitmapConverter(tapeSpec, pictureSpec, srcAligned = false, approxTransfer = true)
+                tape2picture = BitmapConverter(
+                    tapeSpec, pictureSpec, srcAligned = false, approxTransfer = true, resamplingFilter = filter
+                )
             }, ::close)
         }
 

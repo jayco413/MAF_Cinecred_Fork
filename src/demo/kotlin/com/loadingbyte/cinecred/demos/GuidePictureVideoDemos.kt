@@ -38,6 +38,7 @@ val GUIDE_PICTURE_VIDEO_DEMOS
         GuidePictureVideoResolutionDemo,
         GuidePictureVideoCropDemo,
         GuidePictureVideoFlipAndRotateDemo,
+        GuidePictureVideoResamplingFilterDemo,
         GuidePictureVideoPictureCropBlankSpaceDemo,
         GuidePictureVideoVideoMovingDemo,
         GuidePictureVideoVideoSliceDemo,
@@ -220,6 +221,25 @@ object GuidePictureVideoFlipAndRotateDemo : StyleSettingsDemo<PictureStyle>(
     }
 
     override fun credits(style: PictureStyle) = PIC_SPREADSHEET.parseCreditsPiS(style)
+}
+
+
+object GuidePictureVideoResamplingFilterDemo : StyleSettingsDemo<PictureStyle>(
+    PictureStyle::class.java, "$DIR/resampling-filter", Format.STEP_GIF,
+    listOf(PictureStyle::resamplingFilter.st())
+) {
+    override fun styles() = buildList<PictureStyle> {
+        for (resamplingFilter in ResamplingFilter.entries)
+            this += PRESET_PICTURE_STYLE.copy(
+                name = "slate", picture = PictureRef(SLATE_PIC), widthPx = Override(200.0),
+                resamplingFilter = resamplingFilter
+            )
+    }
+
+    override fun credits(style: PictureStyle) = """
+@Body
+{{Pic slate}}
+        """.parseCreditsPiS(style)
 }
 
 

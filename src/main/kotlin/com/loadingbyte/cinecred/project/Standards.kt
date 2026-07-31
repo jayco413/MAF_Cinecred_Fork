@@ -237,7 +237,8 @@ val PRESET_PICTURE_STYLE = PictureStyle(
     cropBlankSpace = false,
     hFlip = false,
     vFlip = false,
-    rotationDeg = 0.0
+    rotationDeg = 0.0,
+    resamplingFilter = ResamplingFilter.LANCZOS
 )
 
 
@@ -254,6 +255,7 @@ val PRESET_TAPE_STYLE = TapeStyle(
     hFlip = false,
     vFlip = false,
     rotationDeg = 0,
+    resamplingFilter = ResamplingFilter.LANCZOS,
     slice = TapeSlice(TimecodeFormat.SMPTE_NON_DROP_FRAME, null, null),
     loop = false,
     temporallyJustify = HJustify.LEFT,

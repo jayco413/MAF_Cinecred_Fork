@@ -964,7 +964,8 @@ private fun PictureStyle.createEmbedded(): DeferredImage.EmbeddedPicture? =
         val picture = (picture.loader ?: return null).picture
         DeferredImage.EmbeddedPicture(
             picture, widthPx.value, heightPx.value, cropLeftPx, cropRightPx, cropTopPx, cropBottomPx, cropBlankSpace,
-            hFlip, vFlip, rotationDeg
+            hFlip, vFlip, rotationDeg,
+            resamplingFilter.toImaging(),
         )
     } catch (_: Exception) {
         null
@@ -1002,6 +1003,7 @@ private fun TapeStyle.createEmbedded(styling: Styling): DeferredImage.EmbeddedTa
             widthPx.value, heightPx.value,
             cropLeftPx, cropRightPx, cropTopPx, cropBottomPx,
             hFlip, vFlip, rotationDeg,
+            resamplingFilter.toImaging(),
             leftTemporalMarginFrames, rightTemporalMarginFrames,
             fadeInFrames, fadeInTransition,
             fadeOutFrames, fadeOutTransition,
@@ -1107,6 +1109,14 @@ private fun coerceTimecode(tc: Timecode?, tape: Tape, styling: Styling): Timecod
                 null
             }
     }
+}
+
+
+private fun ResamplingFilter.toImaging(): BitmapConverter.ResamplingFilter = when (this) {
+    ResamplingFilter.NEAREST_NEIGHBOR -> BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
+    ResamplingFilter.BILINEAR -> BitmapConverter.ResamplingFilter.BILINEAR
+    ResamplingFilter.BICUBIC_MITCHELL_NETRAVALI -> BitmapConverter.ResamplingFilter.BICUBIC_MITCHELL_NETRAVALI
+    ResamplingFilter.LANCZOS -> BitmapConverter.ResamplingFilter.LANCZOS
 }
 
 

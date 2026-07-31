@@ -73,11 +73,12 @@ private fun loadTemplateProject(modifyCsv: (Path) -> Unit = {}): Project =
     }
 
 
-val LOGO_PIC by lazy {
-    val tmpFile = Path(System.getProperty("java.io.tmpdir")).resolve("cinecred-logo.svg")
-    tmpFile.toFile().deleteOnExit()
-    useResourcePath("/branding/logo.svg") { it.copyTo(tmpFile) }
-    Picture.Loader.recognize(tmpFile)!!.apply { picture }
+val LOGO_PIC: Picture.Loader by lazy {
+    useResourcePath("/branding/logo.svg") { Picture.Loader.recognize(it)!!.apply { picture } }
+}
+
+val SLATE_PIC: Picture.Loader by lazy {
+    useResourcePath("/demoMedia/slate.jpg") { Picture.Loader.recognize(it)!!.apply { picture } }
 }
 
 val RAINBOW_TAPE: Tape by lazy {

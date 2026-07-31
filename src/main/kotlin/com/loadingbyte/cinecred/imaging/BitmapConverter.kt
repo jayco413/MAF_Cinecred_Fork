@@ -7,6 +7,7 @@ import com.loadingbyte.cinecred.imaging.Bitmap.Alpha.*
 import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.*
 import com.loadingbyte.cinecred.imaging.Bitmap.Range.FULL
 import com.loadingbyte.cinecred.imaging.Bitmap.Range.LIMITED
+import com.loadingbyte.cinecred.imaging.BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
 import com.loadingbyte.cinecred.imaging.BitmapConverter.StageType.*
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.LINEAR
 import com.loadingbyte.cinecred.natives.skcms.skcms_Curve
@@ -53,7 +54,6 @@ import jdk.incubator.vector.ShortVector.fromMemorySegment as vec
  * @param dstAligned Assumes that the destination [Bitmap.isAligned]. This admits certain optimizations.
  * @param promiseOpaque Assumes that the source alpha channel is 1 everywhere. This admits certain optimizations.
  * @param approxTransfer Use faster, but less precise transfer characteristics conversion.
- * @param nearestNeighbor Use very fast nearest neighbor scaling.
  */
 class BitmapConverter(
     private val srcSpec: Bitmap.Spec,
@@ -62,7 +62,7 @@ class BitmapConverter(
     private val dstAligned: Boolean = true,
     promiseOpaque: Boolean = false,
     approxTransfer: Boolean = false,
-    nearestNeighbor: Boolean = false
+    resamplingFilter: ResamplingFilter = ResamplingFilter.DEFAULT
 ) : AutoCloseable {
 
     private val stages = mutableListOf<Stage>()
@@ -93,7 +93,7 @@ class BitmapConverter(
         ) { "Cannot convert between a single field and two interleaved fields." }
 
         // Find a pipeline of stages that converts bitmaps between the src and dst spec.
-        val (stageTypes, effSpecs) = Pathfinder(srcSpec, dstSpec, srcAligned, dstAligned, nearestNeighbor).run()
+        val (stageTypes, effSpecs) = Pathfinder(srcSpec, dstSpec, srcAligned, dstAligned, resamplingFilter).run()
 
         // If the first stage (un)premultiplies and/or drops the alpha channel, but the operation actually doesn't do
         // anything apart from copying the data, we can remove the stage and let reinterpretation take care of it.
@@ -122,7 +122,7 @@ class BitmapConverter(
                 LIMITED_X2RGB10BE -> LimitedX2RGB10BEStage
                 SWS -> SwsStage(effSpecs[i], effSpecs[i + 1])
                 SKCMS -> SkcmsStage(effSpecs[i], effSpecs[i + 1], promiseOpaque)
-                ZIMG -> ZimgStage(effSpecs[i], effSpecs[i + 1], promiseOpaque, approxTransfer, nearestNeighbor)
+                ZIMG -> ZimgStage(effSpecs[i], effSpecs[i + 1], promiseOpaque, approxTransfer, resamplingFilter)
             }
 
         // Allocate reusable intermediate bitmaps that connect the processors with each other.
@@ -221,10 +221,10 @@ class BitmapConverter(
             dst: Bitmap,
             promiseOpaque: Boolean = false,
             approxTransfer: Boolean = false,
-            nearestNeighbor: Boolean = false
+            resamplingFilter: ResamplingFilter = ResamplingFilter.DEFAULT
         ) {
             BitmapConverter(
-                src.spec, dst.spec, src.isAligned, dst.isAligned, promiseOpaque, approxTransfer, nearestNeighbor
+                src.spec, dst.spec, src.isAligned, dst.isAligned, promiseOpaque, approxTransfer, resamplingFilter
             ).use { it.convert(src, dst) }
         }
 
@@ -236,6 +236,20 @@ class BitmapConverter(
         private val QUART_VLEN = VLEN / 4
         private val EIGHTH_VLEN = VLEN / 8
         private val SIXTEENTH_VLEN = VLEN / 16
+
+    }
+
+
+    enum class ResamplingFilter(val code: Int, val a: Double = Double.NaN, val b: Double = Double.NaN) {
+
+        NEAREST_NEIGHBOR(ZIMG_RESIZE_POINT()),
+        BILINEAR(ZIMG_RESIZE_BILINEAR()),
+        BICUBIC_MITCHELL_NETRAVALI(ZIMG_RESIZE_BICUBIC(), 1.0 / 3.0, 1.0 / 3.0),
+        LANCZOS(ZIMG_RESIZE_LANCZOS());
+
+        companion object {
+            val DEFAULT = LANCZOS
+        }
 
     }
 
@@ -263,7 +277,7 @@ class BitmapConverter(
         private val dstSpec: Bitmap.Spec,
         srcAligned: Boolean,
         dstAligned: Boolean,
-        private val nearestNeighbor: Boolean
+        private val resamplingFilter: ResamplingFilter
     ) {
 
         // Choose sets of formats, primaries, transfer characteristics, contents, and resolutions of the src, dst, and
@@ -466,7 +480,7 @@ class BitmapConverter(
                                                 conObj == Bitmap.Content.PROGRESSIVE_FRAME &&
                                                 toConObj == Bitmap.Content.PROGRESSIVE_FRAME
                                             )
-                                                if (nearestNeighbor && !pmu) {
+                                                if (resamplingFilter == NEAREST_NEIGHBOR && !pmu) {
                                                     for ((toTrc, toTrcObj) in trcObjs.withIndex())
                                                         if (pri == toPri && trc == toTrc || trcObj.hasCode && toTrcObj.hasCode)
                                                             for (toRes in resObjs.indices)
@@ -479,7 +493,7 @@ class BitmapConverter(
                                                         for ((toTrc, toTO) in trcObjs.withIndex())
                                                             if (pri == toPri && trc == toTrc || trcObj.hasCode && toTO.hasCode)
                                                                 link(ZIMG, true, toFmt, toPri, toTrc, false, toCon, res)
-                                                    if (nearestNeighbor || (!toFmtObj.px.hasAlpha || pmu) && trcObj == LINEAR)
+                                                    if (resamplingFilter == NEAREST_NEIGHBOR || (!toFmtObj.px.hasAlpha || pmu) && trcObj == LINEAR)
                                                         for (toRes in resObjs.indices)
                                                             link(ZIMG, true, toFmt, toPri, trc, pmu, toCon, toRes)
                                                 }
@@ -1657,7 +1671,7 @@ class BitmapConverter(
         dstSpec: Bitmap.Spec,
         promiseOpaque: Boolean,
         approxTransfer: Boolean,
-        nearestNeighbor: Boolean
+        resamplingFilter: ResamplingFilter
     ) : Stage {
 
         private var colorProc: Processor? = null
@@ -1665,9 +1679,11 @@ class BitmapConverter(
 
         init {
             setupSafely({
-                colorProc = Processor(cd(srcSpec), cd(dstSpec), approxTransfer, nearestNeighbor)
-                if (dstSpec.representation.pixelFormat.hasAlpha)
-                    alphaProc = Processor(ad(srcSpec), ad(dstSpec), approxTransfer, nearestNeighbor || promiseOpaque)
+                colorProc = Processor(cd(srcSpec), cd(dstSpec), approxTransfer, resamplingFilter)
+                if (dstSpec.representation.pixelFormat.hasAlpha) {
+                    val alphaResamplingFilter = if (promiseOpaque) NEAREST_NEIGHBOR else resamplingFilter
+                    alphaProc = Processor(ad(srcSpec), ad(dstSpec), approxTransfer, alphaResamplingFilter)
+                }
             }, ::close)
         }
 
@@ -1718,7 +1734,7 @@ class BitmapConverter(
         override fun process(src: Bitmap, dst: Bitmap) {
             colorProc!!.process(src, dst)
             alphaProc?.process(src, dst)
-            // Lanczos scaling leads to ringing, which can produce values outside the input range, including values
+            // Scaling can lead to ringing, which can produce values outside the input range, including values
             // below 0 and above 1. While such values are fine for color, they are illegal for alpha and, e.g., mess up
             // premultiplied alpha and make Skia produce strange and undesired artifacts. So if this processor applies
             // scaling and the destination bitmap uses floating point and thus supports out-of-bounds values, clamp the
@@ -1763,7 +1779,7 @@ class BitmapConverter(
             private val srcDesc: Desc,
             private val dstDesc: Desc,
             private val approxTransfer: Boolean,
-            private val nearestNeighbor: Boolean
+            private val resamplingFilter: ResamplingFilter
         ) {
 
             class Desc(
@@ -1837,9 +1853,12 @@ class BitmapConverter(
                 // Populate the params struct.
                 val params = zimg_graph_builder_params.allocate(arena)
                 zimg_graph_builder_params_default(params, ZIMG_API_VERSION())
-                val resampleFilter = if (nearestNeighbor) ZIMG_RESIZE_POINT() else ZIMG_RESIZE_LANCZOS()
-                zimg_graph_builder_params.resample_filter(params, resampleFilter)
-                zimg_graph_builder_params.resample_filter_uv(params, resampleFilter)
+                zimg_graph_builder_params.resample_filter(params, resamplingFilter.code)
+                zimg_graph_builder_params.filter_param_a(params, resamplingFilter.a)
+                zimg_graph_builder_params.filter_param_b(params, resamplingFilter.b)
+                zimg_graph_builder_params.resample_filter_uv(params, resamplingFilter.code)
+                zimg_graph_builder_params.filter_param_a_uv(params, resamplingFilter.a)
+                zimg_graph_builder_params.filter_param_b_uv(params, resamplingFilter.b)
                 zimg_graph_builder_params.cpu_type(params, ZIMG_CPU_AUTO_64B())
                 zimg_graph_builder_params.nominal_peak_luminance(params, 203.0)
                 zimg_graph_builder_params.allow_approximate_gamma(params, if (approxTransfer) 1 else 0)

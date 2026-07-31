@@ -56,14 +56,14 @@ sealed interface Picture : AutoCloseable {
 
     /**
      * @param crop Crops the picture to this rectangle prior to any processing.
-     * @param nearestNeighbor Only has an effect for raster pictures.
+     * @param resamplingFilter Only has an effect for raster pictures.
      * @throws Exception
      */
     fun drawTo(
         canvas: Canvas,
         crop: Rectangle2D? = null,
-        nearestNeighbor: Boolean = false,
         transform: AffineTransform? = null,
+        resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
         clip: List<Shape> = emptyList(),
         cache: Boolean = false
     )
@@ -100,8 +100,8 @@ sealed interface Picture : AutoCloseable {
         override fun drawTo(
             canvas: Canvas,
             crop: Rectangle2D?,
-            nearestNeighbor: Boolean,
             transform: AffineTransform?,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
             clip: List<Shape>,
             cache: Boolean
         ) {
@@ -115,7 +115,7 @@ sealed interface Picture : AutoCloseable {
             }
             cropped.use {
                 canvas.drawImage(
-                    cropped, nearestNeighbor = nearestNeighbor, transform = transform, clip = clip,
+                    cropped, resamplingFilter = resamplingFilter, transform = transform, clip = clip,
                     cache = if (cache) canvasCache else null
                 )
             }
@@ -188,8 +188,8 @@ sealed interface Picture : AutoCloseable {
         override fun drawTo(
             canvas: Canvas,
             crop: Rectangle2D?,
-            nearestNeighbor: Boolean,
             transform: AffineTransform?,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
             clip: List<Shape>,
             cache: Boolean
         ) {

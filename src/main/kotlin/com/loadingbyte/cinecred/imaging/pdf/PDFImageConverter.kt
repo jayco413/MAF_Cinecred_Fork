@@ -210,7 +210,9 @@ private fun rescaleGrayF32(image: FloatArray, oldW: Int, oldH: Int, newW: Int, n
     Bitmap.allocate(Bitmap.Spec(Resolution(oldW, oldH), rep)).use { oldBitmap ->
         Bitmap.allocate(Bitmap.Spec(Resolution(newW, newH), rep)).use { newBitmap ->
             oldBitmap.put(image, oldW)
-            BitmapConverter.convert(oldBitmap, newBitmap, nearestNeighbor = nn)
+            val filter =
+                if (nn) BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR else BitmapConverter.ResamplingFilter.DEFAULT
+            BitmapConverter.convert(oldBitmap, newBitmap, resamplingFilter = filter)
             return newBitmap.getF(newW)
         }
     }

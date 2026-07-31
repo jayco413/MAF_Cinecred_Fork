@@ -696,6 +696,24 @@ public class zimg_h extends zimg_h$shared {
     public static int ZIMG_RESIZE_POINT() {
         return ZIMG_RESIZE_POINT;
     }
+    private static final int ZIMG_RESIZE_BILINEAR = (int)1L;
+    /**
+     * {@snippet lang=c :
+     * enum zimg_resample_filter_e.ZIMG_RESIZE_BILINEAR = 1
+     * }
+     */
+    public static int ZIMG_RESIZE_BILINEAR() {
+        return ZIMG_RESIZE_BILINEAR;
+    }
+    private static final int ZIMG_RESIZE_BICUBIC = (int)2L;
+    /**
+     * {@snippet lang=c :
+     * enum zimg_resample_filter_e.ZIMG_RESIZE_BICUBIC = 2
+     * }
+     */
+    public static int ZIMG_RESIZE_BICUBIC() {
+        return ZIMG_RESIZE_BICUBIC;
+    }
     private static final int ZIMG_RESIZE_LANCZOS = (int)5L;
     /**
      * {@snippet lang=c :

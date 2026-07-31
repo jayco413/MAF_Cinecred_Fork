@@ -392,6 +392,16 @@ private val PICTURE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<PictureSt
                 false
             }
         }
+    ),
+    StyleEffectivitySpec(
+        PictureStyle::resamplingFilter.st(),
+        isAlmostEffective = { _, style ->
+            try {
+                style.picture.loader?.picture !is Picture.Raster
+            } catch (_: IllegalStateException) {
+                false
+            }
+        }
     )
 )
 
