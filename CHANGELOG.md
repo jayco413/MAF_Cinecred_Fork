@@ -20,6 +20,7 @@ Cinecred Changelog
 - Lock files created by Excel are now properly ignored.
 - In newly created projects, gutter heads are now vertically centered again.
 - Fixed small vertical shifts when mixing interlaced and progressive video.
+- Fixed color shifts when exporting as SDR YUV while embedding HDR videos.
 - Fixed the occasional "exceeds source height" error during video export.
 
 ### UI Fixes
