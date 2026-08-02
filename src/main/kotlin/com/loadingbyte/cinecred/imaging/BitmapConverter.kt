@@ -119,6 +119,7 @@ class BitmapConverter(
                 PLANAR_FLOAT -> PlanarFloatStage
                 ADD_ALPHA_CHANNEL -> AddAlphaChannelStage
                 UN_PREMUL_OR_DROP_ALPHA_CHANNEL -> UnPremulOrDropAlphaChannelStage(promiseOpaque)
+                DE_INTERLACE -> DeInterlaceStage
                 LIMITED_X2RGB10BE -> LimitedX2RGB10BEStage
                 SWS -> SwsStage(effSpecs[i], effSpecs[i + 1])
                 SKCMS -> SkcmsStage(effSpecs[i], effSpecs[i + 1], promiseOpaque)
@@ -255,7 +256,15 @@ class BitmapConverter(
 
 
     private enum class StageType {
-        BLIT, PLANAR_FLOAT, ADD_ALPHA_CHANNEL, UN_PREMUL_OR_DROP_ALPHA_CHANNEL, LIMITED_X2RGB10BE, SWS, SKCMS, ZIMG
+        BLIT,
+        PLANAR_FLOAT,
+        ADD_ALPHA_CHANNEL,
+        UN_PREMUL_OR_DROP_ALPHA_CHANNEL,
+        DE_INTERLACE,
+        LIMITED_X2RGB10BE,
+        SWS,
+        SKCMS,
+        ZIMG
     }
 
 
@@ -330,8 +339,7 @@ class BitmapConverter(
             priObjs = setOf(srcRep.colorSpace?.primaries, dstRep.colorSpace?.primaries).toTypedArray()
             trcObjs = setOf(LINEAR, srcRep.colorSpace?.transfer, dstRep.colorSpace?.transfer)
                 .filterNotNull().toTypedArray()
-            conObjs = setOf(srcSpec.content, dstSpec.content)
-                .sortedBy { if (it == Bitmap.Content.PROGRESSIVE_FRAME) 1 else 0 }.toTypedArray()
+            conObjs = setOf(srcSpec.content, dstSpec.content).toTypedArray()
             resObjs = setOf(srcSpec.resolution, dstSpec.resolution).toTypedArray()
         }
 
@@ -475,28 +483,24 @@ class BitmapConverter(
                             )
                                 for ((toPri, toPriObj) in priObjs.withIndex())
                                     if (pri == toPri || priObj!!.hasCode && toPriObj!!.hasCode)
-                                        for ((toCon, toConObj) in conObjs.withIndex())
-                                            if (fmtObj.px.vChromaSub == 0 && toFmtObj.px.vChromaSub == 0 ||
-                                                conObj == Bitmap.Content.PROGRESSIVE_FRAME &&
-                                                toConObj == Bitmap.Content.PROGRESSIVE_FRAME
-                                            )
-                                                if (resamplingFilter == NEAREST_NEIGHBOR && !pmu) {
-                                                    for ((toTrc, toTrcObj) in trcObjs.withIndex())
-                                                        if (pri == toPri && trc == toTrc || trcObj.hasCode && toTrcObj.hasCode)
-                                                            for (toRes in resObjs.indices)
-                                                                link(
-                                                                    ZIMG, true, toFmt, toPri, toTrc, false, toCon, toRes
-                                                                )
-                                                } else {
-                                                    link(ZIMG, true, toFmt, toPri, trc, pmu, toCon, res)
-                                                    if (!pmu)
-                                                        for ((toTrc, toTO) in trcObjs.withIndex())
-                                                            if (pri == toPri && trc == toTrc || trcObj.hasCode && toTO.hasCode)
-                                                                link(ZIMG, true, toFmt, toPri, toTrc, false, toCon, res)
-                                                    if (resamplingFilter == NEAREST_NEIGHBOR || (!toFmtObj.px.hasAlpha || pmu) && trcObj == LINEAR)
+                                        if (fmtObj.px.vChromaSub == 0 && toFmtObj.px.vChromaSub == 0 ||
+                                            conObj == Bitmap.Content.PROGRESSIVE_FRAME
+                                        )
+                                            if (resamplingFilter == NEAREST_NEIGHBOR && !pmu) {
+                                                for ((toTrc, toTrcObj) in trcObjs.withIndex())
+                                                    if (pri == toPri && trc == toTrc || trcObj.hasCode && toTrcObj.hasCode)
                                                         for (toRes in resObjs.indices)
-                                                            link(ZIMG, true, toFmt, toPri, trc, pmu, toCon, toRes)
-                                                }
+                                                            link(ZIMG, true, toFmt, toPri, toTrc, false, con, toRes)
+                                            } else {
+                                                link(ZIMG, true, toFmt, toPri, trc, pmu, con, res)
+                                                if (!pmu)
+                                                    for ((toTrc, toTO) in trcObjs.withIndex())
+                                                        if (pri == toPri && trc == toTrc || trcObj.hasCode && toTO.hasCode)
+                                                            link(ZIMG, true, toFmt, toPri, toTrc, false, con, res)
+                                                if (resamplingFilter == NEAREST_NEIGHBOR || (!toFmtObj.px.hasAlpha || pmu) && trcObj == LINEAR)
+                                                    for (toRes in resObjs.indices)
+                                                        link(ZIMG, true, toFmt, toPri, trc, pmu, con, toRes)
+                                            }
                         }
 
                     // SKCMS stage
@@ -517,6 +521,12 @@ class BitmapConverter(
                                                 link(SKCMS, false, toFmt, toPri, toTrc, false, con, res)
                                             }
                         }
+
+                    // (De)interlace stage
+                    // This should happen as late as possible, because we want most processing to happen under the scan
+                    // interpretation of the source bitmap.
+                    if (con == 0 && conObjs.size == 2 && fmtObj.px.vChromaSub == 0)
+                        link(DE_INTERLACE, ali, fmt, pri, trc, pmu, 1, res)
 
                     // Add alpha channel stage
                     if (ali && gbrapfFmt != -1 && fmtObj.isGBRPF) {
@@ -786,6 +796,22 @@ class BitmapConverter(
             fun isNoOp(promiseOpaque: Boolean, srcSpec: Bitmap.Spec, dstSpec: Bitmap.Spec) =
                 promiseOpaque || srcSpec.representation.alpha == STRAIGHT && dstSpec.representation.alpha == OPAQUE
         }
+
+    }
+
+
+    /**
+     * This stage merges two interlaced fields into a progressive frame, or splits a frame into two fields.
+     * Currently, this is implemented as simple reinterpretation or a blit.
+     */
+    private object DeInterlaceStage : Stage {
+
+        override fun process(src: Bitmap, dst: Bitmap) {
+            if (!src.sharesStorageWith(dst))
+                dst.blit(src)
+        }
+
+        override fun close() {}
 
     }
 
@@ -1812,25 +1838,12 @@ class BitmapConverter(
 
             private fun setup() {
                 // Build the zimg filter graph(s).
-                val srcC = srcDesc.content
-                val dstC = dstDesc.content
-                if (srcC == Bitmap.Content.INTERLEAVED_FIELDS || dstC == Bitmap.Content.INTERLEAVED_FIELDS) {
-                    var srcTopPar = ZIMG_FIELD_TOP()
-                    var dstTopPar = ZIMG_FIELD_TOP()
-                    var srcBotPar = ZIMG_FIELD_BOTTOM()
-                    var dstBotPar = ZIMG_FIELD_BOTTOM()
-                    if (srcC == Bitmap.Content.PROGRESSIVE_FRAME) {
-                        srcTopPar = ZIMG_FIELD_PROGRESSIVE()
-                        srcBotPar = ZIMG_FIELD_PROGRESSIVE()
-                    }
-                    if (dstC == Bitmap.Content.PROGRESSIVE_FRAME) {
-                        dstTopPar = ZIMG_FIELD_PROGRESSIVE()
-                        dstBotPar = ZIMG_FIELD_PROGRESSIVE()
-                    }
-                    graphs += buildGraph(srcTopPar, dstTopPar, offset = 0, step = 2)
-                    graphs += buildGraph(srcBotPar, dstBotPar, offset = 1, step = 2)
+                val content = srcDesc.content
+                if (content == Bitmap.Content.INTERLEAVED_FIELDS) {
+                    graphs += buildGraph(ZIMG_FIELD_TOP(), offset = 0, step = 2)
+                    graphs += buildGraph(ZIMG_FIELD_BOTTOM(), offset = 1, step = 2)
                 } else
-                    graphs += buildGraph(zimgFieldParity(srcC), zimgFieldParity(dstC), offset = 0, step = 1)
+                    graphs += buildGraph(zimgFieldParity(content), offset = 0, step = 1)
 
                 // Populate the buffer structs.
                 srcSeg = zimg_image_buffer_const.allocate(arena)
@@ -1846,10 +1859,10 @@ class BitmapConverter(
                 tmpMem = arena.allocate(graphs.maxOf(::getTmpSize), Bitmap.BYTE_ALIGNMENT.toLong())
             }
 
-            private fun buildGraph(srcFieldParity: Int, dstFieldParity: Int, offset: Int, step: Int): Graph {
+            private fun buildGraph(fieldParity: Int, offset: Int, step: Int): Graph {
                 // Populate the format structs.
-                val srcFmt = populateImageFormat(srcDesc, srcFieldParity, offset, step)
-                val dstFmt = populateImageFormat(dstDesc, dstFieldParity, offset, step)
+                val srcFmt = populateImageFormat(srcDesc, fieldParity, offset, step)
+                val dstFmt = populateImageFormat(dstDesc, fieldParity, offset, step)
                 // Populate the params struct.
                 val params = zimg_graph_builder_params.allocate(arena)
                 zimg_graph_builder_params_default(params, ZIMG_API_VERSION())
