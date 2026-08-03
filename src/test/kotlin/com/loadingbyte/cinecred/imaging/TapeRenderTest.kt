@@ -2,7 +2,6 @@ package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.FPS
 import com.loadingbyte.cinecred.common.Resolution
-import com.loadingbyte.cinecred.imaging.Bitmap.Alpha.OPAQUE
 import com.loadingbyte.cinecred.imaging.Bitmap.Alpha.STRAIGHT
 import com.loadingbyte.cinecred.imaging.Bitmap.Content.INTERLEAVED_FIELDS
 import com.loadingbyte.cinecred.imaging.Bitmap.Content.PROGRESSIVE_FRAME
@@ -50,7 +49,7 @@ internal class TapeRenderTest {
                 check(!case.tapeAlpha)
                 val writerPixFmt = Bitmap.PixelFormat.of(AV_PIX_FMT_RGB24)
                 val writerSpec = Bitmap.Spec(
-                    case.fullTapeRes, Bitmap.Representation(writerPixFmt, SRGB, OPAQUE), case.tapeScan, case.tapeContent
+                    case.fullTapeRes, Bitmap.Representation(writerPixFmt, SRGB), case.tapeScan, case.tapeContent
                 )
                 VideoWriter(
                     tapePath, writerSpec, fps, "libx264rgb", AV_PROFILE_H264_HIGH_444, mapOf("crf" to "0"), emptyMap()

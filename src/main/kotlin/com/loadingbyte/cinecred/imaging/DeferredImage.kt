@@ -1617,7 +1617,7 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 stream.createRawOutputStream().use { it.write(jpeg) }
             } else {
                 val pxFmt = Bitmap.PixelFormat.of(if (cs == null) AV_PIX_FMT_GRAY8 else AV_PIX_FMT_RGB24)
-                val byteBmp = Bitmap.allocate(Bitmap.Spec(res, Bitmap.Representation(pxFmt, cs, Bitmap.Alpha.OPAQUE)))
+                val byteBmp = Bitmap.allocate(Bitmap.Spec(res, Bitmap.Representation(pxFmt, cs)))
                 BitmapConverter.convert(bitmap, byteBmp)
                 stream.setItem(COSName.FILTER, COSName.FLATE_DECODE)
                 if (cs != null) {

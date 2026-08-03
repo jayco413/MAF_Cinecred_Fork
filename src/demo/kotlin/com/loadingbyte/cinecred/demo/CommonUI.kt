@@ -105,9 +105,7 @@ inline fun forEachVisiblePopupOf(window: Window, action: (Window) -> Unit) {
 }
 
 
-val BGR24_REPRESENTATION = Bitmap.Representation(
-    Bitmap.PixelFormat.of(AV_PIX_FMT_BGR24), ColorSpace.SRGB, Bitmap.Alpha.OPAQUE
-)
+val BGR24_REPRESENTATION = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_BGR24), ColorSpace.SRGB)
 
 
 val dockedTrees get() = PresetWindowLayout.PRESET_DOCKED.trees(gCfg.usableBounds)

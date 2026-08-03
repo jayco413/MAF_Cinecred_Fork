@@ -91,7 +91,7 @@ class VideoDeliverer(
             backendSpec = userSpec.copy(representation = backendRep)
             if (userRepresentation.pixelFormat.family != Bitmap.PixelFormat.Family.GRAY) {
                 val rgbRep = Bitmap.Representation(
-                    Bitmap.PixelFormat.of(AV_PIX_FMT_GBRPF32), userRepresentation.colorSpace, Bitmap.Alpha.OPAQUE
+                    Bitmap.PixelFormat.of(AV_PIX_FMT_GBRPF32), userRepresentation.colorSpace
                 )
                 blackUserBitmap = Bitmap.allocate(userSpec)
                 Bitmap.allocate(userSpec.copy(representation = rgbRep)).zero()

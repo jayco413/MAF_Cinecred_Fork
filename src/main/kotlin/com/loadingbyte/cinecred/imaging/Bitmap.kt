@@ -695,6 +695,9 @@ class Bitmap private constructor(
         constructor(pixelFormat: PixelFormat) :
                 this(pixelFormat, Range.FULL, colorSpace = null, Alpha.OPAQUE)
 
+        constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace) :
+                this(pixelFormat, Range.FULL, colorSpace, Alpha.OPAQUE)
+
         constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace?, alpha: Alpha) :
                 this(pixelFormat, Range.FULL, colorSpace, alpha)
 
