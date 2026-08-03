@@ -267,9 +267,9 @@ fun getLog(): String =
 
 private object UncaughtHandler : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(t: Thread, e: Throwable) {
+        LOGGER.error("Uncaught exception. Will terminate the program.", e)
         if (hasCrashed.getAndSet(true))
             return
-        LOGGER.error("Uncaught exception. Will terminate the program.", e)
         val report = Report()
         SwingUtilities.invokeLater {
             report.showCrashDialog()

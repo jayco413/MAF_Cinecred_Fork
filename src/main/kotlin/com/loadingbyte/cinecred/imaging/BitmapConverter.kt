@@ -436,10 +436,9 @@ class BitmapConverter(
                             link(BLIT, false, toFmt, pri, trc, pmu, con, res)
                         }
 
-                    // Planar float stage & limited X2RGB10BE stage & SWS stage
+                    // Planar float stage
                     // Note: We first give our planar float stage a chance, because converting to PF is preferred over
                     // letting SWS convert to the zimg-equivalent non-float pixel format and then passing that to zimg.
-                    // In addition, SWS is useful to directly convert between interleaved pixel formats.
                     for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                         val toFmtObj = fmtObjs[toFmt]
                         if (fmtObj.hasSameCompositionAs(toFmtObj) && (
@@ -451,6 +450,8 @@ class BitmapConverter(
                             link(PLANAR_FLOAT, false, toFmt, pri, trc, pmu, con, res)
                         }
                     }
+
+                    // Limited X2RGB10BE stage
                     if (fmtObj.isRGBF || fmtObj.isRGBAF)
                         for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                             val toFmtObj = fmtObjs[toFmt]
@@ -459,6 +460,9 @@ class BitmapConverter(
                                 link(LIMITED_X2RGB10BE, false, toFmt, pri, trc, pmu, con, res)
                             }
                         }
+
+                    // SWS stage
+                    // Note: SWS is useful to directly convert between interleaved pixel formats.
                     for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                         val toFmtObj = fmtObjs[toFmt]
                         if (fmtObj.hasSameCompositionAs(toFmtObj) && (
@@ -956,8 +960,7 @@ class BitmapConverter(
         companion object {
 
             private val JAVA_INT_FLIPPED_BO = JAVA_INT.withOrder(
-                if (ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN) ByteOrder.BIG_ENDIAN
-                else ByteOrder.LITTLE_ENDIAN
+                if (NBO == ByteOrder.LITTLE_ENDIAN) ByteOrder.BIG_ENDIAN else ByteOrder.LITTLE_ENDIAN
             )
 
             fun supports(pixelFormat: Bitmap.PixelFormat) = skcmsPixelFormat(pixelFormat) != -1

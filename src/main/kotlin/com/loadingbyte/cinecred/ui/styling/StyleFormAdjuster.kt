@@ -121,8 +121,8 @@ class StyleFormAdjuster(
         styling: Styling, curForm: StyleForm<S>, curStyle: S, curStyleIdx: Int = 0, siblingStyles: List<S> = emptyList()
     ) {
         // Support for the leaking override.
-        @Suppress("NAME_SHADOWING") var curStyleIdx = curStyleIdx
-        @Suppress("NAME_SHADOWING") var siblingStyles = siblingStyles
+        var curStyleIdx = curStyleIdx
+        var siblingStyles = siblingStyles
         if (styleIdxAndSiblingsOverride != null) {
             val pair = styleIdxAndSiblingsOverride.getStyleIdxAndSiblings(curStyle)
             curStyleIdx = pair.first

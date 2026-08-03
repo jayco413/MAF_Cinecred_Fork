@@ -48,7 +48,7 @@ private val PAGE_STYLE_CONSTRAINTS: List<StyleConstraint<PageStyle, *>> = listOf
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), PageStyle::name.st()) { styling, style ->
         styling.pageStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
-    IntConstr(ERROR, PageStyle::cardRuntimeFrames.st(), min = 0),
+    IntConstr(ERROR, PageStyle::cardRuntimeFrames.st(), min = 1),
     IntConstr(ERROR, PageStyle::cardFadeInFrames.st(), min = 0),
     IntConstr(ERROR, PageStyle::cardFadeOutFrames.st(), min = 0),
     StyleNameConstr(

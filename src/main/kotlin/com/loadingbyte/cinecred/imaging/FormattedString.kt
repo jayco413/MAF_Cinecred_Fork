@@ -498,11 +498,6 @@ class FormattedString private constructor(
     }
 
 
-    companion object {
-        private fun DoubleArray.toFloatArray() = FloatArray(size) { idx -> this[idx].toFloat() }
-    }
-
-
     class Attribute(
         val font: Font,
         val design: Design

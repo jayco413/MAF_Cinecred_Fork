@@ -271,7 +271,11 @@ class Bitmap private constructor(
         val vecC = ceiling?.let { FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, it) }
         // Notice: We have verified through benchmarks that the JIT successfully lifts the switching over this variable
         // out of the hot loop. Performance matches that of manual lifting.
-        val action = if (ceiling == null) 0 else if (!pixelFormat.hasAlpha || promiseOpaque) 1 else 2
+        val action = when {
+            ceiling == null -> 0
+            promiseOpaque || spec.representation.alpha != Alpha.PREMULTIPLIED -> 1
+            else -> 2
+        }
         if (!pixelFormat.isPlanar) {
             val seg = memorySegment(0)
             val stepsPerLine = ceilDiv(w * pixelFormat.components.size, vecFloats)

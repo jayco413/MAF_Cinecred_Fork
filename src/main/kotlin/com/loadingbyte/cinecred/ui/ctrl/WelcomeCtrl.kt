@@ -435,7 +435,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         creditsFormat: SpreadsheetFormat
     ) {
         val projectDir = newBrowseSelection ?: return
-        val effSample = if (creditsLocation == CreditsLocation.SKIP) false else sample
+        val effSample = creditsLocation != CreditsLocation.SKIP && sample
         val template = Template(locale, resolution, fps, timecodeFormat, effSample)
         welcomeView.projects_createWait_setError(null)
         welcomeView.projects_setCard(ProjectsCard.CREATE_WAIT)
@@ -597,7 +597,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
             linesH = if (overlay is LinesOverlay) overlay.hLines else emptyList(),
             linesV = if (overlay is LinesOverlay) overlay.vLines else emptyList(),
             imageFile = Path(""),
-            imageUnderlay = if (overlay is ImageOverlay) overlay.underlay else false
+            imageUnderlay = overlay is ImageOverlay && overlay.underlay
         )
         welcomeView.preferences_setCard(PreferencesCard.CONFIGURE_OVERLAY)
     }

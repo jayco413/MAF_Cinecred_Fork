@@ -2,6 +2,7 @@ package com.loadingbyte.cinecred.drawer
 
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.*
+import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.YUV
 import com.loadingbyte.cinecred.imaging.DeferredImage.Coat
 import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.GUIDES
 import com.loadingbyte.cinecred.imaging.Y.Companion.plus
@@ -1048,7 +1049,7 @@ private fun reinterpretTape(style: TapeStyle): Tape? {
             return null
         }
     val yuvCoefficients =
-        if (rep.pixelFormat.family != Bitmap.PixelFormat.Family.YUV || style.yuvCoefficients.value == null) rep.yuvCoefficients else try {
+        if (rep.pixelFormat.family != YUV || style.yuvCoefficients.value == null) rep.yuvCoefficients else try {
             Bitmap.YUVCoefficients.of(style.yuvCoefficients.value)
         } catch (_: IllegalArgumentException) {
             return null

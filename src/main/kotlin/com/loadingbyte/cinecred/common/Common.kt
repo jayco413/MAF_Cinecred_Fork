@@ -139,7 +139,7 @@ fun floorDiv(a: Int, b: Int) = (a - ((b - 1) and (a shr 31))) / b
 /** Implements `ceil(a / b)`, but works only for non-negative denominators! */
 fun ceilDiv(a: Int, b: Int) = (a + ((b - 1) and (a.inv() shr 31))) / b
 /** Implements `ceil(a / b)`, but works only for non-negative denominators! */
-fun ceilDiv(a: Long, b: Long) = (a + ((b - 1L) and (a.inv() shr 31))) / b
+fun ceilDiv(a: Long, b: Long) = (a + ((b - 1L) and (a.inv() shr 63))) / b
 
 /** Implements `round(a / b)`, but works only for non-negative numbers! */
 fun roundingDiv(a: Int, b: Int): Int = (a + (b shr 1)) / b
@@ -213,14 +213,12 @@ fun File.toPathSafely(): Path? =
 
 
 fun Path.isAccessibleDirectory(thatContainsNonHiddenFiles: Boolean = false): Boolean =
-    if (!isDirectory())
-        false
-    else
-        try {
-            useDirectoryEntries { seq -> !thatContainsNonHiddenFiles || !seq.all(Path::isHidden) }
-        } catch (_: IOException) {
-            false
-        }
+    isDirectory() &&
+            try {
+                useDirectoryEntries { seq -> !thatContainsNonHiddenFiles || !seq.all(Path::isHidden) }
+            } catch (_: IOException) {
+                false
+            }
 
 fun Path.isHiddenSafely(): Boolean =
     try {

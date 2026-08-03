@@ -97,12 +97,12 @@ fun <E> Vector<E>.fmaFast(b: Vector<E>, c: Vector<E>): Vector<E> =
         lanewise(MUL, b).lanewise(ADD, c)
 
 private val VECTOR_FMA_SUPPORTED: Boolean =
-    if (!SystemInfo.isX86_64) true else
-        Arena.ofConfined().use { arena ->
-            val registers = arena.allocate(JAVA_INT, 4)
-            cpuid(1, 0, registers)
-            registers.getInt(8) and (1 shl 12) != 0
-        }
+    !SystemInfo.isX86_64 ||
+            Arena.ofConfined().use { arena ->
+                val registers = arena.allocate(JAVA_INT, 4)
+                cpuid(1, 0, registers)
+                registers.getInt(8) and (1 shl 12) != 0
+            }
 
 
 /**

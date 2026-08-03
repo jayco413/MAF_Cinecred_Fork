@@ -317,8 +317,8 @@ sealed interface Timecode : Comparable<Timecode> {
         }
 
         private fun validateComponents(seconds: Int, frames: Int) {
-            require(seconds >= 0) { "Components timecode must have non-negative number of frames." }
-            require(frames >= 0) { "Components timecode must have non-negative number of seconds." }
+            require(seconds >= 0) { "Components timecode must have non-negative number of seconds." }
+            require(frames >= 0) { "Components timecode must have non-negative number of frames." }
         }
 
     }

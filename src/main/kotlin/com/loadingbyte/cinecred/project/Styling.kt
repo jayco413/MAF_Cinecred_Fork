@@ -407,6 +407,11 @@ data class TapeStyle(
 ) : PopupStyle
 
 
+enum class Range { FULL, LIMITED }
+enum class Alpha { STRAIGHT, PREMULTIPLIED }
+enum class Scan { PROGRESSIVE, INTERLACED_TOP_FIELD_FIRST, INTERLACED_BOT_FIELD_FIRST }
+
+
 data class TapeRef(val name: String) {
 
     var tape: Tape? = null
@@ -433,15 +438,10 @@ class TapeSlice(
     override fun equals(other: Any?) =
         this === other || other is TapeSlice && inPoint == other.inPoint && outPoint == other.outPoint
 
-    override fun hashCode() = 31 * (inPoint?.hashCode() ?: 0) + (outPoint?.hashCode() ?: 0)
+    override fun hashCode() = 31 * inPoint.hashCode() + outPoint.hashCode()
     override fun toString() = "TapeSlice(inPoint=$inPoint, outPoint=$outPoint)"
 
 }
-
-
-enum class Range { FULL, LIMITED }
-enum class Alpha { STRAIGHT, PREMULTIPLIED }
-enum class Scan { PROGRESSIVE, INTERLACED_TOP_FIELD_FIRST, INTERLACED_BOT_FIELD_FIRST }
 
 
 data class Opt<out E : Any /* non-null */>(val isActive: Boolean, val value: E)

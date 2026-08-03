@@ -100,7 +100,6 @@ private fun postGetBaseline(ui: BasicTextFieldUI, c: JComponent, height: Int, su
     val rootView = ui.getRootView(c as JTextComponent)
     if (rootView.viewCount > 0) {
         val insets = c.insets
-        @Suppress("NAME_SHADOWING")
         val height = height - insets.top - insets.bottom
         if (height > 0) {
             val fieldView = rootView.getView(0)

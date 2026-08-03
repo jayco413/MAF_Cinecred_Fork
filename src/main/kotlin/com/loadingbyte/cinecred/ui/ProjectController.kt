@@ -209,6 +209,8 @@ class ProjectController(
         deliveryCtrl.setDeliveryDestTemplates(templates)
     }
 
+    private val populatedListeners = true
+
     init {
         WINDOW_LAYOUTS_PREFERENCE.addListener(windowLayoutsListener)
         OVERLAYS_PREFERENCE.addListener(overlaysListener)
@@ -510,15 +512,27 @@ class ProjectController(
         if (!toolbarCtrl.onTryCloseProject(force) || !deliveryCtrl.onTryCloseProject(force))
             return false
 
-        playbackCtrl.closeProject()
+        try {
+            playbackCtrl.closeProject()
+        } catch (e: Exception) {
+            LOGGER.error("Failed to close playback controller.", e)
+        }
+
         // The listeners might still be null if this method is called during initialization.
-        windowLayoutsListener?.let(WINDOW_LAYOUTS_PREFERENCE::removeListener)
-        overlaysListener?.let(OVERLAYS_PREFERENCE::removeListener)
-        deliveryDestTemplatesListener?.let(DELIVERY_DEST_TEMPLATES_PREFERENCE::removeListener)
+        if (populatedListeners) {
+            WINDOW_LAYOUTS_PREFERENCE.removeListener(windowLayoutsListener)
+            OVERLAYS_PREFERENCE.removeListener(overlaysListener)
+            DELIVERY_DEST_TEMPLATES_PREFERENCE.removeListener(deliveryDestTemplatesListener)
+        }
 
         onClose()
         projectFrame.dispose()
-        projectIntake.close()
+
+        try {
+            projectIntake.close()
+        } catch (e: Exception) {
+            LOGGER.error("Failed to close project intake.", e)
+        }
 
         return true
     }

@@ -63,7 +63,7 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VID
             matrix.add(listOf("", "Iris Imaginer", "") + firstDataRow.subList(3, firstDataRow.size))
             repeat(100) { matrix.add(emptyList()) }
             matrix.add(listOf("", "", "", "0"))
-            val look = SpreadsheetLook(0,emptyMap(), emptyList(), emptyList())
+            val look = SpreadsheetLook(0, emptyMap(), emptyList(), emptyList())
             XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), look)
 
             val logosDir = projectDir.resolve("Logos")

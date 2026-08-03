@@ -440,7 +440,13 @@ class ICCProfile private constructor(
             tags += listOf("bXYZ") to constructXYZTag(m[2], m[5], m[8])
 
             // Prepare the white point tag (must be D50).
-            tags += listOf("wtpt") to constructXYZTag(0.9642f, 1f, 0.8249f)
+            val wpTag = ByteBuffer.allocate(20)
+            wpTag.put("XYZ ".toByteArray())
+            wpTag.putInt(0)  // reserved
+            wpTag.putInt(0x0000F6D6)
+            wpTag.putInt(0x00010000)
+            wpTag.putInt(0x0000D32D)
+            tags += listOf("wtpt") to wpTag.array()
 
             // Prepare the transfer tags.
             if (colorSpace.transfer.hasCurve) {
@@ -495,9 +501,9 @@ class ICCProfile private constructor(
             profile.put(36, "acsp".toByteArray())  // file signature
             profile.putInt(64, 1)  // relative colorimetric rendering intent
             // D50 illuminant
-            profile.putInt(68, floatToFixed(0.9642f))
-            profile.putInt(72, floatToFixed(1f))
-            profile.putInt(76, floatToFixed(0.8249f))
+            profile.putInt(68, 0x0000F6D6)
+            profile.putInt(72, 0x00010000)
+            profile.putInt(76, 0x0000D32D)
             profile.putInt(128, tagCount)  // tag count
             profile.position(132)
 

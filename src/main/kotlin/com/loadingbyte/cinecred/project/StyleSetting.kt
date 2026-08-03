@@ -3,11 +3,12 @@ package com.loadingbyte.cinecred.project
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.toPersistentList
 import java.lang.reflect.ParameterizedType
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
 
 
-private val settingsCache = HashMap<Class<*>, List<StyleSetting<*, *>>>()
+private val settingsCache = ConcurrentHashMap<Class<*>, List<StyleSetting<*, *>>>()
 
 fun <S : Style> getStyleSettings(styleClass: Class<S>): List<StyleSetting<S, *>> {
     val cached = settingsCache[styleClass]

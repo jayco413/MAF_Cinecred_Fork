@@ -2274,7 +2274,7 @@ abstract class AbstractListWidget<E : Any, W : Form.Widget<E>>(
         for ((fromIdx, toIdx) in mapping.withIndex())
             if (toIdx != -1) {
                 val element = adjustElementOnReorder(oldList[fromIdx], mapping)
-                if (toIdx >= oldList.size || oldList[toIdx] != element)
+                if (toIdx >= oldList.size || oldList[toIdx] !== element)
                     setPartElement(toIdx, partWidgets[toIdx], element)
             }
     }

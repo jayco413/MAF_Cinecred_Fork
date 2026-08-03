@@ -557,7 +557,7 @@ class PlaybackCtrl : PlaybackCtrlComms {
     override fun toggleActualSize() = setActualSize(!actualSize)
 
     override fun setFullScreen(fullScreen: Boolean): Boolean =
-        if (visible) views.any { view -> view.setFullScreen(fullScreen) } else false
+        visible && views.any { view -> view.setFullScreen(fullScreen) }
 
     override fun toggleFullScreen() {
         if (visible) for (view in views) view.toggleFullScreen()

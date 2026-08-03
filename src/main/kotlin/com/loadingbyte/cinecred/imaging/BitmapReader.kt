@@ -124,7 +124,7 @@ object BitmapReader {
                 }
                 // Transpose from interleaved to planar, and/or premultiply alpha.
                 val bitmap = Bitmap.allocate(Bitmap.Spec(res, representation(planar, actuallyOpaque)))
-                BitmapConverter.convert(contiguous, bitmap, actuallyOpaque)
+                BitmapConverter.convert(contiguous, bitmap, promiseOpaque = actuallyOpaque)
                 return bitmap
             }
         }
@@ -292,7 +292,7 @@ object BitmapReader {
             }
             val gamma = mdRoot.getChild("gAMA")?.let { gammaNode ->
                 try {
-                    0.00001f / gammaNode.getAttribute("value").toInt()
+                    100000f / gammaNode.getAttribute("value").toInt()
                 } catch (_: NumberFormatException) {
                     null
                 }

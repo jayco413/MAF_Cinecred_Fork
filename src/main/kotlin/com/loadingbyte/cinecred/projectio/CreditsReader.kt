@@ -86,7 +86,7 @@ private class CreditsReader(
         { name, tape ->
             val tcFmt = if (tape.fileSeq) TimecodeFormat.FRAMES else try {
                 tape.fps?.let { TimecodeFormat.SMPTE_NON_DROP_FRAME }
-            } catch (_: IllegalArgumentException) {
+            } catch (_: IllegalStateException) {
                 null
             } ?: TimecodeFormat.EXACT_FRAMES_IN_SECOND
             PRESET_TAPE_STYLE.copy(name = name, tape = TapeRef(tape), slice = TapeSlice(tcFmt, null, null))
