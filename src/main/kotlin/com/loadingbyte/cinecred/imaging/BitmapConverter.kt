@@ -367,7 +367,7 @@ class BitmapConverter(
         fun run(): Pair<MutableList<StageType>, MutableList<Bitmap.Spec>> {
             if (srcState == dstState)
                 return Pair(mutableListOf(BLIT), mutableListOf(srcSpec, dstSpec))
-            table = IntArray(2 /*ali*/ * 8 /*fmt*/ * 2 /*pri*/ * 4 /*trc*/ * 2 /*pmu*/ * 2 /*con*/ * 2 /*res*/)
+            table = IntArray(2 /*ali*/ * 8 /*fmt*/ * 2 /*pri*/ * 4 /*trc*/ * 2 /*pmu*/ * 2 /*con*/ * 2 /*res*/) { -1 }
             if (!fillTable())
                 throw IllegalArgumentException("Cannot find conversion pipeline between $srcSpec and $dstSpec.")
             return backtrackThroughTable()
@@ -381,7 +381,7 @@ class BitmapConverter(
             val fromStates = IntList(table.size /* large enough */)
             val newStates = IntList(fromStates.capacity)
 
-            table[srcState] = -1
+            table[srcState] = -2
             fromStates += srcState
 
             for (i in 0..<16 /* infinite loop protection */) {
@@ -409,7 +409,7 @@ class BitmapConverter(
                     ) {
                         val toState = state(ali, fmt, pri, trc, pmu, con, res)
                         // Skip the link if toState has already been populated.
-                        if (table[toState] == 0) {
+                        if (table[toState] == -1) {
                             table[toState] = (type.ordinal shl 10) or state
                             newStates += toState
                         }
@@ -541,7 +541,7 @@ class BitmapConverter(
 
                 fromStates.clearThenDrainFrom(newStates)
 
-                if (table[dstState] != 0)
+                if (table[dstState] != -1)
                     return true
             }
 
