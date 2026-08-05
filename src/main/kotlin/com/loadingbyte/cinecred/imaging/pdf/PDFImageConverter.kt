@@ -5,6 +5,7 @@ import com.loadingbyte.cinecred.common.ceilDiv
 import com.loadingbyte.cinecred.imaging.Bitmap
 import com.loadingbyte.cinecred.imaging.BitmapConverter
 import com.loadingbyte.cinecred.imaging.ColorSpace
+import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.LINEAR
 import org.apache.pdfbox.cos.COSArray
 import org.apache.pdfbox.cos.COSName
 import org.apache.pdfbox.cos.COSNumber
@@ -20,7 +21,7 @@ import kotlin.math.min
 /** Each pixel in the returned gray bitmap is either 0 or 65535 (= -1 in Java's signed representation). */
 fun convert1BitPDFImageToShortMask(pdImage: PDImage): Bitmap? {
     val px = readRawShortPixelsFrom1BitImage(pdImage) ?: return null
-    val rep = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAY16LE))
+    val rep = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAY16LE), ColorSpace.of(LINEAR))
     val bitmap = Bitmap.allocate(Bitmap.Spec(Resolution(pdImage.width, pdImage.height), rep))
     bitmap.put(px, pdImage.width)
     return bitmap
@@ -206,7 +207,7 @@ private fun processMask(pdImage: PDImageXObject, rawPx: FloatArray, devCS: Devic
 }
 
 private fun rescaleGrayF32(image: FloatArray, oldW: Int, oldH: Int, newW: Int, newH: Int, nn: Boolean): FloatArray {
-    val rep = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAYF32))
+    val rep = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAYF32), ColorSpace.of(LINEAR))
     Bitmap.allocate(Bitmap.Spec(Resolution(oldW, oldH), rep)).use { oldBitmap ->
         Bitmap.allocate(Bitmap.Spec(Resolution(newW, newH), rep)).use { newBitmap ->
             oldBitmap.put(image, oldW)

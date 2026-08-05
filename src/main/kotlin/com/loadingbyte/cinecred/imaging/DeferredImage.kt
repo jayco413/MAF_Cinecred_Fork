@@ -1594,7 +1594,10 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
             // ... and a grayscale alpha image. We can use alphaPlaneView() because the bitmap is planar.
             if (bitmap.spec.representation.alpha != Bitmap.Alpha.OPAQUE) {
                 val pdAlphaImage = PDImageXObject(doc)
-                bitmap.alphaPlaneView().use { populateImageXObject(pdAlphaImage, it, null, PDDeviceGray.INSTANCE) }
+                bitmap.alphaPlaneView().use { alphaBitmap ->
+                    val cs = alphaBitmap.spec.representation.colorSpace
+                    populateImageXObject(pdAlphaImage, alphaBitmap, cs, PDDeviceGray.INSTANCE)
+                }
                 pdImage.cosObject.setItem(COSName.SMASK, pdAlphaImage)
             }
             // If we have allocated an intermediate bitmap, free it again.
@@ -1602,8 +1605,9 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 bitmap.close()
         }
 
-        private fun populateImageXObject(pdImage: PDImageXObject, bitmap: Bitmap, cs: ColorSpace?, pdCS: PDColorSpace) {
+        private fun populateImageXObject(pdImage: PDImageXObject, bitmap: Bitmap, cs: ColorSpace, pdCS: PDColorSpace) {
             val (res, rep) = bitmap.spec
+            val isGray = rep.pixelFormat.family == Bitmap.PixelFormat.Family.GRAY
             pdImage.apply {
                 bitsPerComponent = 8
                 width = res.widthPx
@@ -1616,11 +1620,11 @@ class DeferredImage(var width: Double = 0.0, var height: Y = 0.0.toY()) {
                 stream.setItem(COSName.FILTER, COSName.DCT_DECODE)
                 stream.createRawOutputStream().use { it.write(jpeg) }
             } else {
-                val pxFmt = Bitmap.PixelFormat.of(if (cs == null) AV_PIX_FMT_GRAY8 else AV_PIX_FMT_RGB24)
+                val pxFmt = Bitmap.PixelFormat.of(if (isGray) AV_PIX_FMT_GRAY8 else AV_PIX_FMT_RGB24)
                 val byteBmp = Bitmap.allocate(Bitmap.Spec(res, Bitmap.Representation(pxFmt, cs)))
                 BitmapConverter.convert(bitmap, byteBmp)
                 stream.setItem(COSName.FILTER, COSName.FLATE_DECODE)
-                if (cs != null) {
+                if (!isGray) {
                     stream.setItem(COSName.DECODE_PARMS, COSDictionary().apply {
                         setItem(COSName.PREDICTOR, COSInteger.get(15L))
                         setItem(COSName.COLORS, COSInteger.get(3L))

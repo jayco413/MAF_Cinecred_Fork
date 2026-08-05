@@ -650,7 +650,7 @@ class PDFDrawer(
                 if (pdCS is PDDeviceRGB) {
                     val inPx = tgBitmap.getF(iw * 4)
                     val b = backdropColor!!.clone()
-                    ColorSpace.XYZD50.convert(tgBitmap.spec.representation.colorSpace!!, b, alpha = true, clamp = true)
+                    ColorSpace.XYZD50.convert(tgBitmap.spec.representation.colorSpace, b, alpha = true, clamp = true)
                     borderAlpha = softMaskAlpha(deviceRGBLuminosity(b, 0), transfer)
                     moveSoftMask(iw, ih) { i, o -> outPx[o] = softMaskAlpha(deviceRGBLuminosity(inPx, i), transfer) }
                 } else {
@@ -669,7 +669,9 @@ class PDFDrawer(
         if (borderAlpha != 0.toShort())
             fillBorder(outPx, ow, oh, borderAlpha)
 
-        val maskRepresentation = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAY16LE))
+        val maskRepresentation = Bitmap.Representation(
+            Bitmap.PixelFormat.of(AV_PIX_FMT_GRAY16LE), ColorSpace.of(ColorSpace.Transfer.LINEAR)
+        )
         val maskBitmap = Bitmap.allocate(Bitmap.Spec(Resolution(ow, oh), maskRepresentation))
         maskBitmap.put(outPx, ow, byteOrder = ByteOrder.LITTLE_ENDIAN)
         val offset = AffineTransform.getTranslateInstance((tgBounds.x - 1).toDouble(), (tgBounds.y - 1).toDouble())

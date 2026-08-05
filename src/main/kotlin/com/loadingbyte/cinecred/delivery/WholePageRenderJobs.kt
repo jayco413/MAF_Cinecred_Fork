@@ -72,15 +72,15 @@ class WholePageSequenceRenderJob private constructor(
         val matte = config[TRANSPARENCY] == MATTE
         val family = if (matte) GRAY else RGB
         val spatialScaling = 2.0.pow(config[SPATIAL_SCALING_LOG2])
-        val colorSpace = if (matte) null else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
-        val ceiling = if (config.getOrDefault(HDR) || colorSpace?.transfer?.isHDR == true) null else 1f
+        val colorSpace = if (matte) ColorSpace.of(LINEAR) else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
+        val ceiling = if (config.getOrDefault(HDR) || colorSpace.transfer.isHDR) null else 1f
         val global = styling.global
 
         val bitmapWriter = when (format) {
             PNG -> BitmapWriter.PNG(family, embedAlpha, colorSpace, config[DEPTH])
             TIFF -> BitmapWriter.TIFF(family, embedAlpha, colorSpace, config[DEPTH], config[TIFF_COMPRESSION])
             DPX -> BitmapWriter.DPX(family, embedAlpha, colorSpace, config[DEPTH], config[DPX_COMPRESSION])
-            EXR -> BitmapWriter.EXR(family, embedAlpha, colorSpace?.primaries, config[DEPTH], config[EXR_COMPRESSION])
+            EXR -> BitmapWriter.EXR(family, embedAlpha, colorSpace.primaries, config[DEPTH], config[EXR_COMPRESSION])
             else -> null
         }
 
@@ -95,7 +95,7 @@ class WholePageSequenceRenderJob private constructor(
             when (format) {
                 PNG, TIFF, DPX, EXR -> {
                     val res = Resolution(pageWidth, pageHeight)
-                    val rep = Canvas.compatibleRepresentation(ColorSpace.of(colorSpace?.primaries ?: BT709, BLENDING))
+                    val rep = Canvas.compatibleRepresentation(ColorSpace.of(colorSpace.primaries ?: BT709, BLENDING))
                     Bitmap.allocate(Bitmap.Spec(res, rep)).use { bitmap ->
                         Canvas.forBitmap(bitmap, ceiling).use { canvas ->
                             if (ground) canvas.fill(Canvas.Shader.Solid(global.grounding)) else bitmap.zero()
@@ -107,7 +107,9 @@ class WholePageSequenceRenderJob private constructor(
                         if (!matte)
                             bitmapWriter!!.convertAndWrite(bitmap, pageFile, promiseOpaque = !embedAlpha)
                         else {
-                            val matteRep = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAYF32))
+                            val matteRep = Bitmap.Representation(
+                                Bitmap.PixelFormat.of(AV_PIX_FMT_GRAYF32), ColorSpace.of(LINEAR)
+                            )
                             Bitmap.allocate(Bitmap.Spec(res, matteRep)).use { matteBitmap ->
                                 matteBitmap.blitComponent(bitmap, 3, 0)
                                 bitmapWriter!!.convertAndWrite(matteBitmap, pageFile, promiseOpaque = true)

@@ -2,6 +2,7 @@ package com.loadingbyte.cinecred.drawer
 
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.*
+import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.GRAY
 import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.YUV
 import com.loadingbyte.cinecred.imaging.DeferredImage.Coat
 import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.GUIDES
@@ -1037,13 +1038,13 @@ private fun reinterpretTape(style: TapeStyle): Tape? {
             Range.LIMITED -> Bitmap.Range.LIMITED
         }
     val primaries =
-        if (style.primaries.value == null) rep.colorSpace!!.primaries else try {
+        if (rep.pixelFormat.family == GRAY || style.primaries.value == null) rep.colorSpace.primaries else try {
             ColorSpace.Primaries.of(style.primaries.value)
         } catch (_: IllegalArgumentException) {
             return null
         }
     val transfer =
-        if (style.transfer.value == null) rep.colorSpace!!.transfer else try {
+        if (style.transfer.value == null) rep.colorSpace.transfer else try {
             ColorSpace.Transfer.of(style.transfer.value)
         } catch (_: IllegalArgumentException) {
             return null

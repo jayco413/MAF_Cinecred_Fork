@@ -31,7 +31,6 @@ import javax.imageio.stream.MemoryCacheImageOutputStream
 import kotlin.io.path.outputStream
 import kotlin.math.min
 import kotlin.math.roundToInt
-import java.awt.color.ColorSpace as AWTColorSpace
 
 
 /** Note: Once constructed, a bitmap writer has no varying state and is thus fully thread-safe. */
@@ -76,7 +75,7 @@ interface BitmapWriter {
         private val formatName: String,
         family: Bitmap.PixelFormat.Family,
         alpha: Bitmap.Alpha,
-        colorSpace: ColorSpace?,
+        colorSpace: ColorSpace,
         private val depth: Int
     ) : BitmapWriter {
 
@@ -85,7 +84,7 @@ interface BitmapWriter {
         private val isAlphaPremultiplied = alpha == Bitmap.Alpha.PREMULTIPLIED
 
         final override val representation: Bitmap.Representation
-        protected val iccBytes: ByteArray?
+        protected val iccBytes: ByteArray
         private val awtCM: ColorModel
 
         init {
@@ -104,18 +103,9 @@ interface BitmapWriter {
             }
             representation = Bitmap.Representation(Bitmap.PixelFormat.of(pixFmtCode), colorSpace, alpha)
 
-            val awtCS: AWTColorSpace
-            if (isRGB) {
-                requireNotNull(colorSpace) { "A color space must be supplied when writing color bitmaps." }
-                val iccProfile = ICCProfile.of(colorSpace)
-                iccBytes = iccProfile.bytes
-                awtCS = ICC_ColorSpace(iccProfile.awtProfile)
-            } else {
-                // Due to the way Skia implements it, we can't generate gray ICC profiles as of now. That's not a
-                // problem however as our gray Bitmaps aren't allowed to have a ColorSpace anyway.
-                iccBytes = null
-                awtCS = AWTColorSpace.getInstance(AWTColorSpace.CS_GRAY)
-            }
+            val iccProfile = ICCProfile.of(colorSpace)
+            iccBytes = iccProfile.bytes
+            val awtCS = ICC_ColorSpace(iccProfile.awtProfile)
             awtCM = ComponentColorModel(
                 awtCS, hasAlpha, isAlphaPremultiplied,
                 if (hasAlpha) Transparency.TRANSLUCENT else Transparency.OPAQUE,
@@ -176,14 +166,14 @@ interface BitmapWriter {
 
     class JPEG(
         family: Bitmap.PixelFormat.Family,
-        colorSpace: ColorSpace?
+        colorSpace: ColorSpace
     ) : ImageIOBased("jpeg", family, Bitmap.Alpha.OPAQUE, colorSpace, depth = 8)
 
 
     class PNG(
         family: Bitmap.PixelFormat.Family,
         hasAlpha: Boolean,
-        colorSpace: ColorSpace?,
+        colorSpace: ColorSpace,
         depth: Int = 8
     ) : ImageIOBased(
         "png", family,
@@ -194,6 +184,8 @@ interface BitmapWriter {
         private val mdRoot: IIOMetadataNode
 
         init {
+            val primaries = colorSpace.primaries
+            val transfer = colorSpace.transfer
             val mdFormatName = ImageIO.getImageWritersByFormatName("png").next()
                 .getDefaultImageMetadata(
                     ImageTypeSpecifier.createFromBufferedImageType(BufferedImage.TYPE_INT_RGB),
@@ -220,16 +212,16 @@ interface BitmapWriter {
                 mdRoot.appendChild(IIOMetadataNode("gAMA").apply {
                     setAttribute("value", "45455")
                 })
-            } else if (colorSpace != null) {
+            } else {
                 mdRoot.appendChild(IIOMetadataNode("iCCP").apply {
                     setAttribute("profileName", "ICC Profile")
                     setAttribute("compressionMethod", "deflate")
                     val baos = ByteArrayOutputStream()
-                    DeflaterOutputStream(baos).use { it.write(iccBytes!!) }
+                    DeflaterOutputStream(baos).use { it.write(iccBytes) }
                     userObject = baos.toByteArray()
                 })
                 // Also populate the chroma and gamma chunks as a fallback.
-                colorSpace.primaries.chromaticities?.let { c ->
+                primaries?.chromaticities?.let { c ->
                     mdRoot.appendChild(IIOMetadataNode("cHRM").apply {
                         setAttribute("redX", (c.rx * 100000f).roundToInt().toString())
                         setAttribute("redY", (c.ry * 100000f).roundToInt().toString())
@@ -241,22 +233,19 @@ interface BitmapWriter {
                         setAttribute("whitePointY", (c.wy * 100000f).roundToInt().toString())
                     })
                 }
-                if (colorSpace.transfer.hasCurve)
+                if (transfer.hasCurve)
                     mdRoot.appendChild(IIOMetadataNode("gAMA").apply {
-                        setAttribute("value", (colorSpace.transfer.fromLinear.g * 100000f).roundToInt().toString())
+                        setAttribute("value", (transfer.fromLinear.g * 100000f).roundToInt().toString())
                     })
-            } else
-                mdRoot.appendChild(IIOMetadataNode("gAMA").apply {
-                    setAttribute("value", "100000")
-                })
-            if (colorSpace != null && colorSpace.primaries.hasCode && colorSpace.transfer.hasCode)
+            }
+            if (primaries?.hasCode == true || transfer.hasCode)
                 mdRoot.appendChild(IIOMetadataNode("UnknownChunks")).appendChild(IIOMetadataNode("UnknownChunk").apply {
                     setAttribute("type", "cICP")
                     userObject = byteArrayOf(
-                        colorSpace.primaries.code.toByte(),
-                        colorSpace.transfer.code(colorSpace.primaries, depth).toByte(),
+                        (if (primaries?.hasCode == true) primaries.code else AVCOL_PRI_UNSPECIFIED).toByte(),
+                        (if (transfer.hasCode) transfer.code(primaries, depth) else AVCOL_TRC_UNSPECIFIED).toByte(),
                         AVCOL_SPC_RGB.toByte(),
-                        1
+                        1  // full range
                     )
                 })
         }
@@ -272,7 +261,7 @@ interface BitmapWriter {
     class TIFF(
         family: Bitmap.PixelFormat.Family,
         hasAlpha: Boolean,
-        colorSpace: ColorSpace?,
+        colorSpace: ColorSpace,
         depth: Int = 8,
         private val compression: Compression
     ) : ImageIOBased(
@@ -301,7 +290,7 @@ interface BitmapWriter {
     class DPX(
         family: Bitmap.PixelFormat.Family,
         private val hasAlpha: Boolean,
-        private val colorSpace: ColorSpace?,
+        private val colorSpace: ColorSpace,
         private val depth: Int,
         private val compression: Compression
     ) : BitmapWriter {
@@ -315,10 +304,8 @@ interface BitmapWriter {
             when (family) {
                 Bitmap.PixelFormat.Family.GRAY ->
                     require(!hasAlpha) { "Gray with additional alpha is not supported in DPX." }
-                Bitmap.PixelFormat.Family.RGB -> {
-                    requireNotNull(colorSpace) { "A color space must be supplied when writing color bitmaps." }
+                Bitmap.PixelFormat.Family.RGB ->
                     if (depth == 10) require(!hasAlpha) { "10-bit color with alpha is not supported in DPX." }
-                }
                 Bitmap.PixelFormat.Family.YUV ->
                     throw IllegalArgumentException("YUV is not supported in DPX.")
             }
@@ -546,13 +533,13 @@ interface BitmapWriter {
 
         private fun writeHeader(w: Int, h: Int, dataBytes: Int, os: OutputStream) {
             val trc: Byte =
-                if (isGray) 2 else when (colorSpace!!.transfer) {
+                when (colorSpace.transfer) {
                     ColorSpace.Transfer.LINEAR -> 2
                     ColorSpace.Transfer.BT1886 -> 6
                     ColorSpace.Transfer.of(AVCOL_TRC_SMPTE170M) -> 7
                     else -> 0
                 }
-            val pri: Byte = if (isGray || !colorSpace!!.primaries.hasCode) 0 else when (colorSpace.primaries.code) {
+            val pri: Byte = if (colorSpace.primaries?.hasCode != true) 0 else when (colorSpace.primaries.code) {
                 AVCOL_PRI_BT709 -> 6
                 AVCOL_PRI_BT470BG -> 7
                 AVCOL_PRI_SMPTE170M, AVCOL_PRI_SMPTE240M -> 8
@@ -624,7 +611,7 @@ interface BitmapWriter {
             }
             val pixFmtCode =
                 if (isGray) AV_PIX_FMT_GRAYF32LE else if (hasAlpha) AV_PIX_FMT_GBRAPF32LE else AV_PIX_FMT_GBRPF32LE
-            val colorSpace = primaries?.let { ColorSpace.of(it, ColorSpace.Transfer.LINEAR) }
+            val colorSpace = ColorSpace.of(primaries, ColorSpace.Transfer.LINEAR)
             // According to the specification, EXR alpha is premultiplied by convention.
             val alpha = if (hasAlpha) Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
             representation = Bitmap.Representation(Bitmap.PixelFormat.of(pixFmtCode), colorSpace, alpha)

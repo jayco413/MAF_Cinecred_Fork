@@ -469,7 +469,7 @@ class Canvas private constructor(
         val (colorType, alphaType) = colorAndAlphaTypeFor(rep.pixelFormat, rep.alpha, promiseOpaque)
         SkCanvas_drawImage(
             canvasHandle, w, h, colorType, alphaType,
-            if (isAlphaRep(rep)) NULL else rep.colorSpace!!.skiaHandle,
+            if (isAlphaRep(rep)) NULL else rep.colorSpace.skiaHandle,
             bitmap.memorySegment(0),
             bitmap.linesize(0).toLong(),
             0f, 0f, filterMode, paint
@@ -513,7 +513,6 @@ class Canvas private constructor(
             val rep = bitmap.spec.representation
             require(rep.pixelFormat.code == AV_PIX_FMT_RGBAF32)
             require(rep.range == Bitmap.Range.FULL)
-            requireNotNull(rep.colorSpace)
             require(rep.alpha == Bitmap.Alpha.PREMULTIPLIED)
             val (w, h) = bitmap.spec.resolution
             val canvasHandle = SkCanvas_MakeRasterDirect(
@@ -536,6 +535,7 @@ class Canvas private constructor(
 
         fun forPDF(width: Double, height: Double, colorSpace: ColorSpace): Canvas {
             require(width > 0.0 && height > 0.0)
+            requireNotNull(colorSpace.primaries)
             val streamHandle = SkDynamicMemoryWStream_New()
             val docHandle = SkPDF_MakeDocument(streamHandle)
             val canvasHandle = SkDocument_beginPage(docHandle, width.toFloat(), height.toFloat())
@@ -750,7 +750,7 @@ class Canvas private constructor(
             val (colorType, alphaType) = colorAndAlphaTypeFor(rep.pixelFormat, rep.alpha, prepared.promiseOpaque)
             return SkImage_makeShader(
                 w, h, colorType, alphaType,
-                if (isAlphaRep(rep)) NULL else rep.colorSpace!!.skiaHandle,
+                if (isAlphaRep(rep)) NULL else rep.colorSpace.skiaHandle,
                 shaderBitmap.memorySegment(0),
                 shaderBitmap.linesize(0).toLong(),
                 tileMode.code, tileMode.code, filterMode, tr.m00, tr.m10, tr.m01, tr.m11, tr.m02, tr.m12
@@ -786,7 +786,7 @@ class Canvas private constructor(
             // convert to another color space. We'll convert the bitmap to this representation.
             val outRep = Bitmap.Representation(
                 compatiblePixelFormat,
-                if (isMask) null else canvasCS,
+                if (isMask) ColorSpace.of(ColorSpace.Transfer.LINEAR) else canvasCS!!,
                 if (compatiblePixelFormat.hasAlpha) Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
             )
 
@@ -1117,7 +1117,7 @@ class Canvas private constructor(
                     h.set(JAVA_INT, 0L, res.heightPx)
                     colorType.set(JAVA_BYTE, 0L, ct)
                     alphaType.set(JAVA_BYTE, 0L, at)
-                    colorSpace.set(ADDRESS, 0L, rep.colorSpace!!.skiaHandle)
+                    colorSpace.set(ADDRESS, 0L, rep.colorSpace.skiaHandle)
                     pixels.set(ADDRESS, 0L, bitmap.memorySegment(0))
                     rowBytes.set(JAVA_LONG, 0L, bitmap.linesize(0).toLong())
                     freeBitmaps[freeKey] = bitmap

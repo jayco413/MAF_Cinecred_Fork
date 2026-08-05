@@ -327,7 +327,7 @@ class DeferredVideo private constructor(
         )
         private val userPixelFormat get() = userSpec.representation.pixelFormat
         private val canvasRepresentation = Canvas.compatibleRepresentation(
-            ColorSpace.of(userSpec.representation.colorSpace!!.primaries, ColorSpace.Transfer.BLENDING)
+            ColorSpace.of(userSpec.representation.colorSpace.primaries, ColorSpace.Transfer.BLENDING)
         )
 
         private val workWidth = closestWorkResolution(userSpec.resolution.widthPx, userPixelFormat.hChromaSub)
@@ -444,7 +444,7 @@ class DeferredVideo private constructor(
                     var renderDraftSpec: Bitmap.Spec? = null
                     var renderCanvas2draft: BitmapConverter? = null
                     if (blendInUserColorSpace) {
-                        val rep = draftOverlayRepresentation(userSpec.representation.colorSpace!!, hasAlpha = true)
+                        val rep = draftOverlayRepresentation(userSpec.representation.colorSpace, hasAlpha = true)
                         renderDraftSpec = Bitmap.Spec(resolution, rep)
                         renderCanvas2draft = BitmapConverter(renderCanvasSpec, renderDraftSpec, approxTransfer = true)
                     }
@@ -755,7 +755,7 @@ class DeferredVideo private constructor(
                         } catch (_: Exception) {
                             source = Source.UNAVAILABLE
                             val rep = Picture.Raster.compatibleRepresentation(
-                                userSpec.representation.colorSpace!!, Bitmap.Alpha.OPAQUE
+                                userSpec.representation.colorSpace, Bitmap.Alpha.OPAQUE
                             )
                             origSpec = Bitmap.Spec(embeddedTape.resolution, rep)
                             readCrop = embeddedTape.resolution.run { Rectangle(widthPx, heightPx) }
@@ -876,7 +876,7 @@ class DeferredVideo private constructor(
                     val compositedOverlayRes = resp.embeddedTape.resolution
                     frameOverlayer = when (blendInUserColorSpace) {
                         true -> UserColorSpaceOverlayer(
-                            userRep.colorSpace!!, readSpec, compositedOverlayRes, filter
+                            userRep.colorSpace, readSpec, compositedOverlayRes, filter
                         )
                         else -> QualityOverlayer(
                             canvasRep, canvasCeiling, userRep, readSpec, compositedOverlayRes, filter, usePreview
@@ -1155,7 +1155,7 @@ class DeferredVideo private constructor(
                 val botField = overlaySpec.content == Bitmap.Content.ONLY_BOT_FIELD
                 val (w, h) = compositedOverlayRes
                 val renderRes = if (topField || botField) Resolution(w, h * 2) else compositedOverlayRes
-                var (cB, pB) = Overlayer.renderPreviewText(renderRes, canvasRep.colorSpace!!)
+                var (cB, pB) = Overlayer.renderPreviewText(renderRes, canvasRep.colorSpace)
                 if (topField || botField) {
                     cB = ripField(cB, topField)
                     pB = ripField(pB, topField)

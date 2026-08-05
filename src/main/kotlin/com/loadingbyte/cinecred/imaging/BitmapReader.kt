@@ -244,6 +244,7 @@ object BitmapReader {
     private fun readPNG(reader: ImageReader): Triple<BufferedImage, ICCProfile?, Orientation> {
         val iioImage = reader.readAll(0, null)
         val img = iioImage.renderedImage as BufferedImage
+        val isGray = img.colorModel.numColorComponents == 1
 
         // Find the embedded ICC profile, if any.
         val md = iioImage.metadata
@@ -256,7 +257,7 @@ object BitmapReader {
                     if (tags.size >= 2)
                         try {
                             // Note: We ignore the full range flag.
-                            val primaries = ColorSpace.Primaries.of(toUnsignedInt(tags[0]))
+                            val primaries = if (isGray) null else ColorSpace.Primaries.of(toUnsignedInt(tags[0]))
                             val transfer = ColorSpace.Transfer.of(toUnsignedInt(tags[1]))
                             return Triple(img, ICCProfile.of(ColorSpace.of(primaries, transfer)), Orientation.TOP_LEFT)
                         } catch (_: IllegalArgumentException) {
@@ -298,7 +299,7 @@ object BitmapReader {
                 }
             }
             if (chromaticities != null || gamma != null) {
-                val primaries = try {
+                val primaries = if (isGray) null else try {
                     chromaticities?.let(ColorSpace.Primaries::of)
                 } catch (_: IllegalArgumentException) {
                     null
@@ -308,7 +309,8 @@ object BitmapReader {
                 return Triple(img, ICCProfile.of(ColorSpace.of(primaries, transfer)), Orientation.TOP_LEFT)
             }
         }
-        return Triple(img, ICCProfile.of(ColorSpace.SRGB), Orientation.TOP_LEFT)
+        val colorSpace = if (isGray) ColorSpace.of(ColorSpace.Transfer.SRGB) else ColorSpace.SRGB
+        return Triple(img, ICCProfile.of(colorSpace), Orientation.TOP_LEFT)
     }
 
     private fun Node.getChild(name: String): IIOMetadataNode? {

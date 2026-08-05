@@ -9,6 +9,7 @@ data class Color4f(val r: Float, val g: Float, val b: Float, val a: Float, val c
 
     init {
         require(a in 0f..1f) { "Alpha must be between 0 and 1, so $a is out of bounds." }
+        requireNotNull(colorSpace.primaries) { "Color space must have primaries." }
     }
 
     constructor(r: Float, g: Float, b: Float, colorSpace: ColorSpace) : this(r, g, b, 1f, colorSpace)

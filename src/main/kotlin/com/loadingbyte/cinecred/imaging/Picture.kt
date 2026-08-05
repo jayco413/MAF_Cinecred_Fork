@@ -152,14 +152,16 @@ sealed interface Picture : AutoCloseable {
             fun compatibleRepresentation(colorSpace: ColorSpace, alpha: Alpha): Bitmap.Representation =
                 Bitmap.Representation(
                     Bitmap.PixelFormat.of(if (alpha == Alpha.OPAQUE) AV_PIX_FMT_GBRPF32 else AV_PIX_FMT_GBRAPF32),
-                    colorSpace, alpha
+                    // For grayscale, using a color space where white is (1,1,1) ensures that reinterpreting the
+                    // transfer characteristics doesn't introduce a color shift.
+                    colorSpace.withPrimariesIfAbsent(ColorSpace.Primaries.XYZE),
+                    alpha
                 )
 
             /** After this method returns, [bitmap] may be closed without affecting the new picture object. */
             fun convert(bitmap: Bitmap): Raster {
                 val (res, rep, scan) = bitmap.spec
-                val cs = requireNotNull(rep.colorSpace) { "Cannot create picture from a bitmap without a color space." }
-                val requiredRep = compatibleRepresentation(cs, rep.alpha)
+                val requiredRep = compatibleRepresentation(rep.colorSpace, rep.alpha)
                 val newBitmap = when {
                     rep != requiredRep ->
                         Bitmap.allocate(Bitmap.Spec(res, requiredRep)).also { BitmapConverter.convert(bitmap, it) }

@@ -261,7 +261,7 @@ class Tape private constructor(
                 else ->
                     Resolution(roundingDiv(maxDim * tapeW, tapeH).coerceAtLeast(1), maxDim)
             }
-            val pictureRep = Picture.Raster.compatibleRepresentation(tapeRep.colorSpace!!, tapeRep.alpha)
+            val pictureRep = Picture.Raster.compatibleRepresentation(tapeRep.colorSpace, tapeRep.alpha)
             pictureSpec = Bitmap.Spec(previewRes, pictureRep)
             // Guess whether the tape is probably HDR. If yes, use bilinear resampling, because other filters have
             // negative lobes that cause severe ringing near very bright edges.
@@ -559,7 +559,9 @@ class Tape private constructor(
 
         fun ofPreview(picture: Picture.Raster): Picture.Raster {
             val (res, rep) = picture.bitmap.spec
-            val newRep = Bitmap.Representation(rep.pixelFormat, rep.range, colorSpace, alpha)
+            // For grayscale tapes, we need to fix the preview color space because raster pictures are always RGB.
+            val picCS = colorSpace.withPrimariesIfAbsent(picture.bitmap.spec.representation.colorSpace.primaries!!)
+            val newRep = Bitmap.Representation(rep.pixelFormat, rep.range, picCS, alpha)
             return Picture.Raster(picture.bitmap.reinterpretedView(Bitmap.Spec(res, newRep)))
         }
 

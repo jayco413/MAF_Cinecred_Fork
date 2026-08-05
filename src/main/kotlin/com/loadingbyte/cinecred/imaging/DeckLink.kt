@@ -146,7 +146,7 @@ class DeckLink(
 
     private fun createFrame(bitmap: Bitmap): MemorySegment? {
         val (res, rep) = bitmap.spec
-        if (res != mode?.resolution || rep.colorSpace == null)
+        if (res != mode?.resolution || rep.colorSpace.primaries == null)
             return null
         val depth = Depth.entries.find { rep == compatibleRepresentation(it, rep.colorSpace) } ?: return null
         val (w, h) = res

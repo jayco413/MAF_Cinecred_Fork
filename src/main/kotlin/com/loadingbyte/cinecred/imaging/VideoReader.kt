@@ -158,7 +158,8 @@ class VideoReader(
                     if (pixelFormat.family == Bitmap.PixelFormat.Family.YUV) Bitmap.Range.LIMITED
                     else Bitmap.Range.FULL,
                 ColorSpace.of(
-                    if (pri != AVCOL_PRI_UNSPECIFIED) ColorSpace.Primaries.of(pri) else ColorSpace.Primaries.BT709,
+                    if (pixelFormat.family == Bitmap.PixelFormat.Family.GRAY) null else
+                        if (pri != AVCOL_PRI_UNSPECIFIED) ColorSpace.Primaries.of(pri) else ColorSpace.Primaries.BT709,
                     if (trc != AVCOL_TRC_UNSPECIFIED) ColorSpace.Transfer.of(trc) else ColorSpace.Transfer.BT1886
                 ),
                 if (pixelFormat.family != Bitmap.PixelFormat.Family.YUV) null else

@@ -7,8 +7,7 @@ import com.loadingbyte.cinecred.natives.skcms.skcms_CICP
 import com.loadingbyte.cinecred.natives.skcms.skcms_Curve
 import com.loadingbyte.cinecred.natives.skcms.skcms_ICCProfile
 import com.loadingbyte.cinecred.natives.skcms.skcms_h.*
-import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_RGBAF32
-import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_RGBF32
+import org.bytedeco.ffmpeg.global.avutil.*
 import java.awt.color.ICC_ColorSpace
 import java.awt.color.ICC_Profile
 import java.awt.image.*
@@ -67,16 +66,27 @@ class ICCProfile private constructor(
 
     val similarColorSpace: ColorSpace? by colorSpace?.let(::lazyOf) ?: lazy {
         val skcmsHandle = this.skcmsHandle ?: return@lazy null
+        val isGray = when (skcms_ICCProfile.data_color_space(skcmsHandle)) {
+            skcms_Signature_Gray() -> true
+            skcms_Signature_RGB() -> false
+            else -> return@lazy null
+        }
+        var pri: ColorSpace.Primaries? = null
+        var trc: ColorSpace.Transfer? = null
         // If the profile has a CICP tag with well-known color space IDs, try reading that first.
         if (skcms_ICCProfile.has_CICP(skcmsHandle)) {
             val cicpSeg = skcms_ICCProfile.CICP(skcmsHandle)
+            if (!isGray)
+                try {
+                    pri = ColorSpace.Primaries.of(toUnsignedInt(skcms_CICP.color_primaries(cicpSeg)))
+                } catch (_: IllegalArgumentException) {
+                }
             try {
-                val pri = ColorSpace.Primaries.of(toUnsignedInt(skcms_CICP.color_primaries(cicpSeg)))
-                val trc = ColorSpace.Transfer.of(toUnsignedInt(skcms_CICP.transfer_characteristics(cicpSeg)))
-                return@lazy ColorSpace.of(pri, trc)
+                trc = ColorSpace.Transfer.of(toUnsignedInt(skcms_CICP.transfer_characteristics(cicpSeg)))
             } catch (_: IllegalArgumentException) {
-                // Continue with the traditional non-CICP path.
             }
+            if ((isGray || pri != null) && trc != null)
+                return@lazy ColorSpace.of(pri, trc)
         }
         // Ensures that the profile has a toXYZD50 matrix and exactly one parametric transfer function.
         if (!skcms_MakeUsableAsDestinationWithSingleCurve(skcmsHandle))
@@ -84,19 +94,15 @@ class ICCProfile private constructor(
         // Return standard objects when we detect the sRGB color space.
         if (skcms_ApproximatelyEqualProfiles(skcmsHandle, skcms_sRGB_profile()))
             return@lazy ColorSpace.SRGB
-        val pri = when (skcms_ICCProfile.data_color_space(skcmsHandle)) {
-            skcms_Signature_Gray() -> Arena.ofConfined().use { arena ->
-                val chadSeg = arena.allocate(JAVA_FLOAT, 9)
-                if (!skcms_GetCHAD(skcmsHandle, chadSeg)) ColorSpace.Primaries.XYZD65 /* CHAD is often missing */ else
-                    ColorSpace.Primaries.of(ColorSpace.Primaries.Matrix(chadSeg.toArray(JAVA_FLOAT)))
-            }
-            skcms_Signature_RGB() -> ColorSpace.Primaries.of(
+        // If there were no CICP tags, parse the profile to find the primaries and transfer.
+        if (!isGray && pri == null)
+            pri = ColorSpace.Primaries.of(
                 ColorSpace.Primaries.Matrix(skcms_ICCProfile.toXYZD50(skcmsHandle).toArray(JAVA_FLOAT))
             )
-            else -> return@lazy null
+        if (trc == null) {
+            val curveArr = skcms_Curve.parametric(skcms_ICCProfile.trc(skcmsHandle)).toArray(JAVA_FLOAT)
+            trc = ColorSpace.Transfer.of(ColorSpace.Transfer.Curve(curveArr))
         }
-        val curveArr = skcms_Curve.parametric(skcms_ICCProfile.trc(skcmsHandle)).toArray(JAVA_FLOAT)
-        val trc = ColorSpace.Transfer.of(ColorSpace.Transfer.Curve(curveArr))
         ColorSpace.of(pri, trc)
     }
 
@@ -427,6 +433,9 @@ class ICCProfile private constructor(
             }
 
         private fun constructProfile(colorSpace: ColorSpace): ByteArray {
+            val primaries = colorSpace.primaries
+            val transfer = colorSpace.transfer
+
             val tags = mutableListOf<Pair<List<String>, ByteArray>>()
 
             // Prepare the description and copyright tags.
@@ -434,10 +443,12 @@ class ICCProfile private constructor(
             tags += listOf("cprt") to constructTextTag("Cinecred $VERSION")
 
             // Prepare the primaries tags.
-            val m = colorSpace.primaries.toXYZD50.values
-            tags += listOf("rXYZ") to constructXYZTag(m[0], m[3], m[6])
-            tags += listOf("gXYZ") to constructXYZTag(m[1], m[4], m[7])
-            tags += listOf("bXYZ") to constructXYZTag(m[2], m[5], m[8])
+            if (primaries != null) {
+                val m = primaries.toXYZD50.values
+                tags += listOf("rXYZ") to constructXYZTag(m[0], m[3], m[6])
+                tags += listOf("gXYZ") to constructXYZTag(m[1], m[4], m[7])
+                tags += listOf("bXYZ") to constructXYZTag(m[2], m[5], m[8])
+            }
 
             // Prepare the white point tag (must be D50).
             val wpTag = ByteBuffer.allocate(20)
@@ -449,8 +460,8 @@ class ICCProfile private constructor(
             tags += listOf("wtpt") to wpTag.array()
 
             // Prepare the transfer tags.
-            if (colorSpace.transfer.hasCurve) {
-                val c = colorSpace.transfer.toLinear
+            if (transfer.hasCurve) {
+                val c = transfer.toLinear
                 val pureGamma = c.a == 1f && c.b == 0f && c.c == 0f && c.d == 0f && c.e == 0f && c.f == 0f
                 val trcTag = ByteBuffer.allocate(12 + if (pureGamma) 4 else 28)
                 trcTag.put("para".toByteArray())
@@ -465,17 +476,18 @@ class ICCProfile private constructor(
                     for (x in c.asArray())
                         trcTag.putInt(floatToFixed(x))
                 }
-                tags += listOf("rTRC", "gTRC", "bTRC") to trcTag.array()
+                tags += (if (primaries == null) listOf("kTRC") else listOf("rTRC", "gTRC", "bTRC")) to trcTag.array()
             }
 
             // Prepare the CICP tag.
-            if (colorSpace.primaries.hasCode && colorSpace.transfer.hasCode) {
+            // Note that the ICC specification allows the CICP tag only for non-grayscale profiles.
+            if (primaries != null && (primaries.hasCode || transfer.hasCode)) {
                 val cicpTag = ByteBuffer.allocate(12)
                 cicpTag.put("cicp".toByteArray())
                 cicpTag.putInt(0)  // reserved
-                cicpTag.put(colorSpace.primaries.code.toByte())
-                cicpTag.put(colorSpace.transfer.code(colorSpace.primaries, 8).toByte())
-                cicpTag.put(0)  // RGB matrix coefficients
+                cicpTag.put((if (primaries.hasCode) primaries.code else AVCOL_PRI_UNSPECIFIED).toByte())
+                cicpTag.put((if (transfer.hasCode) transfer.code(primaries, 8) else AVCOL_TRC_UNSPECIFIED).toByte())
+                cicpTag.put(AVCOL_SPC_RGB.toByte())
                 cicpTag.put(1)  // full range
                 tags += listOf("cicp") to cicpTag.array()
             }
@@ -488,7 +500,7 @@ class ICCProfile private constructor(
             profile.putInt(0, profile.capacity())
             profile.putInt(8, 0x04400000)  // version 4.4, which added CICP support
             profile.put(12, "mntr".toByteArray())  // profile class
-            profile.put(16, "RGB ".toByteArray())  // color space
+            profile.put(16, (if (primaries == null) "GRAY" else "RGB ").toByteArray())  // color space
             profile.put(20, "XYZ ".toByteArray())  // PCS
             // Creation timestamp
             val dt = LocalDateTime.now(ZoneId.of("UTC"))

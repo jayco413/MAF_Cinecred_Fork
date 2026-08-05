@@ -1295,7 +1295,7 @@ class ColorGradientWidget(
             if (image.let { it == null || it.width != w || it.height != h }) {
                 val bridge = BitmapJ2DBridge(graphicsConfiguration.colorModel)
                 val res = Resolution(w, h)
-                val canvasRep = Canvas.compatibleRepresentation(bridge.nativeRepresentation.colorSpace!!)
+                val canvasRep = Canvas.compatibleRepresentation(bridge.nativeRepresentation.colorSpace)
                 Bitmap.allocate(Bitmap.Spec(res, canvasRep)).use { canvasBmp ->
                     Bitmap.allocate(Bitmap.Spec(res, bridge.nativeRepresentation)).use { nativeBmp ->
                         Canvas.forBitmap(canvasBmp.zero()).use { canvas ->

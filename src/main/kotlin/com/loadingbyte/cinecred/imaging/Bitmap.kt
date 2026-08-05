@@ -225,7 +225,7 @@ class Bitmap private constructor(
                 else -> throw IllegalArgumentException("Cannot get alpha plane of $depth-bit bitmap.")
             }
         }
-        val viewRep = Representation(PixelFormat.of(viewPixelFormatCode))
+        val viewRep = Representation(PixelFormat.of(viewPixelFormatCode), ColorSpace.of(ColorSpace.Transfer.LINEAR))
         return allocateWithoutBufAndSetup(spec.copy(representation = viewRep)) { viewFrame ->
             requireNotClosed { referenceBuffers(frame, viewFrame) }
             viewFrame.data(0, BytePointer().position(memorySegment(comp.plane).address()))
@@ -606,16 +606,11 @@ class Bitmap private constructor(
                 height(spec.resolution.heightPx)
                 format(spec.representation.pixelFormat.code)
                 color_range(spec.representation.range.code)
-                if (cs == null) {
-                    color_primaries(AVCOL_PRI_UNSPECIFIED)
-                    color_trc(AVCOL_TRC_LINEAR)
-                } else {
-                    color_primaries(if (cs.primaries.hasCode) cs.primaries.code else AVCOL_PRI_UNSPECIFIED)
-                    color_trc(
-                        if (cs.transfer.hasCode) cs.transfer.code(cs.primaries, spec.representation.pixelFormat.depth)
-                        else AVCOL_TRC_UNSPECIFIED
-                    )
-                }
+                color_primaries(if (cs.primaries?.hasCode == true) cs.primaries.code else AVCOL_PRI_UNSPECIFIED)
+                color_trc(
+                    if (cs.transfer.hasCode) cs.transfer.code(cs.primaries, spec.representation.pixelFormat.depth)
+                    else AVCOL_TRC_UNSPECIFIED
+                )
                 when (spec.representation.pixelFormat.family) {
                     PixelFormat.Family.GRAY -> colorspace(AVCOL_SPC_UNSPECIFIED)
                     PixelFormat.Family.RGB -> colorspace(AVCOL_SPC_RGB)
@@ -675,7 +670,7 @@ class Bitmap private constructor(
     data class Representation(
         val pixelFormat: PixelFormat,
         val range: Range,
-        val colorSpace: ColorSpace?,
+        val colorSpace: ColorSpace,
         val yuvCoefficients: YUVCoefficients?,
         /** One of the `AVCHROMA_LOC_*` constants. */
         val chromaLocation: Int,
@@ -686,22 +681,19 @@ class Bitmap private constructor(
             require(chromaLocation in 0..<AVCHROMA_LOC_NB)
             // Limited range is only well-defined (and well-supported by, e.g., zimg) for integer pixel formats.
             require(!pixelFormat.isFloat || range == Range.FULL)
-            require((pixelFormat.family == PixelFormat.Family.GRAY) == (colorSpace == null))
+            require((pixelFormat.family == PixelFormat.Family.GRAY) == (colorSpace.primaries == null))
             require((pixelFormat.family == PixelFormat.Family.YUV) == (yuvCoefficients != null))
             require(pixelFormat.hasChromaSub == (chromaLocation != AVCHROMA_LOC_UNSPECIFIED))
             require(pixelFormat.hasAlpha == (alpha != Alpha.OPAQUE))
         }
 
-        constructor(pixelFormat: PixelFormat) :
-                this(pixelFormat, Range.FULL, colorSpace = null, Alpha.OPAQUE)
-
         constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace) :
                 this(pixelFormat, Range.FULL, colorSpace, Alpha.OPAQUE)
 
-        constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace?, alpha: Alpha) :
+        constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace, alpha: Alpha) :
                 this(pixelFormat, Range.FULL, colorSpace, alpha)
 
-        constructor(pixelFormat: PixelFormat, range: Range, colorSpace: ColorSpace?, alpha: Alpha) :
+        constructor(pixelFormat: PixelFormat, range: Range, colorSpace: ColorSpace, alpha: Alpha) :
                 this(pixelFormat, range, colorSpace, yuvCoefficients = null, AVCHROMA_LOC_UNSPECIFIED, alpha)
 
     }

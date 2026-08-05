@@ -59,8 +59,8 @@ class ImageSequenceRenderJob private constructor(
         val embedAlpha = config[TRANSPARENCY] == TRANSPARENT
         val matte = config[TRANSPARENCY] == MATTE
         val family = if (matte) GRAY else RGB
-        val colorSpace = if (matte) null else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
-        val ceiling = if (config.getOrDefault(HDR) || colorSpace?.transfer?.isHDR == true) null else 1f
+        val colorSpace = if (matte) ColorSpace.of(LINEAR) else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
+        val ceiling = if (config.getOrDefault(HDR) || colorSpace.transfer.isHDR) null else 1f
         val scan = config[SCAN]
         val grounding = if (config[TRANSPARENCY] == GROUNDED) styling.global.grounding else null
         var scaledVideo = video.copy(2.0.pow(config[SPATIAL_SCALING_LOG2]), fpsScaling = config[FPS_SCALING])
@@ -75,7 +75,7 @@ class ImageSequenceRenderJob private constructor(
             TIFF -> BitmapWriter.TIFF(family, embedAlpha, colorSpace, config[DEPTH], config[TIFF_COMPRESSION])
             DPX -> BitmapWriter.DPX(family, embedAlpha, colorSpace, config[DEPTH], config[DPX_COMPRESSION])
             EXR -> BitmapWriter.EXR(
-                family, embedAlpha, colorSpace?.primaries, config[DEPTH], config[EXR_COMPRESSION], scaledVideo.fps
+                family, embedAlpha, colorSpace.primaries, config[DEPTH], config[EXR_COMPRESSION], scaledVideo.fps
             )
             else -> throw IllegalArgumentException()
         }

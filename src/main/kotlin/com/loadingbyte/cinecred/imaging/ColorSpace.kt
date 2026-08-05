@@ -13,9 +13,14 @@ import kotlin.math.abs
 import kotlin.math.pow
 
 
-class ColorSpace private constructor(val primaries: Primaries, val transfer: Transfer) {
+class ColorSpace private constructor(
+    /** If the primaries are null, the color space is for grayscale bitmaps. */
+    val primaries: Primaries?,
+    val transfer: Transfer
+) {
 
     val skiaHandle: MemorySegment by lazy {
+        checkNotNull(primaries) { "Gray color spaces do not admit a Skia color space." }
         check(transfer.hasCurve) { "Only transfer characteristics with a standard curve admit a Skia color space." }
         val c = transfer.toLinear
         val m = primaries.toXYZD50.values
@@ -25,15 +30,21 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
     private val bmpConvCache =
         ConcurrentHashMap<ColorSpace, DisposableReference<Triple<Bitmap, Bitmap, BitmapConverter>>>()
 
+    fun withPrimariesIfAbsent(primaries: Primaries): ColorSpace =
+        if (this.primaries == null) of(primaries, transfer) else this
+
     fun convert(dst: ColorSpace, colors: FloatArray, alpha: Boolean, clamp: Boolean = false, ceiling: Float? = 1f) {
+        require((primaries == null) == (dst.primaries == null)) { "Cannot convert between gray and chromatic arrays." }
         if (this != dst)
             if (transfer.hasCurve && dst.transfer.hasCurve) {
-                transfer.toLinear(colors, alpha)
-                primaries.toXYZD50(colors, alpha)
-                dst.primaries.fromXYZD50(colors, alpha)
-                dst.transfer.fromLinear(colors, alpha)
+                transfer.toLinear(colors, primaries == null, alpha)
+                if (primaries != null && dst.primaries != null) {
+                    primaries.toXYZD50(colors, alpha)
+                    dst.primaries.fromXYZD50(colors, alpha)
+                }
+                dst.transfer.fromLinear(colors, primaries == null, alpha)
             } else {
-                val numComps = if (alpha) 4 else 3
+                val numComps = (if (primaries == null) 1 else 3) + (if (alpha) 1 else 0)
                 require(colors.size % numComps == 0)
                 val w = colors.size / numComps
                 val alp = if (alpha) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
@@ -49,7 +60,11 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                 } else {
                     cached?.run { first.close(); second.close(); third.close() }
                     val res = Resolution(w, 1)
-                    val pixelFormat = Bitmap.PixelFormat.of(if (alpha) AV_PIX_FMT_RGBAF32 else AV_PIX_FMT_RGBF32)
+                    val pixelFormatCode = when (primaries) {
+                        null -> if (alpha) throw UnsupportedOperationException() else AV_PIX_FMT_GRAYF32
+                        else -> if (alpha) AV_PIX_FMT_RGBAF32 else AV_PIX_FMT_RGBF32
+                    }
+                    val pixelFormat = Bitmap.PixelFormat.of(pixelFormatCode)
                     val srcSpec = Bitmap.Spec(res, Bitmap.Representation(pixelFormat, this, alp))
                     val dstSpec = Bitmap.Spec(res, Bitmap.Representation(pixelFormat, dst, alp))
                     srcBitmap = Bitmap.allocate(srcSpec)
@@ -64,20 +79,25 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                 dstBitmap.get(colors, colors.size)
                 bmpConvCache.put(dst, cachedRef)?.getAndClose()?.run { first.close(); second.close(); third.close() }
             }
-        if (clamp)
+        if (clamp) {
+            val mask = if (primaries == null) 1 else 3
             for (i in colors.indices)
-                if (!alpha || i and 3 != 3)
+                if (!alpha || i and mask != mask)
                     colors[i] = colors[i].coerceIn(0f, ceiling)
+        }
     }
 
-    override fun toString() = "$primaries / $transfer"
+    override fun toString() = if (primaries == null) "$transfer" else "$primaries / $transfer"
 
 
     companion object {
 
-        private val cache = ConcurrentHashMap<Pair<Primaries, Transfer>, ColorSpace>()
+        private val cache = ConcurrentHashMap<Pair<Primaries?, Transfer>, ColorSpace>()
 
-        fun of(primaries: Primaries, transfer: Transfer): ColorSpace =
+        fun of(transfer: Transfer): ColorSpace =
+            of(primaries = null, transfer)
+
+        fun of(primaries: Primaries?, transfer: Transfer): ColorSpace =
             cache.computeIfAbsent(Pair(primaries, transfer)) { ColorSpace(primaries, transfer) }
 
         val XYZD50: ColorSpace = of(Primaries.XYZD50, Transfer.LINEAR)
@@ -185,7 +205,7 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                 obtainCustom(null, toXYZD50(wx, wy))
 
             val XYZD50: Primaries
-            val XYZD65: Primaries = invertAndMake(-3, "XYZ-D65", null, toXYZD50(0.3127f, 0.329f))
+            val XYZE: Primaries = of(AVCOL_PRI_SMPTE428)
             val BT709: Primaries = of(AVCOL_PRI_BT709)
             val DCI_P3: Primaries = of(AVCOL_PRI_SMPTE431)
             val DISPLAY_P3: Primaries = of(AVCOL_PRI_SMPTE432)
@@ -249,7 +269,7 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                     toXYZD50(SkNamedGamut_Rec2020())
                 )
                 addCB(
-                    AVCOL_PRI_SMPTE428, "ST 428",
+                    AVCOL_PRI_SMPTE428, "XYZ-E",
                     Chromaticities(1f, 0f, 0f, 1f, 0f, 0f, 1f / 3f, 1f / 3f)
                 )
                 addCB(
@@ -362,12 +382,13 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
             operator fun invoke(value: Float): Float =
                 if (this === LINEAR.toLinear) value else skcms_TransferFunction_eval(skiaHandle, value)
 
-            operator fun invoke(colors: FloatArray, alpha: Boolean) {
+            operator fun invoke(colors: FloatArray, gray: Boolean, alpha: Boolean) {
                 if (this === LINEAR.toLinear)
                     return
                 val skiaHandle = this.skiaHandle
+                val mask = if (gray) 1 else 3
                 for (i in colors.indices)
-                    if (!alpha || i and 3 != 3)
+                    if (!alpha || i and mask != mask)
                         colors[i] = skcms_TransferFunction_eval(skiaHandle, colors[i])
             }
 

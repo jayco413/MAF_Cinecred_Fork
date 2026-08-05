@@ -134,10 +134,11 @@ class VideoWriter(
         enc.pix_fmt(spec.representation.pixelFormat.code)
 
         // Specify color space metadata.
-        spec.representation.colorSpace?.let { colorSpace ->
-            enc.color_primaries(colorSpace.primaries.code)
-            enc.color_trc(colorSpace.transfer.code(colorSpace.primaries, spec.representation.pixelFormat.depth))
-        }
+        val primaries = spec.representation.colorSpace.primaries
+        val transfer = spec.representation.colorSpace.transfer
+        val depth = spec.representation.pixelFormat.depth
+        enc.color_primaries(if (primaries?.hasCode == true) primaries.code else AVCOL_PRI_UNSPECIFIED)
+        enc.color_trc(if (transfer.hasCode) transfer.code(primaries, depth) else AVCOL_TRC_UNSPECIFIED)
         enc.color_range(spec.representation.range.code)
         enc.chroma_sample_location(spec.representation.chromaLocation)
 

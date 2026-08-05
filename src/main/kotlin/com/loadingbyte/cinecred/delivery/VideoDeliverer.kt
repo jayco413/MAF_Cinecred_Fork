@@ -170,7 +170,7 @@ class VideoDeliverer(
                         Bitmap.Range.LIMITED -> (1 shl (pixFmt.depth - 8)).let { "${16 * it}-${235 * it}/${240 * it}" }
                     }
         if (!matte) {
-            val cs = rep.colorSpace!!
+            val cs = rep.colorSpace
             details += l10n("gamut", locale) to cs.primaries.toString()
             details += "EOTF" to cs.transfer.toString()
         }

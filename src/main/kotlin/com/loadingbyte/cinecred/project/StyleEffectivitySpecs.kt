@@ -423,6 +423,13 @@ private val TAPE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<TapeStyle>> 
         }
     ),
     StyleEffectivitySpec(
+        TapeStyle::primaries.st(),
+        isTotallyIneffective = { _, style ->
+            val spec = tapeSpec(style)
+            spec != null && spec.representation.pixelFormat.family == Bitmap.PixelFormat.Family.GRAY
+        }
+    ),
+    StyleEffectivitySpec(
         TapeStyle::yuvCoefficients.st(),
         isTotallyIneffective = { _, style ->
             val spec = tapeSpec(style)
