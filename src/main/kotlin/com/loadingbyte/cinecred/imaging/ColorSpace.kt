@@ -61,7 +61,7 @@ class ColorSpace private constructor(
                     cached?.run { first.close(); second.close(); third.close() }
                     val res = Resolution(w, 1)
                     val pixelFormatCode = when (primaries) {
-                        null -> if (alpha) throw UnsupportedOperationException() else AV_PIX_FMT_GRAYF32
+                        null -> if (alpha) AV_PIX_FMT_YAF32 else AV_PIX_FMT_GRAYF32
                         else -> if (alpha) AV_PIX_FMT_RGBAF32 else AV_PIX_FMT_RGBF32
                     }
                     val pixelFormat = Bitmap.PixelFormat.of(pixelFormatCode)

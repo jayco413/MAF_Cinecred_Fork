@@ -616,6 +616,7 @@ class BitmapConverter(
             private fun interleavedFloatEquiv(pixelFormat: Bitmap.PixelFormat) = Bitmap.PixelFormat.of(
                 when (pixelFormat.components.size) {
                     1 -> AV_PIX_FMT_GRAYF32
+                    2 -> AV_PIX_FMT_YAF32
                     3 -> AV_PIX_FMT_RGBF32
                     4 -> AV_PIX_FMT_RGBAF32
                     else -> throw IllegalArgumentException("Unsupported component count.")

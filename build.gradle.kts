@@ -18,8 +18,8 @@ version = "1.9.1-SNAPSHOT"
 val jdkVersion = 25
 val slf4jVersion = "2.0.18"
 val twelveMonkeysVersion = "3.13.1"
-val javacppVersion = "1.5.12"
-val ffmpegVersion = "7.1.1-$javacppVersion"
+val javacppVersion = "1.5.13"
+val ffmpegVersion = "8.0.1-$javacppVersion"
 val flatlafVersion = "3.7.1"
 
 // Versions of custom-built native libraries; upon updating, rebuild them following MAINTENANCE.md:
