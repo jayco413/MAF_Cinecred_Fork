@@ -23,6 +23,7 @@ Cinecred Changelog
 - Fixed small vertical shifts when mixing interlaced and progressive video.
 - Fixed color shifts when exporting as SDR YUV while embedding HDR videos.
 - Fixed the occasional "exceeds source height" error during video export.
+- Fixed the "CFF" error during PDF export.
 
 ### UI Fixes
 

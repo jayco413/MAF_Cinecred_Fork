@@ -97,7 +97,7 @@ dependencies {
     implementation("com.github.jai-imageio:jai-imageio-jpeg2000:1.4.0")
 
     // PDF IO
-    implementation("org.apache.pdfbox:pdfbox:3.0.7")
+    implementation("org.apache.pdfbox:pdfbox:3.0.6")
 
     // Video IO
     implementation(dependencyFactory.create("org.bytedeco", "javacpp", javacppVersion))
