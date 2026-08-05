@@ -24,6 +24,7 @@ import java.awt.event.KeyEvent
 import java.util.*
 import javax.swing.*
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 
@@ -344,10 +345,21 @@ class EditStylingPanel(private val ctrl: ProjectController) :
         form.changeListeners.clear()
         form.changeListeners.add { widget ->
             stylingTree.setSingleton(form.save())
-            styling = buildStyling()
+            val styling = buildStyling()
+            this.styling = styling
             when (widget) {
-                rebuildForResWidget -> setStyling(styling!!.scaleResolution(rebuildForResWidget.value))
-                rebuildForFPSWidget -> setStyling(styling!!.scaleFPS(rebuildForFPSWidget.value))
+                rebuildForResWidget -> {
+                    // Make sure the width and height cannot fall below 1.
+                    val scaling = rebuildForResWidget.value
+                        .coerceAtLeast(1.0 / styling.global.resolution.run { min(widthPx, heightPx) })
+                    setStyling(styling.scaleResolution(scaling))
+                }
+                rebuildForFPSWidget -> {
+                    // Make sure the FPS numerator cannot fall below 1.
+                    val scaling = rebuildForFPSWidget.value
+                        .coerceAtLeast(1.0 / styling.global.fps.numerator)
+                    setStyling(styling.scaleFPS(scaling))
+                }
             }
             onChange(widget)
         }
