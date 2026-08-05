@@ -9,6 +9,7 @@ import com.loadingbyte.cinecred.imaging.Bitmap.Range.FULL
 import com.loadingbyte.cinecred.imaging.Bitmap.Range.LIMITED
 import com.loadingbyte.cinecred.imaging.BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
 import com.loadingbyte.cinecred.imaging.BitmapConverter.StageType.*
+import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.XYZD50
 import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.XYZE
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.LINEAR
 import com.loadingbyte.cinecred.natives.skcms.skcms_Curve
@@ -502,7 +503,9 @@ class BitmapConverter(
                             )
                                 for ((toPri, toPriObj) in priObjs.withIndex())
                                     if ((priObj == null) == (toPriObj == null) &&
-                                        (pri == toPri || priObj?.hasCode != false && toPriObj?.hasCode != false)
+                                        (pri == toPri ||
+                                                (priObj?.hasCode != false || priObj == XYZD50) &&
+                                                (toPriObj?.hasCode != false || toPriObj == XYZD50))
                                     )
                                         if (fmtObj.px.vChromaSub == 0 && toFmtObj.px.vChromaSub == 0 ||
                                             conObj == Bitmap.Content.PROGRESSIVE_FRAME
@@ -1974,7 +1977,7 @@ class BitmapConverter(
                 }
                 val prim = when (val primaries = desc.primaries) {
                     null -> ZIMG_PRIMARIES_UNSPECIFIED()
-                    ColorSpace.Primaries.XYZD50 -> ZIMG_PRIMARIES_XYZ_D50()
+                    XYZD50 -> ZIMG_PRIMARIES_XYZ_D50()
                     else -> zimgPrimaries(primaries)
                 }
                 val range = when (desc.range) {
