@@ -739,11 +739,11 @@ class Canvas private constructor(
                 Bitmap.allocate(Bitmap.Spec(Resolution(1, 1), compatibleRepresentation(ColorSpace.XYZD50))).zero()
             }
             needsClosing += shaderBitmap
-            val tr = prepared.transform
+            var tr = prepared.transform
             // If the preparation failed to apply the transform, fall back to Skia's linear interpolation.
             val filterMode = if (tr == physicalTransform) SkFilterMode_Linear() else SkFilterMode_Nearest()
             if (canvasTransform != null)
-                tr.preConcatenate(canvasTransform.createInverse())
+                tr = canvasTransform.createInverse().apply { concatenate(tr) }
 
             val (w, h) = shaderBitmap.spec.resolution
             val rep = shaderBitmap.spec.representation
