@@ -110,7 +110,7 @@ class EditStylingPanel(private val ctrl: ProjectController) :
     init {
         stylingTree.onDeselect = ::openBlank
         stylingTree.addSingletonType(
-            PRESET_GLOBAL, l10n("ui.styling.globalStyling"), GLOBE_ICON,
+            presetGlobal(), l10n("ui.styling.globalStyling"), GLOBE_ICON,
             onSelect = { openGlobal(it, globalForm, "Global") }
         )
         stylingTree.addListType(
@@ -150,32 +150,32 @@ class EditStylingPanel(private val ctrl: ProjectController) :
         val addPageStyleButton = newToolbarButtonWithKeyListener(
             PAGE_ICON, l10n("ui.styling.addPageStyleTooltip"), STYLING_ADD_PAGE_STYLE
         ) {
-            addAndSelectStyle(PRESET_PAGE_STYLE.copy(name = l10n("ui.styling.newPageStyleName")))
+            addAndSelectStyle(presetPageStyle().copy(name = l10n("ui.styling.newPageStyleName")))
         }
         val addContentStyleButton = newToolbarButtonWithKeyListener(
             LAYOUT_ICON, l10n("ui.styling.addContentStyleTooltip"), STYLING_ADD_CONTENT_STYLE
         ) {
-            addAndSelectStyle(PRESET_CONTENT_STYLE.copy(name = l10n("ui.styling.newContentStyleName")))
+            addAndSelectStyle(presetContentStyle().copy(name = l10n("ui.styling.newContentStyleName")))
         }
         val addLetterStyleButton = newToolbarButtonWithKeyListener(
             LETTERS_ICON, l10n("ui.styling.addLetterStyleTooltip"), STYLING_ADD_LETTER_STYLE
         ) {
-            addAndSelectStyle(PRESET_LETTER_STYLE.copy(name = l10n("ui.styling.newLetterStyleName")))
+            addAndSelectStyle(presetLetterStyle().copy(name = l10n("ui.styling.newLetterStyleName")))
         }
         val addTransitionStyleButton = newToolbarButtonWithKeyListener(
             TRANSITION_ICON, l10n("ui.styling.addTransitionStyleTooltip"), STYLING_ADD_TRANSITION_STYLE
         ) {
-            addAndSelectStyle(PRESET_TRANSITION_STYLE.copy(name = l10n("ui.styling.newTransitionStyleName")))
+            addAndSelectStyle(presetTransitionStyle().copy(name = l10n("ui.styling.newTransitionStyleName")))
         }
         val addPictureStyleButton = newToolbarButtonWithKeyListener(
             PICTURE_ICON, l10n("ui.styling.addPictureStyleTooltip"), STYLING_ADD_PICTURE_STYLE
         ) {
-            addAndSelectStyle(PRESET_PICTURE_STYLE.copy(name = l10n("ui.styling.newPictureStyleName")))
+            addAndSelectStyle(presetPictureStyle().copy(name = l10n("ui.styling.newPictureStyleName")))
         }
         val addTapeStyleButton = newToolbarButtonWithKeyListener(
             FILMSTRIP_ICON, l10n("ui.styling.addTapeStyleTooltip"), STYLING_ADD_TAPE_STYLE
         ) {
-            addAndSelectStyle(PRESET_TAPE_STYLE.copy(name = l10n("ui.styling.newTapeStyleName")))
+            addAndSelectStyle(presetTapeStyle().copy(name = l10n("ui.styling.newTapeStyleName")))
         }
         val duplicateStyleButton = newToolbarButton(
             DUPLICATE_ICON, l10n("ui.styling.duplicateStyleTooltip"), STYLING_DUPLICATE_STYLE, ::duplicateStyle

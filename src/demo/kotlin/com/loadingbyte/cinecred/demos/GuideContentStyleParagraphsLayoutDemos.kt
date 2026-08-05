@@ -66,7 +66,7 @@ object GuideContentStyleParagraphsLayoutParagraphGapAndLineGapDemo : StyleSettin
 }
 
 
-private val blurbCS = PRESET_CONTENT_STYLE.copy(
+private val blurbCS = presetContentStyle().copy(
     bodyLetterStyleName = "Normal", bodyLayout = BodyLayout.PARAGRAPHS, paragraphsLineWidthPx = 500.0
 )
 

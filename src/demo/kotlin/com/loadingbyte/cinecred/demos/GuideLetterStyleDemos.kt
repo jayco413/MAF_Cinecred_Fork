@@ -34,7 +34,7 @@ object GuideLetterStyleNameDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::name.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = l10n("project.template.letterStyleNormal"))
+        this += presetLetterStyle().copy(name = l10n("project.template.letterStyleNormal"))
     }
 }
 
@@ -44,7 +44,7 @@ object GuideLetterStyleFontDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::font.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(font = FontRef(Font.bundled("Archivo Narrow Bold")!!))
         this += last().copy(font = FontRef(Font.bundled("Titillium Regular Upright")!!))
     }
@@ -59,7 +59,7 @@ object GuideLetterStyleVariationsDemo : StyleSettingsDemo<LetterStyle>(
 ) {
     override fun styles() = buildList<LetterStyle> {
         val font = useResourcePath("/demoFonts/RobotoFlex-ASCII.ttf") { Font.read(it, mmap = true) }.single()
-        this += PRESET_LETTER_STYLE.copy(name = "Demo", font = FontRef(font))
+        this += presetLetterStyle().copy(name = "Demo", font = FontRef(font))
         for (step in 0..100)
             this += last().copy(variations = FontVariations(last().variations.put("wght", 400.0 + step * 5)))
         for (step in 0..50)
@@ -77,7 +77,7 @@ object GuideLetterStyleHeightDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::heightPx.st()), pageGuides = true
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(heightPx = last().heightPx * 2.0)
     }
 
@@ -90,7 +90,7 @@ object GuideLetterStyleLeadingDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::leadingTopRh.st(), LetterStyle::leadingBottomRh.st()), pageGuides = true
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(leadingTopRh = -4.0 / 32.0)
         this += last().copy(leadingTopRh = -8.0 / 32.0)
         this += last().copy(leadingTopRh = -12.0 / 32.0)
@@ -108,7 +108,7 @@ object GuideLetterStyleTrackingDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::trackingEm.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(trackingEm = 0.1)
         this += last().copy(trackingEm = 0.2)
         this += last().copy(trackingEm = -0.1)
@@ -124,7 +124,7 @@ object GuideLetterStyleKerningDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::kerning.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(kerning = false)
     }
 
@@ -137,7 +137,7 @@ object GuideLetterStyleLigaturesDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::ligatures.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo", font = FontRef(Font.bundled("Raleway Regular")!!))
+        this += presetLetterStyle().copy(name = "Demo", font = FontRef(Font.bundled("Raleway Regular")!!))
         this += last().copy(ligatures = false)
     }
 
@@ -150,7 +150,7 @@ object GuideLetterStyleUppercaseDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::uppercase.st(), LetterStyle::useUppercaseExceptions.st(), LetterStyle::useUppercaseSpacing.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(uppercase = true)
         this += last().copy(useUppercaseExceptions = false)
         this += last().copy(useUppercaseSpacing = false)
@@ -165,7 +165,7 @@ object GuideLetterStyleSmallCapsDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::smallCaps.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo", font = FontRef(Font.bundled("Noto Sans Condensed")!!))
+        this += presetLetterStyle().copy(name = "Demo", font = FontRef(Font.bundled("Noto Sans Condensed")!!))
         this += last().copy(smallCaps = SmallCaps.SMALL_CAPS)
         this += last().copy(smallCaps = SmallCaps.PETITE_CAPS)
     }
@@ -182,7 +182,7 @@ object GuideLetterStyleSuperscriptDemo : StyleSettingsDemo<LetterStyle>(
     )
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo", superscript = Superscript.SUP)
+        this += presetLetterStyle().copy(name = "Demo", superscript = Superscript.SUP)
         this += last().copy(superscript = Superscript.SUB)
         this += last().copy(superscript = Superscript.SUP_SUP)
         this += last().copy(
@@ -194,13 +194,13 @@ object GuideLetterStyleSuperscriptDemo : StyleSettingsDemo<LetterStyle>(
         if (style.superscript == Superscript.SUP_SUP)
             textBox("{{Style Ctx1}}a{{Style Ctx2}}b{{Style Demo}}c").parseCreditsLS(
                 style,
-                PRESET_LETTER_STYLE.copy(name = "Ctx1"),
-                PRESET_LETTER_STYLE.copy(name = "Ctx2", superscript = Superscript.SUP)
+                presetLetterStyle().copy(name = "Ctx1"),
+                presetLetterStyle().copy(name = "Ctx2", superscript = Superscript.SUP)
             )
         else
             textBox("{{Style Ctx}}a{{Style Demo}}b").parseCreditsLS(
                 style,
-                PRESET_LETTER_STYLE.copy(name = "Ctx")
+                presetLetterStyle().copy(name = "Ctx")
             )
 }
 
@@ -210,7 +210,7 @@ object GuideLetterStyleHScalingDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::hScaling.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo")
+        this += presetLetterStyle().copy(name = "Demo")
         this += last().copy(hScaling = 40.0 / 32.0)
         this += last().copy(hScaling = 48.0 / 32.0)
         this += last().copy(hScaling = 16.0 / 32.0)
@@ -226,7 +226,7 @@ object GuideLetterStyleFeaturesDemo : StyleSettingsDemo<LetterStyle>(
     listOf(LetterStyle::features.st())
 ) {
     override fun styles() = buildList<LetterStyle> {
-        this += PRESET_LETTER_STYLE.copy(name = "Demo", font = FontRef(Font.bundled("Roboto")!!))
+        this += presetLetterStyle().copy(name = "Demo", font = FontRef(Font.bundled("Roboto")!!))
         this += last().copy(features = persistentListOf(FontFeature("onum", 1)))
         this += last().copy(features = last().features.add(FontFeature("ss01", 1)))
     }

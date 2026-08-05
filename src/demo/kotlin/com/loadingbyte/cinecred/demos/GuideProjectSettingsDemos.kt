@@ -40,7 +40,7 @@ object GuideProjectSettingsResolutionAndFrameRateDemo : StyleSettingsDemo<Global
     listOf(Global::resolution.st(), Global::fps.st())
 ) {
     override fun styles() = buildList<Global> {
-        this += PRESET_GLOBAL
+        this += presetGlobal()
         this += last().copy(resolution = Resolution(1080, 1080))
         this += last().copy(fps = FPS(25, 2))
     }
@@ -84,7 +84,7 @@ object GuideProjectSettingsTimecodeFormatDemo : StyleSettingsDemo<Global>(
     listOf(Global::fps.st(), Global::timecodeFormat.st(), Global::runtimeFrames.st())
 ) {
     override fun styles() = buildList<Global> {
-        this += PRESET_GLOBAL.copy(fps = FPS(30, 1))
+        this += presetGlobal().copy(fps = FPS(30, 1))
         this += last().copy(timecodeFormat = TimecodeFormat.FRAMES)
         this += last().copy(fps = FPS(30000, 1001), timecodeFormat = TimecodeFormat.SMPTE_DROP_FRAME)
         this += last().copy(timecodeFormat = TimecodeFormat.EXACT_FRAMES_IN_SECOND)
@@ -113,7 +113,7 @@ object GuideProjectSettingsLeaveFramesBlankDemo : StyleSettingsDemo<Global>(
     listOf(Global::blankFirstFrame.st(), Global::blankLastFrame.st())
 ) {
     override fun styles() = buildList<Global> {
-        this += PRESET_GLOBAL
+        this += presetGlobal()
         this += last().copy(blankFirstFrame = true)
         this += last().copy(blankLastFrame = true)
     }
@@ -138,7 +138,7 @@ object GuideProjectSettingsUnitVGapDemo : StyleSettingsDemo<Global>(
     listOf(Global::unitVGapPx.st()), pageGuides = true
 ) {
     override fun styles() = buildList<Global> {
-        this += PRESET_GLOBAL
+        this += presetGlobal()
         this += last().copy(unitVGapPx = 2.0 * last().unitVGapPx)
     }
 
@@ -152,7 +152,7 @@ object GuideProjectSettingsLocaleDemo : StyleSettingsDemo<Global>(
     listOf(Global::locale.st())
 ) {
     override fun styles() = buildList<Global> {
-        this += PRESET_GLOBAL.copy(locale = locale)
+        this += presetGlobal().copy(locale = locale)
         this += last().copy(locale = Locale.of("tr"))
     }
 
@@ -165,7 +165,7 @@ object GuideProjectSettingsUppercaseExceptionsDemo : StyleSettingsDemo<Global>(
     listOf(Global::uppercaseExceptions.st())
 ) {
     override fun styles() = buildList<Global> {
-        this += PRESET_GLOBAL.copy(uppercaseExceptions = persistentListOf())
+        this += presetGlobal().copy(uppercaseExceptions = persistentListOf())
         this += last().copy(uppercaseExceptions = persistentListOf("von"))
         this += last().copy(uppercaseExceptions = persistentListOf("_von_"))
         this += last().copy(uppercaseExceptions = persistentListOf("_von_", "Mac"))
@@ -181,12 +181,12 @@ object GuideProjectSettingsUppercaseExceptionsDemo : StyleSettingsDemo<Global>(
 
 private fun buildPage(global: Global, texts: List<String>, vGap: Double = 0.0, uppercase: Boolean = false): Page {
     val fontRef = FontRef(Font.bundled("Archivo Narrow Bold")!!)
-    val letterStyle = PRESET_LETTER_STYLE.copy(font = fontRef, uppercase = uppercase)
+    val letterStyle = presetLetterStyle().copy(font = fontRef, uppercase = uppercase)
     val blocks = texts.map { text ->
         val styledString = persistentListOf(BodyElement.Str(persistentListOf(listOf(Pair(text, letterStyle)))))
-        Block(PRESET_CONTENT_STYLE, null, styledString, null, vGap * global.unitVGapPx, Any(), Any(), Any())
+        Block(presetContentStyle(), null, styledString, null, vGap * global.unitVGapPx, Any(), Any(), Any())
     }.toPersistentList()
     val spine = Spine(null, VAnchor.TOP, VAnchor.TOP, 0.0, 0.0, blocks)
     val compound = Compound.Scroll(0.0, persistentListOf(spine), 0.0)
-    return Page(persistentListOf(Stage(PRESET_PAGE_STYLE, 0, persistentListOf(compound), 0.0, 0, null)), 0)
+    return Page(persistentListOf(Stage(presetPageStyle(), 0, persistentListOf(compound), 0.0, 0, null)), 0)
 }

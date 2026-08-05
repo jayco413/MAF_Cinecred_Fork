@@ -279,7 +279,7 @@ object GuideContentStyleFlowLayoutSeparatorVJustifyDemo : StyleSettingsDemo<Cont
 }
 
 
-private val bulletsCS = PRESET_CONTENT_STYLE.copy(
+private val bulletsCS = presetContentStyle().copy(
     bodyLetterStyleName = "Name", bodyLayout = BodyLayout.FLOW, flowRowWidthPx = 600.0, flowCellHGapPx = 32.0
 )
 private val sepClr = Color4f.fromSRGBHexString("#42BEEF")

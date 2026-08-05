@@ -318,7 +318,7 @@ private val LETTER_STYLE_WIDGET_SPECS: List<StyleWidgetSpec<LetterStyle, *>> = l
     NewSectionWidgetSpec(LetterStyle::layers.st()),
     LayerListWidgetSpec(
         LetterStyle::layers.st(),
-        newElement = PRESET_LAYER,
+        newElement = presetLayer(),
         advancedSettings = setOf(
             Layer::stripeWidenLeftRfh.st(), Layer::stripeWidenRightRfh.st(), Layer::stripeWidenTopRfh.st(),
             Layer::stripeWidenBottomRfh.st(), Layer::stripeCornerJoin.st(), Layer::stripeCornerRadiusRfh.st(),

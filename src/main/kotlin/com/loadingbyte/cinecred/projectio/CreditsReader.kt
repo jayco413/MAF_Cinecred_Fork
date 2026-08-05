@@ -76,20 +76,20 @@ private class CreditsReader(
     val pictureStyleResolver = AuxiliaryStyleResolver(
         pictureLoaders, isDirectory = { false }, pictureStyleMap,
         { style -> style.picture.name.isEmpty() && style.picture.loader == null },
-        { name -> PRESET_PICTURE_STYLE.copy(name = name) },
-        { name, pictureLoader -> PRESET_PICTURE_STYLE.copy(name = name, picture = PictureRef(pictureLoader)) }
+        { name -> presetPictureStyle().copy(name = name) },
+        { name, pictureLoader -> presetPictureStyle().copy(name = name, picture = PictureRef(pictureLoader)) }
     )
     val tapeStyleResolver = AuxiliaryStyleResolver(
         tapes, isDirectory = Tape::fileSeq, tapeStyleMap,
         { style -> style.tape.name.isEmpty() && style.tape.tape == null },
-        { name -> PRESET_TAPE_STYLE.copy(name = name) },
+        { name -> presetTapeStyle().copy(name = name) },
         { name, tape ->
             val tcFmt = if (tape.fileSeq) TimecodeFormat.FRAMES else try {
                 tape.fps?.let { TimecodeFormat.SMPTE_NON_DROP_FRAME }
             } catch (_: IllegalStateException) {
                 null
             } ?: TimecodeFormat.EXACT_FRAMES_IN_SECOND
-            PRESET_TAPE_STYLE.copy(name = name, tape = TapeRef(tape), slice = TapeSlice(tcFmt, null, null))
+            presetTapeStyle().copy(name = name, tape = TapeRef(tape), slice = TapeSlice(tcFmt, null, null))
         }
     )
 
@@ -645,7 +645,7 @@ private class CreditsReader(
                 val msg = if (contentStyleMap.isEmpty()) l10n("projectIO.credits.noContentStyles") else
                     l10n("projectIO.credits.unavailableContentStyle", "<i>${l10nEnum(contentStyleMap.keys)}</i>")
                 table.log(row, "contentStyle", WARN, msg)
-                contentStyle = PLACEHOLDER_CONTENT_STYLE
+                contentStyle = placeholderContentStyle()
             }
             isBlockConclusionMarked = true
         }
@@ -762,11 +762,11 @@ private class CreditsReader(
         // fall back to the placeholder page or content style.
         if (newHead != null || newTail != null || bodyElem != null) {
             if (stageStyle == null) {
-                stageStyle = PLACEHOLDER_PAGE_STYLE
+                stageStyle = placeholderPageStyle()
                 table.log(row, null, WARN, l10n("projectIO.credits.noPageStyleSpecified"))
             }
             if (contentStyle == null) {
-                contentStyle = PLACEHOLDER_CONTENT_STYLE
+                contentStyle = placeholderContentStyle()
                 blockStyle = contentStyle
                 table.log(row, null, WARN, l10n("projectIO.credits.noContentStyleSpecified"))
             }
@@ -807,7 +807,7 @@ private class CreditsReader(
         fun tagNotLoneMsg(tagKey: String) = l10n("projectIO.credits.tagNotLone", l10nQuoted("{{$tagKey …}}"))
 
         val str = table.getString(row, l10nColName) ?: return null
-        val initLetterStyle = initLetterStyleName?.let { letterStyleMap[it] } ?: PLACEHOLDER_LETTER_STYLE
+        val initLetterStyle = initLetterStyleName?.let { letterStyleMap[it] } ?: placeholderLetterStyle()
 
         var curLetterStyle: LetterStyle? = null
         val styledLines = mutableListOf(mutableListOf<Pair<String, LetterStyle>>())
@@ -847,7 +847,7 @@ private class CreditsReader(
                         null -> curLetterStyle = initLetterStyle
                         else -> when (val newLetterStyle = letterStyleMap[tagVal]) {
                             null -> {
-                                curLetterStyle = PLACEHOLDER_LETTER_STYLE
+                                curLetterStyle = placeholderLetterStyle()
                                 table.log(row, l10nColName, WARN, unavailableLetterStyleMsg(tagVal))
                             }
                             else -> curLetterStyle = newLetterStyle
@@ -896,7 +896,7 @@ private class CreditsReader(
             }
             else -> {
                 table.log(row, l10nColName, WARN, l10n("projectIO.credits.effectivelyEmpty"))
-                BodyElement.Str(persistentListOf(listOf(Pair("???", PLACEHOLDER_LETTER_STYLE))))
+                BodyElement.Str(persistentListOf(listOf(Pair("???", placeholderLetterStyle()))))
             }
         }
     }

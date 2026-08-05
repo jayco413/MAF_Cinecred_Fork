@@ -311,12 +311,12 @@ private fun <S : Style> renderStyleSettings(
     for (style in styles) {
         curStyling = buildStyling?.invoke(style) ?: when (style) {
             is Global -> Styling(style, pl(), pl(), pl(), pl(), pl(), pl())
-            is PageStyle -> Styling(PRESET_GLOBAL, pl(style), pl(), pl(), pl(), pl(), pl())
-            is ContentStyle -> Styling(PRESET_GLOBAL, pl(), pl(style), pl(), pl(), pl(), pl())
-            is LetterStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(style), pl(), pl(), pl())
-            is TransitionStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(), pl(style), pl(), pl())
-            is PictureStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(), pl(), pl(style), pl())
-            is TapeStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(), pl(), pl(), pl(style))
+            is PageStyle -> Styling(presetGlobal(), pl(style), pl(), pl(), pl(), pl(), pl())
+            is ContentStyle -> Styling(presetGlobal(), pl(), pl(style), pl(), pl(), pl(), pl())
+            is LetterStyle -> Styling(presetGlobal(), pl(), pl(), pl(style), pl(), pl(), pl())
+            is TransitionStyle -> Styling(presetGlobal(), pl(), pl(), pl(), pl(style), pl(), pl())
+            is PictureStyle -> Styling(presetGlobal(), pl(), pl(), pl(), pl(), pl(style), pl())
+            is TapeStyle -> Styling(presetGlobal(), pl(), pl(), pl(), pl(), pl(), pl(style))
             else -> throw IllegalStateException()
         }
         if (augmentStyling != null)

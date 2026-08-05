@@ -290,7 +290,7 @@ object GuideContentStyleGridLayoutRowAndColGapsDemo : StyleSettingsDemo<ContentS
 }
 
 
-private val tabularCS = PRESET_CONTENT_STYLE.copy(
+private val tabularCS = presetContentStyle().copy(
     bodyLetterStyleName = "Name", bodyLayout = BodyLayout.GRID, gridCols = 3,
     gridStructure = GridStructure.EQUAL_WIDTH_COLS,
     gridCellHJustifyPerCol = persistentListOf(HJustify.CENTER, HJustify.CENTER, HJustify.CENTER), gridColGapPx = 32.0

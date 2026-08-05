@@ -41,7 +41,7 @@ object GuideContentStyleNameDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::name.st())
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += PRESET_CONTENT_STYLE.copy(name = l10n("project.template.contentStyleGutter"))
+        this += presetContentStyle().copy(name = l10n("project.template.contentStyleGutter"))
     }
 }
 
@@ -109,7 +109,7 @@ object GuideContentStyleBodyLetterStyleDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::bodyLetterStyleName.st()), pageGuides = true
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += PRESET_CONTENT_STYLE.copy(name = "Demo", bodyLetterStyleName = "Name")
+        this += presetContentStyle().copy(name = "Demo", bodyLetterStyleName = "Name")
         this += last().copy(bodyLetterStyleName = "Small")
     }
 
@@ -126,7 +126,7 @@ object GuideContentStyleBodyLayoutDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::bodyLayout.st())
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += PRESET_CONTENT_STYLE.copy(name = "Demo", bodyLayout = GRID)
+        this += presetContentStyle().copy(name = "Demo", bodyLayout = GRID)
         this += last().copy(bodyLayout = FLOW)
         this += last().copy(bodyLayout = PARAGRAPHS)
     }
@@ -397,7 +397,7 @@ object GuideContentStyleHeadLeaderMarginAndSpacingDemo : StyleSettingsDemo<Conte
 }
 
 
-private val headBodyTailCS = PRESET_CONTENT_STYLE.copy(
+private val headBodyTailCS = presetContentStyle().copy(
     blockOrientation = BlockOrientation.HORIZONTAL, bodyLetterStyleName = "Name",
     hasHead = true, headLetterStyleName = Override("Small"),
     hasTail = true, tailLetterStyleName = Override("Small"),

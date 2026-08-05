@@ -14,19 +14,19 @@ import java.util.*
 
 @Suppress("UNCHECKED_CAST")
 fun <S : Style> getPreset(styleClass: Class<S>): S = when (styleClass) {
-    Global::class.java -> PRESET_GLOBAL
-    PageStyle::class.java -> PRESET_PAGE_STYLE
-    ContentStyle::class.java -> PRESET_CONTENT_STYLE
-    LetterStyle::class.java -> PRESET_LETTER_STYLE
-    Layer::class.java -> PRESET_LAYER
-    TransitionStyle::class.java -> PRESET_TRANSITION_STYLE
-    PictureStyle::class.java -> PRESET_PICTURE_STYLE
-    TapeStyle::class.java -> PRESET_TAPE_STYLE
+    Global::class.java -> presetGlobal()
+    PageStyle::class.java -> presetPageStyle()
+    ContentStyle::class.java -> presetContentStyle()
+    LetterStyle::class.java -> presetLetterStyle()
+    Layer::class.java -> presetLayer()
+    TransitionStyle::class.java -> presetTransitionStyle()
+    PictureStyle::class.java -> presetPictureStyle()
+    TapeStyle::class.java -> presetTapeStyle()
     else -> throw IllegalArgumentException("${styleClass.name} is not a style class.")
 } as S
 
 
-val PRESET_GLOBAL = Global(
+fun presetGlobal() = Global(
     resolution = Resolution(2048, 858),
     fps = FPS(24, 1),
     timecodeFormat = TimecodeFormat.SMPTE_NON_DROP_FRAME,
@@ -45,7 +45,7 @@ val PRESET_GLOBAL = Global(
 )
 
 
-val PRESET_PAGE_STYLE = PageStyle(
+fun presetPageStyle() = PageStyle(
     name = "???",
     subsequentGapFrames = 24,
     behavior = PageBehavior.SCROLL,
@@ -61,7 +61,7 @@ val PRESET_PAGE_STYLE = PageStyle(
 )
 
 
-val PRESET_CONTENT_STYLE = ContentStyle(
+fun presetContentStyle() = ContentStyle(
     name = "???",
     blockOrientation = BlockOrientation.VERTICAL,
     spineAttachment = SpineAttachment.BODY_CENTER,
@@ -147,33 +147,32 @@ val PRESET_CONTENT_STYLE = ContentStyle(
 )
 
 
-val PRESET_LETTER_STYLE
-    get() = LetterStyle(
-        name = "???",
-        font = FontRef(Font.bundled("Archivo Narrow Regular")!!),
-        variations = FontVariations(persistentMapOf()),
-        heightPx = 32.0,
-        leadingTopRh = 0.0,
-        leadingBottomRh = 0.0,
-        trackingEm = 0.0,
-        kerning = true,
-        ligatures = true,
-        uppercase = false,
-        useUppercaseExceptions = true,
-        useUppercaseSpacing = true,
-        smallCaps = SmallCaps.OFF,
-        superscript = Superscript.OFF,
-        superscriptScaling = 1.0,
-        superscriptHOffsetRfh = 0.0,
-        superscriptVOffsetRfh = 0.0,
-        hScaling = 1.0,
-        features = persistentListOf(),
-        inheritLayersFromStyle = Opt(false, ""),
-        layers = persistentListOf(PRESET_LAYER.copy(shape = LayerShape.TEXT, name = l10n("project.LayerShape.TEXT")))
-    )
+fun presetLetterStyle() = LetterStyle(
+    name = "???",
+    font = FontRef(Font.bundled("Archivo Narrow Regular")!!),
+    variations = FontVariations(persistentMapOf()),
+    heightPx = 32.0,
+    leadingTopRh = 0.0,
+    leadingBottomRh = 0.0,
+    trackingEm = 0.0,
+    kerning = true,
+    ligatures = true,
+    uppercase = false,
+    useUppercaseExceptions = true,
+    useUppercaseSpacing = true,
+    smallCaps = SmallCaps.OFF,
+    superscript = Superscript.OFF,
+    superscriptScaling = 1.0,
+    superscriptHOffsetRfh = 0.0,
+    superscriptVOffsetRfh = 0.0,
+    hScaling = 1.0,
+    features = persistentListOf(),
+    inheritLayersFromStyle = Opt(false, ""),
+    layers = persistentListOf(presetLayer().copy(shape = LayerShape.TEXT, name = l10n("project.LayerShape.TEXT")))
+)
 
 
-val PRESET_LAYER = Layer(
+fun presetLayer() = Layer(
     name = "",
     collapsed = true,
     coloring = LayerColoring.PLAIN,
@@ -218,13 +217,13 @@ val PRESET_LAYER = Layer(
 )
 
 
-val PRESET_TRANSITION_STYLE = TransitionStyle(
+fun presetTransitionStyle() = TransitionStyle(
     name = "???",
     graph = Transition.LINEAR
 )
 
 
-val PRESET_PICTURE_STYLE = PictureStyle(
+fun presetPictureStyle() = PictureStyle(
     name = "???",
     volatile = false,
     picture = PictureRef(""),
@@ -242,7 +241,7 @@ val PRESET_PICTURE_STYLE = PictureStyle(
 )
 
 
-val PRESET_TAPE_STYLE = TapeStyle(
+fun presetTapeStyle() = TapeStyle(
     name = "???",
     volatile = false,
     tape = TapeRef(""),
@@ -274,35 +273,32 @@ val PRESET_TAPE_STYLE = TapeStyle(
 )
 
 
-val PLACEHOLDER_PAGE_STYLE
-    get() = PRESET_PAGE_STYLE.copy(
-        name = l10n("project.placeholder")
-    )
+fun placeholderPageStyle() = presetPageStyle().copy(
+    name = l10n("project.placeholder")
+)
 
 
-val PLACEHOLDER_CONTENT_STYLE
-    get() = PRESET_CONTENT_STYLE.copy(
-        name = l10n("project.placeholder"),
-        blockOrientation = BlockOrientation.HORIZONTAL,
-        hasHead = true,
-        headGapPx = 32.0,
-        hasTail = true,
-        tailGapPx = 32.0
-    )
+fun placeholderContentStyle() = presetContentStyle().copy(
+    name = l10n("project.placeholder"),
+    blockOrientation = BlockOrientation.HORIZONTAL,
+    hasHead = true,
+    headGapPx = 32.0,
+    hasTail = true,
+    tailGapPx = 32.0
+)
 
 
-val PLACEHOLDER_LETTER_STYLE
-    get() = PRESET_LETTER_STYLE.copy(
-        name = l10n("project.placeholder"),
-        layers = persistentListOf(
-            PRESET_LAYER.copy(
-                plainColor = Color4f.ORANGE,
-                shape = LayerShape.STRIPE,
-                stripePreset = StripePreset.BACKGROUND
-            ),
-            PRESET_LAYER.copy(
-                plainColor = Color4f.BLACK,
-                shape = LayerShape.TEXT
-            )
+fun placeholderLetterStyle() = presetLetterStyle().copy(
+    name = l10n("project.placeholder"),
+    layers = persistentListOf(
+        presetLayer().copy(
+            plainColor = Color4f.ORANGE,
+            shape = LayerShape.STRIPE,
+            stripePreset = StripePreset.BACKGROUND
+        ),
+        presetLayer().copy(
+            plainColor = Color4f.BLACK,
+            shape = LayerShape.TEXT
         )
     )
+)

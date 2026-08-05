@@ -2,8 +2,8 @@ package com.loadingbyte.cinecred.ui.view.welcome
 
 import com.formdev.flatlaf.FlatClientProperties.*
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.project.PRESET_GLOBAL
 import com.loadingbyte.cinecred.project.label
+import com.loadingbyte.cinecred.project.presetGlobal
 import com.loadingbyte.cinecred.projectio.SPREADSHEET_FORMATS
 import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.service.Account
@@ -312,10 +312,11 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         )
 
         init {
+            val global = presetGlobal()
             localeWidget.value = Locale.getDefault()
-            resolutionWidget.value = PRESET_GLOBAL.resolution
-            fpsWidget.value = PRESET_GLOBAL.fps
-            timecodeFormatWidget.value = PRESET_GLOBAL.timecodeFormat
+            resolutionWidget.value = global.resolution
+            fpsWidget.value = global.fps
+            timecodeFormatWidget.value = global.timecodeFormat
             // Populate the timecode format combo box.
             onChange(fpsWidget)
         }

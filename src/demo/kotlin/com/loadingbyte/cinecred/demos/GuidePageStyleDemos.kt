@@ -4,9 +4,9 @@ import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.demo.StyleSettingsDemo
 import com.loadingbyte.cinecred.demo.StyleSettingsVideoDemo
 import com.loadingbyte.cinecred.demo.parseCreditsPS
-import com.loadingbyte.cinecred.project.PRESET_PAGE_STYLE
 import com.loadingbyte.cinecred.project.PageBehavior
 import com.loadingbyte.cinecred.project.PageStyle
+import com.loadingbyte.cinecred.project.presetPageStyle
 import com.loadingbyte.cinecred.project.st
 
 
@@ -28,7 +28,7 @@ object GuidePageStyleNameDemo : StyleSettingsDemo<PageStyle>(
     listOf(PageStyle::name.st())
 ) {
     override fun styles() = buildList<PageStyle> {
-        this += PRESET_PAGE_STYLE.copy(name = l10n("project.PageBehavior.SCROLL"))
+        this += presetPageStyle().copy(name = l10n("project.PageBehavior.SCROLL"))
     }
 }
 
@@ -38,9 +38,9 @@ object GuidePageStyleSubsequentGapDemo : StyleSettingsVideoDemo<PageStyle>(
     listOf(PageStyle::subsequentGapFrames.st())
 ) {
     override fun styles() = buildList<PageStyle> {
-        this += PRESET_PAGE_STYLE.copy(name = "Demo", subsequentGapFrames = 30)
-        this += PRESET_PAGE_STYLE.copy(name = "Demo", subsequentGapFrames = 0)
-        this += PRESET_PAGE_STYLE.copy(name = "Demo", subsequentGapFrames = -45)
+        this += presetPageStyle().copy(name = "Demo", subsequentGapFrames = 30)
+        this += presetPageStyle().copy(name = "Demo", subsequentGapFrames = 0)
+        this += presetPageStyle().copy(name = "Demo", subsequentGapFrames = -45)
     }
 
     override fun credits(style: PageStyle) = """
@@ -58,7 +58,7 @@ object GuidePageStyleBehaviorDemo : StyleSettingsDemo<PageStyle>(
     listOf(PageStyle::behavior.st())
 ) {
     override fun styles() = buildList<PageStyle> {
-        this += PRESET_PAGE_STYLE.copy(behavior = PageBehavior.CARD)
+        this += presetPageStyle().copy(behavior = PageBehavior.CARD)
         this += last().copy(behavior = PageBehavior.SCROLL)
     }
 
@@ -71,7 +71,7 @@ object GuidePageStyleCardRuntimeDemo : StyleSettingsVideoDemo<PageStyle>(
     listOf(PageStyle::cardRuntimeFrames.st())
 ) {
     override fun styles() = buildList<PageStyle> {
-        this += PRESET_PAGE_STYLE.copy(name = "Demo", behavior = PageBehavior.CARD, cardRuntimeFrames = 60)
+        this += presetPageStyle().copy(name = "Demo", behavior = PageBehavior.CARD, cardRuntimeFrames = 60)
         this += last().copy(cardRuntimeFrames = 120)
     }
 
@@ -91,7 +91,7 @@ object GuidePageStyleCardFadeDemo : StyleSettingsVideoDemo<PageStyle>(
 ) {
     override fun styles() = buildList<PageStyle> {
         val linear = l10n("linear")
-        this += PRESET_PAGE_STYLE.copy(
+        this += presetPageStyle().copy(
             name = "Demo", subsequentGapFrames = 0, behavior = PageBehavior.CARD, cardRuntimeFrames = 90,
             cardFadeInFrames = 0, cardFadeInTransitionStyleName = linear,
             cardFadeOutFrames = 0, cardFadeOutTransitionStyleName = linear
@@ -114,7 +114,7 @@ object GuidePageStyleScrollPerFrameDemo : StyleSettingsVideoDemo<PageStyle>(
     listOf(PageStyle::scrollPxPerFrame.st())
 ) {
     override fun styles() = buildList<PageStyle> {
-        this += PRESET_PAGE_STYLE.copy(name = "Demo", behavior = PageBehavior.SCROLL, scrollPxPerFrame = 3.0)
+        this += presetPageStyle().copy(name = "Demo", behavior = PageBehavior.SCROLL, scrollPxPerFrame = 3.0)
         this += last().copy(scrollPxPerFrame = 6.0)
     }
 

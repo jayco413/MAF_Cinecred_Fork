@@ -32,7 +32,7 @@ inline fun <R> withDemoProjectDir(block: (Path) -> R): R {
 
 
 fun template(locale: Locale) =
-    Template(locale, PRESET_GLOBAL.resolution, PRESET_GLOBAL.fps, PRESET_GLOBAL.timecodeFormat, sample = true)
+    Template(locale, presetGlobal().resolution, presetGlobal().fps, presetGlobal().timecodeFormat, sample = true)
 
 val TEMPLATE_SPREADSHEET: Spreadsheet by lazy {
     withDemoProjectDir { projectDir ->
@@ -118,7 +118,7 @@ fun String.parseCreditsCS(vararg contStyles: ContentStyle, resolution: Resolutio
 
 fun String.parseCreditsLS(vararg letterStyles: LetterStyle): Pair<Global, List<Page>> {
     val styling = Styling(
-        PRESET_GLOBAL, persistentListOf(), persistentListOf(), letterStyles.asList().toPersistentList(),
+        presetGlobal(), persistentListOf(), persistentListOf(), letterStyles.asList().toPersistentList(),
         persistentListOf(), persistentListOf(), persistentListOf()
     )
     return parseCredits(styling)

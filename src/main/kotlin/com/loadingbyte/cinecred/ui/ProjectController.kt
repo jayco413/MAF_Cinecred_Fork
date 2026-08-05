@@ -450,16 +450,17 @@ class ProjectController(
         styles: List<PageStyle>, log: List<ParserMsg>
     ): PersistentList<PageStyle>? {
         fun <SUBJ : Any> clearSetting(style: PageStyle, setting: DirectStyleSetting<PageStyle, SUBJ>): PageStyle =
-            style.copy(setting.notarize(setting.get(PRESET_PAGE_STYLE)))
+            style.copy(setting.notarize(setting.get(presetPageStyle())))
 
         val legacySettings = arrayOf(PageStyle::scrollMeltWithPrev.st(), PageStyle::scrollMeltWithNext.st())
         val usedLegacySettings = log.mapNotNullTo(HashSet(), ParserMsg::migrationDataSource)
+        val presetPageStyle = presetPageStyle()
 
         var clearedStyles: MutableList<PageStyle>? = null
         for ((idx, style) in styles.withIndex()) {
             var clearedStyle = style
             for (st in legacySettings)
-                if (st.get(style) != st.get(PRESET_PAGE_STYLE) && MigrationDataSource(style, st) !in usedLegacySettings)
+                if (st.get(style) != st.get(presetPageStyle) && MigrationDataSource(style, st) !in usedLegacySettings)
                     clearedStyle = clearSetting(clearedStyle, st)
             if (clearedStyle !== style) {
                 if (clearedStyles == null)

@@ -6,7 +6,7 @@ import com.loadingbyte.cinecred.demo.VideoDemo
 import com.loadingbyte.cinecred.demo.parseCreditsCS
 import com.loadingbyte.cinecred.demo.parseCreditsPS
 import com.loadingbyte.cinecred.project.HJustify
-import com.loadingbyte.cinecred.project.PRESET_CONTENT_STYLE
+import com.loadingbyte.cinecred.project.presetContentStyle
 import kotlinx.collections.immutable.persistentListOf
 
 
@@ -258,4 +258,4 @@ Best Boy,Francesco Foreman,,
 }
 
 
-private val demoCS = PRESET_CONTENT_STYLE.copy(name = "Demo", bodyLetterStyleName = "Name")
+private val demoCS = presetContentStyle().copy(name = "Demo", bodyLetterStyleName = "Name")

@@ -159,7 +159,7 @@ private fun drawHorizontalBlocks(
                 if (lineIdx == leaderLineIdx) {
                     val drawnBodyLine = drawnBody.selectLine(vJustifyBodyFrag, isHead)
                     val leaderLetterStyle = styling.letterStyles.find { it.name == leaderLetterStyleName }
-                        ?: PLACEHOLDER_LETTER_STYLE
+                        ?: placeholderLetterStyle()
                     val leaderFmtStr = format(leader, leaderLetterStyle, styling)
                     drawLeader(
                         leaderFmtStr,

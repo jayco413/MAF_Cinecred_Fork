@@ -249,7 +249,7 @@ private val TIMECODE_REGEX = Regex("\\[([0-9]+)s]")
 
 
 private fun emptyStyling(template: Template) = Styling(
-    global = PRESET_GLOBAL.copy(
+    global = presetGlobal().copy(
         resolution = template.resolution,
         fps = template.fps,
         timecodeFormat = template.timecodeFormat,
@@ -261,7 +261,7 @@ private fun emptyStyling(template: Template) = Styling(
     contentStyles = persistentListOf(),
     letterStyles = persistentListOf(),
     transitionStyles = persistentListOf(
-        PRESET_TRANSITION_STYLE.copy(
+        presetTransitionStyle().copy(
             name = l10n("linear", template.locale)
         )
     ),
@@ -271,7 +271,7 @@ private fun emptyStyling(template: Template) = Styling(
 
 private fun sampleStyling(template: Template) = emptyStyling(template).copy(
     pageStyles = persistentListOf(
-        PRESET_PAGE_STYLE.copy(
+        presetPageStyle().copy(
             name = l10n("project.PageBehavior.CARD", template.locale),
             subsequentGapFrames = template.fps.run { roundingDiv(numerator, denominator) },
             behavior = PageBehavior.CARD,
@@ -281,7 +281,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             cardFadeOutFrames = template.fps.run { roundingDiv(numerator, 2 * denominator) },
             cardFadeOutTransitionStyleName = l10n("linear", template.locale)
         ),
-        PRESET_PAGE_STYLE.copy(
+        presetPageStyle().copy(
             name = l10n("project.PageBehavior.SCROLL", template.locale),
             subsequentGapFrames = template.fps.run { roundingDiv(numerator, denominator) },
             behavior = PageBehavior.SCROLL,
@@ -289,17 +289,17 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
         )
     ),
     contentStyles = persistentListOf(
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleHeading", template.locale),
             bodyLetterStyleName = l10n("project.template.contentStyleHeading", template.locale),
             bodyLayout = BodyLayout.GRID
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleSubheading", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
             bodyLayout = BodyLayout.GRID
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleGutter", template.locale),
             blockOrientation = BlockOrientation.HORIZONTAL,
             spineAttachment = SpineAttachment.HEAD_GAP_CENTER,
@@ -313,7 +313,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             headHJustify = HJustify.RIGHT,
             headGapPx = 24.0
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleBullets", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleName", template.locale),
             bodyLayout = BodyLayout.FLOW,
@@ -323,7 +323,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             headLetterStyleName = Override(l10n("project.template.letterStyleSmall", template.locale)),
             headGapPx = 4.0
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleTabular", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleName", template.locale),
             bodyLayout = BodyLayout.GRID,
@@ -332,7 +332,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             gridCellHJustifyPerCol = persistentListOf(HJustify.LEFT, HJustify.CENTER, HJustify.RIGHT),
             gridColGapPx = 32.0
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleSong", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleSmall", template.locale),
             bodyLayout = BodyLayout.GRID,
@@ -340,7 +340,7 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             headLetterStyleName = Override(l10n("project.template.letterStyleSongTitle", template.locale)),
             headGapPx = 0.0
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleLogos", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleNormal", template.locale),
             bodyLayout = BodyLayout.FLOW,
@@ -349,14 +349,14 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
             flowCellHGapPx = 96.0,
             flowSeparator = ""
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.template.contentStyleBlurb", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleNormal", template.locale),
             bodyLayout = BodyLayout.PARAGRAPHS,
             paragraphsLineWidthPx = 500.0,
             paragraphsParaGapPx = 8.0
         ),
-        PRESET_CONTENT_STYLE.copy(
+        presetContentStyle().copy(
             name = l10n("project.PageBehavior.CARD", template.locale),
             bodyLetterStyleName = l10n("project.template.letterStyleCardName", template.locale),
             bodyLayout = BodyLayout.GRID,
@@ -369,63 +369,63 @@ private fun sampleStyling(template: Template) = emptyStyling(template).copy(
         )
     ),
     letterStyles = persistentListOf(
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.letterStyleNormal", template.locale),
             font = FontRef("Archivo Narrow Regular"),
             heightPx = 32.0
         ),
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.letterStyleSmall", template.locale),
             font = FontRef("Archivo Narrow Regular"),
             heightPx = 24.0
         ),
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.contentStyleHeading", template.locale),
             font = FontRef("Archivo Narrow Regular"),
             heightPx = 32.0,
             trackingEm = 0.05,
             layers = persistentListOf(
-                PRESET_LAYER.copy(
+                presetLayer().copy(
                     name = l10n("project.LayerShape.TEXT", template.locale),
                     shape = LayerShape.TEXT
                 ),
-                PRESET_LAYER.copy(
+                presetLayer().copy(
                     name = l10n("project.StripePreset.UNDERLINE", template.locale),
                     shape = LayerShape.STRIPE,
                     stripePreset = StripePreset.UNDERLINE
                 )
             )
         ),
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.letterStyleName", template.locale),
             font = FontRef("Archivo Narrow Bold"),
             heightPx = 32.0
         ),
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.letterStyleSongTitle", template.locale),
             font = FontRef("Archivo Narrow Bold"),
             heightPx = 32.0,
             smallCaps = SmallCaps.SMALL_CAPS
         ),
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.letterStyleCardName", template.locale),
             font = FontRef("Archivo Narrow Bold"),
             heightPx = 100.0
         ),
-        PRESET_LETTER_STYLE.copy(
+        presetLetterStyle().copy(
             name = l10n("project.template.letterStyleCardSmall", template.locale),
             font = FontRef("Archivo Narrow Regular"),
             heightPx = 50.0
         )
     ),
     pictureStyles = persistentListOf(
-        PRESET_PICTURE_STYLE.copy(
+        presetPictureStyle().copy(
             name = "Cinecred H",
             picture = PictureRef("Cinecred H.svg"),
             heightPx = Override(90.0),
             cropBlankSpace = true
         ),
-        PRESET_PICTURE_STYLE.copy(
+        presetPictureStyle().copy(
             name = "Cinecred V",
             picture = PictureRef("Cinecred V.svg"),
             heightPx = Override(150.0),

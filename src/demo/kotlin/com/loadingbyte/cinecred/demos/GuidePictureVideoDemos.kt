@@ -126,7 +126,7 @@ object GuidePictureVideoPictureNameDemo : StyleSettingsDemo<PictureStyle>(
     listOf(PictureStyle::name.st())
 ) {
     override fun styles() = buildList<PictureStyle> {
-        this += PRESET_PICTURE_STYLE.copy(name = "Cinecred Cropped")
+        this += presetPictureStyle().copy(name = "Cinecred Cropped")
     }
 }
 
@@ -136,7 +136,7 @@ object GuidePictureVideoVideoNameDemo : StyleSettingsDemo<TapeStyle>(
     listOf(TapeStyle::name.st())
 ) {
     override fun styles() = buildList<TapeStyle> {
-        this += PRESET_TAPE_STYLE.copy(name = "Blooper")
+        this += presetTapeStyle().copy(name = "Blooper")
     }
 }
 
@@ -153,7 +153,7 @@ object GuidePictureVideoPictureFileDemo : StyleSettingsDemo<PictureStyle>(
     }
 
     override fun styles() = buildList<PictureStyle> {
-        this += PRESET_PICTURE_STYLE.copy(picture = PictureRef(pictureLoaders[0]))
+        this += presetPictureStyle().copy(picture = PictureRef(pictureLoaders[0]))
     }
 }
 
@@ -170,7 +170,7 @@ object GuidePictureVideoVideoFileDemo : StyleSettingsDemo<TapeStyle>(
     }
 
     override fun styles() = buildList<TapeStyle> {
-        this += PRESET_TAPE_STYLE.copy(tape = TapeRef(tapes[0]))
+        this += presetTapeStyle().copy(tape = TapeRef(tapes[0]))
     }
 }
 
@@ -230,7 +230,7 @@ object GuidePictureVideoResamplingFilterDemo : StyleSettingsDemo<PictureStyle>(
 ) {
     override fun styles() = buildList<PictureStyle> {
         for (resamplingFilter in ResamplingFilter.entries)
-            this += PRESET_PICTURE_STYLE.copy(
+            this += presetPictureStyle().copy(
                 name = "slate", picture = PictureRef(SLATE_PIC), widthPx = Override(200.0),
                 resamplingFilter = resamplingFilter
             )
@@ -356,13 +356,13 @@ object GuidePictureVideoVideoInterpretationDemo : StyleSettingsVideoDemo<TapeSty
 }
 
 
-private val PIC_STYLE = PRESET_PICTURE_STYLE.copy("logo.svg", picture = PictureRef(LOGO_PIC))
+private val PIC_STYLE = presetPictureStyle().copy("logo.svg", picture = PictureRef(LOGO_PIC))
 private const val PIC_SPREADSHEET = """
 @Body
 {{Pic logo.svg}}
         """
 
-private val TAPE_STYLE = PRESET_TAPE_STYLE.copy("rainbow", tape = TapeRef(RAINBOW_TAPE))
+private val TAPE_STYLE = presetTapeStyle().copy("rainbow", tape = TapeRef(RAINBOW_TAPE))
 private const val TAPE_SPREADSHEET = """
 @Body
 {{Video rainbow}}

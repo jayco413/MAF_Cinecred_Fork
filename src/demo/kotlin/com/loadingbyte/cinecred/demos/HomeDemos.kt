@@ -7,7 +7,7 @@ import com.loadingbyte.cinecred.delivery.*
 import com.loadingbyte.cinecred.demo.*
 import com.loadingbyte.cinecred.project.Global
 import com.loadingbyte.cinecred.project.Override
-import com.loadingbyte.cinecred.project.PRESET_GLOBAL
+import com.loadingbyte.cinecred.project.presetGlobal
 import com.loadingbyte.cinecred.project.st
 import com.loadingbyte.cinecred.ui.comms.CreditsId
 import com.loadingbyte.cinecred.ui.comms.DockableId.*
@@ -186,8 +186,8 @@ private fun DeliveryDockable.addDummyRenderJob(videoOrStills: Boolean, format: R
         l10n("ui.deliverConfig.pagesAll"),
         if (videoOrStills) RenderFormatCategory.VIDEO else RenderFormatCategory.WHOLE_PAGE,
         format.label,
-        PRESET_GLOBAL.resolution.run { "$widthPx \u00D7 $heightPx" },
-        "${PRESET_GLOBAL.fps}p",
+        presetGlobal().resolution.run { "$widthPx \u00D7 $heightPx" },
+        "${presetGlobal().fps}p",
         "${RenderFormat.Property.PRIMARIES.standardDefault} / ${RenderFormat.Property.TRANSFER.standardDefault}",
         dest
     )
