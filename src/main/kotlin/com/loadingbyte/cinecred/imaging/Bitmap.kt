@@ -6,6 +6,7 @@ import com.loadingbyte.cinecred.common.ceilDiv
 import jdk.incubator.vector.FloatVector
 import org.bytedeco.ffmpeg.avutil.AVFrame
 import org.bytedeco.ffmpeg.avutil.AVFrame.*
+import org.bytedeco.ffmpeg.avutil.AVPixFmtDescriptor
 import org.bytedeco.ffmpeg.global.avutil.*
 import org.bytedeco.javacpp.BytePointer
 import java.lang.Byte.toUnsignedInt
@@ -16,7 +17,6 @@ import java.lang.foreign.ValueLayout
 import java.lang.foreign.ValueLayout.*
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicReferenceArray
 import kotlin.math.max
 
 
@@ -701,7 +701,8 @@ class Bitmap private constructor(
 
     class PixelFormat private constructor(
         /** One of the `AV_PIX_FMT_*` constants. */
-        val code: Int
+        val code: Int,
+        desc: AVPixFmtDescriptor
     ) {
 
         val name: String
@@ -718,14 +719,7 @@ class Bitmap private constructor(
         val planes: Int
 
         init {
-            val desc = av_pix_fmt_desc_get(code)
-                .ffmpegThrowIfNull("Could not retrieve pixel format descriptor")
             val f = desc.flags()
-
-            require(code != AV_PIX_FMT_XYZ12LE && code != AV_PIX_FMT_XYZ12BE) { "XYZ pixel formats are not supported." }
-            require(f and AV_PIX_FMT_FLAG_PAL.toLong() == 0L) { "Palette pixel formats are not supported." }
-            require(f and AV_PIX_FMT_FLAG_BAYER.toLong() == 0L) { "Bayer pixel formats are not supported." }
-            require(f and AV_PIX_FMT_FLAG_HWACCEL.toLong() == 0L) { "Hardware accel pixel formats are not supported." }
 
             name = desc.name().string
             isBitstream = f and AV_PIX_FMT_FLAG_BITSTREAM.toLong() != 0L
@@ -793,13 +787,27 @@ class Bitmap private constructor(
 
         companion object {
 
-            private val cache = AtomicReferenceArray<PixelFormat>(AV_PIX_FMT_NB)
-
-            fun of(code: Int): PixelFormat {
-                cache.get(code)?.let { return it }
-                cache.compareAndSet(code, null, PixelFormat(code))
-                return cache.get(code)
+            private val LOOKUP = Array(AV_PIX_FMT_NB) { code ->
+                val desc = av_pix_fmt_desc_get(code)
+                    .ffmpegThrowIfNull("Could not retrieve pixel format descriptor")
+                val f = desc.flags()
+                if (f and AV_PIX_FMT_FLAG_XYZ.toLong() != 0L ||
+                    f and AV_PIX_FMT_FLAG_PAL.toLong() != 0L ||
+                    f and AV_PIX_FMT_FLAG_BAYER.toLong() != 0L ||
+                    f and AV_PIX_FMT_FLAG_HWACCEL.toLong() != 0L
+                )
+                    null
+                else
+                    PixelFormat(code, desc)
             }
+
+            val ALL: List<PixelFormat> =
+                LOOKUP.filterNotNull()
+
+            fun of(code: Int): PixelFormat =
+                LOOKUP[code] ?: throw IllegalArgumentException(
+                    "XYZ, palette, Bayer, and hardware acceleration pixel formats are not supported."
+                )
 
         }
 

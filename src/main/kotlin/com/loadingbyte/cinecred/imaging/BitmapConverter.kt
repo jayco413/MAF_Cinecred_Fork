@@ -670,7 +670,7 @@ class BitmapConverter(
             val isSupportedByPFAsClean = isGF || isGBRPF || isGBRAPF
             val isSupportedBySwsAsInput = sws_isSupportedInput(px.code) != 0
             val isSupportedBySwsAsOutput = sws_isSupportedOutput(px.code) != 0
-            val isSupportedByZimg: Boolean
+            val isSupportedByZimg = px in ZimgStage.SUPPORTED_PIXEL_FORMATS
 
             init {
                 val depth = px.components[0].depth
@@ -690,7 +690,6 @@ class BitmapConverter(
                                         )
                             }
                 isSupportedByPFAsDirty = isCanonical && numComps != 2 && px.family != YUV
-                isSupportedByZimg = isCanonical && px.isPlanar && px.byteOrder == ByteOrder.nativeOrder()
             }
 
             fun hasSameCompositionAsExAlpha(other: Fmt): Boolean =
@@ -2163,244 +2162,38 @@ class BitmapConverter(
 
         companion object {
 
+            val SUPPORTED_PIXEL_FORMATS: List<Bitmap.PixelFormat> =
+                Bitmap.PixelFormat.ALL.filter { pixFmt ->
+                    val depth = try {
+                        pixFmt.depth
+                    } catch (_: Exception) {
+                        return@filter false
+                    }
+                    val compSize = if (depth <= 8) 1 else if (depth <= 16) 2 else 4
+                    pixFmt.isPlanar && !pixFmt.isBitstream && pixFmt.byteOrder == NBO &&
+                            pixFmt.components.all { it.step == compSize && it.offset == 0 && it.shift == 0 }
+                }
+
+            private val ZIMG_SUPP_EQUIV = IntArray(AV_PIX_FMT_NB) { -1 }
+
+            init {
+                for (pixFmt in Bitmap.PixelFormat.ALL)
+                    SUPPORTED_PIXEL_FORMATS
+                        .filter { suppPixFmt ->
+                            pixFmt.family == suppPixFmt.family &&
+                                    pixFmt.hasAlpha == suppPixFmt.hasAlpha &&
+                                    pixFmt.isFloat == suppPixFmt.isFloat &&
+                                    pixFmt.hChromaSub == suppPixFmt.hChromaSub &&
+                                    pixFmt.vChromaSub == suppPixFmt.vChromaSub &&
+                                    pixFmt.components.size == suppPixFmt.components.size &&
+                                    pixFmt.components.zip(suppPixFmt.components).all { (c, sc) -> c.depth <= sc.depth }
+                        }.minByOrNull { suppPixFmt -> suppPixFmt.depth }
+                        ?.let { suppPixFmt -> ZIMG_SUPP_EQUIV[pixFmt.code] = suppPixFmt.code }
+            }
+
             /** Returns a planar and native-endian pixel format that the given format can be losslessly converted to. */
             fun equiv(pixelFormat: Bitmap.PixelFormat) =
                 Bitmap.PixelFormat.of(ZIMG_SUPP_EQUIV[pixelFormat.code])
-
-            private val ZIMG_SUPP_EQUIV = IntArray(AV_PIX_FMT_NB).also { eq ->
-                eq.fill(-2)
-                eq[AV_PIX_FMT_YUV420P] = AV_PIX_FMT_YUV420P
-                eq[AV_PIX_FMT_YUYV422] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_RGB24] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR24] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_YUV422P] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_YUV444P] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_YUV410P] = AV_PIX_FMT_YUV410P
-                eq[AV_PIX_FMT_YUV411P] = AV_PIX_FMT_YUV411P
-                eq[AV_PIX_FMT_GRAY8] = AV_PIX_FMT_GRAY8
-                eq[AV_PIX_FMT_MONOWHITE] = AV_PIX_FMT_GRAY8
-                eq[AV_PIX_FMT_MONOBLACK] = AV_PIX_FMT_GRAY8
-                eq[AV_PIX_FMT_PAL8] = -1
-                eq[AV_PIX_FMT_YUVJ420P] = AV_PIX_FMT_YUVJ420P
-                eq[AV_PIX_FMT_YUVJ422P] = AV_PIX_FMT_YUVJ422P
-                eq[AV_PIX_FMT_YUVJ444P] = AV_PIX_FMT_YUVJ444P
-                eq[AV_PIX_FMT_UYVY422] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_UYYVYY411] = AV_PIX_FMT_YUV411P
-                eq[AV_PIX_FMT_BGR8] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR4] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR4_BYTE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB8] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB4] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB4_BYTE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_NV12] = AV_PIX_FMT_YUV420P
-                eq[AV_PIX_FMT_NV21] = AV_PIX_FMT_YUV420P
-                eq[AV_PIX_FMT_ARGB] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_RGBA] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_ABGR] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_BGRA] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_GRAY16BE] = AV_PIX_FMT_GRAY16BE
-                eq[AV_PIX_FMT_GRAY16LE] = AV_PIX_FMT_GRAY16LE
-                eq[AV_PIX_FMT_YUV440P] = AV_PIX_FMT_YUV440P
-                eq[AV_PIX_FMT_YUVJ440P] = AV_PIX_FMT_YUVJ440P
-                eq[AV_PIX_FMT_YUVA420P] = AV_PIX_FMT_YUVA420P
-                eq[AV_PIX_FMT_RGB48BE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_RGB48LE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_RGB565BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB565LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB555BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB555LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR565BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR565LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR555BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR555LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_VAAPI] = -1
-                eq[AV_PIX_FMT_YUV420P16LE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_YUV420P16BE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_YUV422P16LE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_YUV422P16BE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_YUV444P16LE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_YUV444P16BE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_DXVA2_VLD] = -1
-                eq[AV_PIX_FMT_RGB444LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB444BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR444LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR444BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_YA8] = -1
-                eq[AV_PIX_FMT_BGR48BE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_BGR48LE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_YUV420P9BE] = AV_PIX_FMT_YUV420P9
-                eq[AV_PIX_FMT_YUV420P9LE] = AV_PIX_FMT_YUV420P9
-                eq[AV_PIX_FMT_YUV420P10BE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_YUV420P10LE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_YUV422P10BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_YUV422P10LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_YUV444P9BE] = AV_PIX_FMT_YUV444P9
-                eq[AV_PIX_FMT_YUV444P9LE] = AV_PIX_FMT_YUV444P9
-                eq[AV_PIX_FMT_YUV444P10BE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_YUV444P10LE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_YUV422P9BE] = AV_PIX_FMT_YUV422P9
-                eq[AV_PIX_FMT_YUV422P9LE] = AV_PIX_FMT_YUV422P9
-                eq[AV_PIX_FMT_GBRP] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_GBRP9BE] = AV_PIX_FMT_GBRP9
-                eq[AV_PIX_FMT_GBRP9LE] = AV_PIX_FMT_GBRP9
-                eq[AV_PIX_FMT_GBRP10BE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_GBRP10LE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_GBRP16BE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_GBRP16LE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_YUVA422P] = AV_PIX_FMT_YUVA422P
-                eq[AV_PIX_FMT_YUVA444P] = AV_PIX_FMT_YUVA444P
-                eq[AV_PIX_FMT_YUVA420P9BE] = AV_PIX_FMT_YUVA420P9
-                eq[AV_PIX_FMT_YUVA420P9LE] = AV_PIX_FMT_YUVA420P9
-                eq[AV_PIX_FMT_YUVA422P9BE] = AV_PIX_FMT_YUVA422P9
-                eq[AV_PIX_FMT_YUVA422P9LE] = AV_PIX_FMT_YUVA422P9
-                eq[AV_PIX_FMT_YUVA444P9BE] = AV_PIX_FMT_YUVA444P9
-                eq[AV_PIX_FMT_YUVA444P9LE] = AV_PIX_FMT_YUVA444P9
-                eq[AV_PIX_FMT_YUVA420P10BE] = AV_PIX_FMT_YUVA420P10
-                eq[AV_PIX_FMT_YUVA420P10LE] = AV_PIX_FMT_YUVA420P10
-                eq[AV_PIX_FMT_YUVA422P10BE] = AV_PIX_FMT_YUVA422P10
-                eq[AV_PIX_FMT_YUVA422P10LE] = AV_PIX_FMT_YUVA422P10
-                eq[AV_PIX_FMT_YUVA444P10BE] = AV_PIX_FMT_YUVA444P10
-                eq[AV_PIX_FMT_YUVA444P10LE] = AV_PIX_FMT_YUVA444P10
-                eq[AV_PIX_FMT_YUVA420P16BE] = AV_PIX_FMT_YUVA420P16
-                eq[AV_PIX_FMT_YUVA420P16LE] = AV_PIX_FMT_YUVA420P16
-                eq[AV_PIX_FMT_YUVA422P16BE] = AV_PIX_FMT_YUVA422P16
-                eq[AV_PIX_FMT_YUVA422P16LE] = AV_PIX_FMT_YUVA422P16
-                eq[AV_PIX_FMT_YUVA444P16BE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_YUVA444P16LE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_VDPAU] = -1
-                eq[AV_PIX_FMT_XYZ12LE] = AV_PIX_FMT_XYZ12
-                eq[AV_PIX_FMT_XYZ12BE] = AV_PIX_FMT_XYZ12
-                eq[AV_PIX_FMT_NV16] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_NV20LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_NV20BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_RGBA64BE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_RGBA64LE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_BGRA64BE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_BGRA64LE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_YVYU422] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_YA16BE] = -1
-                eq[AV_PIX_FMT_YA16LE] = -1
-                eq[AV_PIX_FMT_GBRAP] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_GBRAP16BE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_GBRAP16LE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_QSV] = -1
-                eq[AV_PIX_FMT_MMAL] = -1
-                eq[AV_PIX_FMT_D3D11VA_VLD] = -1
-                eq[AV_PIX_FMT_CUDA] = -1
-                eq[AV_PIX_FMT_0RGB] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB0] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_0BGR] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR0] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_YUV420P12BE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_YUV420P12LE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_YUV420P14BE] = AV_PIX_FMT_YUV420P14
-                eq[AV_PIX_FMT_YUV420P14LE] = AV_PIX_FMT_YUV420P14
-                eq[AV_PIX_FMT_YUV422P12BE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_YUV422P12LE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_YUV422P14BE] = AV_PIX_FMT_YUV422P14
-                eq[AV_PIX_FMT_YUV422P14LE] = AV_PIX_FMT_YUV422P14
-                eq[AV_PIX_FMT_YUV444P12BE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_YUV444P12LE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_YUV444P14BE] = AV_PIX_FMT_YUV444P14
-                eq[AV_PIX_FMT_YUV444P14LE] = AV_PIX_FMT_YUV444P14
-                eq[AV_PIX_FMT_GBRP12BE] = AV_PIX_FMT_GBRP12
-                eq[AV_PIX_FMT_GBRP12LE] = AV_PIX_FMT_GBRP12
-                eq[AV_PIX_FMT_GBRP14BE] = AV_PIX_FMT_GBRP14
-                eq[AV_PIX_FMT_GBRP14LE] = AV_PIX_FMT_GBRP14
-                eq[AV_PIX_FMT_YUVJ411P] = AV_PIX_FMT_YUVJ411P
-                eq[AV_PIX_FMT_BAYER_BGGR8] = -1
-                eq[AV_PIX_FMT_BAYER_RGGB8] = -1
-                eq[AV_PIX_FMT_BAYER_GBRG8] = -1
-                eq[AV_PIX_FMT_BAYER_GRBG8] = -1
-                eq[AV_PIX_FMT_BAYER_BGGR16LE] = -1
-                eq[AV_PIX_FMT_BAYER_BGGR16BE] = -1
-                eq[AV_PIX_FMT_BAYER_RGGB16LE] = -1
-                eq[AV_PIX_FMT_BAYER_RGGB16BE] = -1
-                eq[AV_PIX_FMT_BAYER_GBRG16LE] = -1
-                eq[AV_PIX_FMT_BAYER_GBRG16BE] = -1
-                eq[AV_PIX_FMT_BAYER_GRBG16LE] = -1
-                eq[AV_PIX_FMT_BAYER_GRBG16BE] = -1
-                eq[AV_PIX_FMT_YUV440P10LE] = AV_PIX_FMT_YUV440P10
-                eq[AV_PIX_FMT_YUV440P10BE] = AV_PIX_FMT_YUV440P10
-                eq[AV_PIX_FMT_YUV440P12LE] = AV_PIX_FMT_YUV440P12
-                eq[AV_PIX_FMT_YUV440P12BE] = AV_PIX_FMT_YUV440P12
-                eq[AV_PIX_FMT_AYUV64LE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_AYUV64BE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_VIDEOTOOLBOX] = -1
-                eq[AV_PIX_FMT_P010LE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_P010BE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_GBRAP12BE] = AV_PIX_FMT_GBRAP12
-                eq[AV_PIX_FMT_GBRAP12LE] = AV_PIX_FMT_GBRAP12
-                eq[AV_PIX_FMT_GBRAP10BE] = AV_PIX_FMT_GBRAP10
-                eq[AV_PIX_FMT_GBRAP10LE] = AV_PIX_FMT_GBRAP10
-                eq[AV_PIX_FMT_MEDIACODEC] = -1
-                eq[AV_PIX_FMT_GRAY12BE] = AV_PIX_FMT_GRAY12
-                eq[AV_PIX_FMT_GRAY12LE] = AV_PIX_FMT_GRAY12
-                eq[AV_PIX_FMT_GRAY10BE] = AV_PIX_FMT_GRAY10
-                eq[AV_PIX_FMT_GRAY10LE] = AV_PIX_FMT_GRAY10
-                eq[AV_PIX_FMT_P016LE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_P016BE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_D3D11] = -1
-                eq[AV_PIX_FMT_GRAY9BE] = AV_PIX_FMT_GRAY9
-                eq[AV_PIX_FMT_GRAY9LE] = AV_PIX_FMT_GRAY9
-                eq[AV_PIX_FMT_GBRPF32BE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_GBRPF32LE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_GBRAPF32BE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_GBRAPF32LE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_DRM_PRIME] = -1
-                eq[AV_PIX_FMT_OPENCL] = -1
-                eq[AV_PIX_FMT_GRAY14BE] = AV_PIX_FMT_GRAY14
-                eq[AV_PIX_FMT_GRAY14LE] = AV_PIX_FMT_GRAY14
-                eq[AV_PIX_FMT_GRAYF32BE] = AV_PIX_FMT_GRAYF32
-                eq[AV_PIX_FMT_GRAYF32LE] = AV_PIX_FMT_GRAYF32
-                eq[AV_PIX_FMT_YUVA422P12BE] = AV_PIX_FMT_YUVA422P12
-                eq[AV_PIX_FMT_YUVA422P12LE] = AV_PIX_FMT_YUVA422P12
-                eq[AV_PIX_FMT_YUVA444P12BE] = AV_PIX_FMT_YUVA444P12
-                eq[AV_PIX_FMT_YUVA444P12LE] = AV_PIX_FMT_YUVA444P12
-                eq[AV_PIX_FMT_NV24] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_NV42] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_VULKAN] = -1
-                eq[AV_PIX_FMT_Y210BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_Y210LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_X2RGB10LE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_X2RGB10BE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_X2BGR10LE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_X2BGR10BE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_P210BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_P210LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_P410BE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_P410LE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_P216BE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_P216LE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_P416BE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_P416LE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_VUYA] = AV_PIX_FMT_YUVA444P
-                eq[AV_PIX_FMT_RGBAF16BE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_RGBAF16LE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_VUYX] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_P012LE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_P012BE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_Y212BE] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_Y212LE] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_XV30BE] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_XV30LE] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_XV36BE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_XV36LE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_RGBF32BE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_RGBF32LE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_RGBAF32BE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_RGBAF32LE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_P212BE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_P212LE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_P412BE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_P412LE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_GBRAP14BE] = AV_PIX_FMT_GBRAP14
-                eq[AV_PIX_FMT_GBRAP14LE] = AV_PIX_FMT_GBRAP14
-                eq[AV_PIX_FMT_D3D12] = -1
-                for (code in eq.indices)
-                    if (eq[code] == -2)
-                        throw NotImplementedError("@Developer: please add entry for $code to zimg-equiv pix fmt table.")
-            }
 
         }
 
