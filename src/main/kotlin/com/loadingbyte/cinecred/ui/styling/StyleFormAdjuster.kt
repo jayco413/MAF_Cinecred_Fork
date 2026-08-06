@@ -238,7 +238,7 @@ class StyleFormAdjuster(
         constraintViolations?.let { violations ->
             curForm.clearIssues()
             for (violation in violations)
-                if (violation.leafStyle === curStyle) {
+                if (violation.leafStyle.identity == curStyle.identity) {
                     val issue = Form.Notice(violation.severity, violation.msg)
                     curForm.showIssueIfMoreSevere(violation.leafSetting, violation.leafSubjectIndex, issue)
                 }

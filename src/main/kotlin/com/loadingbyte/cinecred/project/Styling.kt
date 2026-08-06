@@ -41,7 +41,10 @@ data class Styling(
 }
 
 
-sealed interface Style
+sealed interface Style {
+    /** This UUID stays the same when the style is modified, and can hence be used to track it through edits. */
+    val identity: UUID
+}
 
 
 sealed interface NamedStyle : Style {
@@ -77,6 +80,7 @@ sealed interface LayerStyle : NamedStyle, NestedStyle {
 
 
 data class Global(
+    override val identity: UUID,
     val resolution: Resolution,
     val fps: FPS,
     val timecodeFormat: TimecodeFormat,
@@ -91,6 +95,7 @@ data class Global(
 
 
 data class PageStyle(
+    override val identity: UUID,
     override val name: String,
     val subsequentGapFrames: Int,
     val behavior: PageBehavior,
@@ -112,6 +117,7 @@ enum class PageBehavior { CARD, SCROLL }
 
 
 data class ContentStyle(
+    override val identity: UUID,
     override val name: String,
     val blockOrientation: BlockOrientation,
     val spineAttachment: SpineAttachment,
@@ -230,6 +236,7 @@ enum class FlowDirection { L2R, R2L }
 
 
 data class LetterStyle(
+    override val identity: UUID,
     override val name: String,
     val font: FontRef,
     val variations: FontVariations,
@@ -280,6 +287,7 @@ data class FontFeature(
 
 
 data class Layer(
+    override val identity: UUID,
     override val name: String,
     override val collapsed: Boolean,
     val coloring: LayerColoring,
@@ -337,12 +345,14 @@ data class GradientStop(val color: Color4f, val position: Double)
 
 
 data class TransitionStyle(
+    override val identity: UUID,
     override val name: String,
     val graph: Transition
 ) : ListedStyle
 
 
 data class PictureStyle(
+    override val identity: UUID,
     override val name: String,
     override val volatile: Boolean,
     val picture: PictureRef,
@@ -376,6 +386,7 @@ data class PictureRef(val name: String) {
 
 
 data class TapeStyle(
+    override val identity: UUID,
     override val name: String,
     override val volatile: Boolean,
     val tape: TapeRef,

@@ -116,32 +116,38 @@ class EditStylingPanel(private val ctrl: ProjectController) :
         stylingTree.addListType(
             PageStyle::class.java, l10n("ui.styling.pageStyles"), PAGE_ICON,
             onSelect = { openListedStyle(it, pageStyleForm, "PageStyle") },
+            objToIdentity = PageStyle::identity,
             objToString = PageStyle::name
         )
         stylingTree.addListType(
             ContentStyle::class.java, l10n("ui.styling.contentStyles"), LAYOUT_ICON,
             onSelect = { openListedStyle(it, contentStyleForm, "ContentStyle") },
+            objToIdentity = ContentStyle::identity,
             objToString = ContentStyle::name
         )
         stylingTree.addListType(
             LetterStyle::class.java, l10n("ui.styling.letterStyles"), LETTERS_ICON,
             onSelect = { openListedStyle(it, letterStyleForm, "LetterStyle") },
+            objToIdentity = LetterStyle::identity,
             objToString = LetterStyle::name
         )
         stylingTree.addListType(
             TransitionStyle::class.java, l10n("ui.styling.transitionStyles"), TRANSITION_ICON,
             onSelect = { openListedStyle(it, transitionStyleForm, "TransitionStyle") },
+            objToIdentity = TransitionStyle::identity,
             objToString = TransitionStyle::name
         )
         stylingTree.addListType(
             PictureStyle::class.java, l10n("ui.styling.pictureStyles"), PICTURE_ICON,
             onSelect = { openListedStyle(it, pictureStyleForm, "PictureStyle") },
+            objToIdentity = PictureStyle::identity,
             objToString = PictureStyle::name,
             isVolatile = PictureStyle::volatile
         )
         stylingTree.addListType(
             TapeStyle::class.java, l10n("ui.styling.tapeStyles"), FILMSTRIP_ICON,
             onSelect = { openListedStyle(it, tapeStyleForm, "TapeStyle") },
+            objToIdentity = TapeStyle::identity,
             objToString = TapeStyle::name,
             isVolatile = TapeStyle::volatile
         )
@@ -431,35 +437,28 @@ class EditStylingPanel(private val ctrl: ProjectController) :
         formAdjuster.updateTapes(tapes)
     }
 
-    fun updateProject(styling: Styling, constraintViolations: List<ConstraintViolation>, drawnProject: DrawnProject?) {
-        // Update the grayed-out statuses and the violation icons of styles, but only if the constraint violations and
-        // drawn project we received stem from the current Styling.
-        // If it doesn't, the Styling has changed again in the meantime, and we can't compare with the outdated usage
-        // information because the identity of the styles has changed since then. If we didn't have this check, rapidly
-        // changing a style would cause it to flicker gray and white and have a flickering icon in the styling tree.
-        if (styling === this.styling) {
-            // Find the used styles.
-            val usedStyles = drawnProject?.let { findUsedStyles(drawnProject.project) }
+    fun updateProject(constraintViolations: List<ConstraintViolation>, drawnProject: DrawnProject?) {
+        // Find the used styles.
+        val usedStyles = drawnProject?.let { findUsedStyles(drawnProject.project) }
 
-            // Find the icon severity per style.
-            val severityPerStyle = IdentityHashMap<Style, Severity>()
-            for (violation in constraintViolations)
-                severityPerStyle[violation.rootStyle] =
-                    maxOf(violation.severity, severityPerStyle.getOrDefault(violation.rootStyle, Severity.entries[0]))
-
-            // Apply the collected information to the styling tree.
-            stylingTree.adjustAppearance(
-                isGrayedOut = usedStyles?.let { { style -> style is ListedStyle && style !in usedStyles } },
-                getExtraIcons = { style ->
-                    val severity = severityPerStyle[style]
-                    if (severity == null || severity == Severity.INFO) emptyList() else listOf(severity.icon)
-                }
+        // Find the icon severity per style.
+        val severityPerStyle = HashMap<UUID, Severity>()
+        for (violation in constraintViolations)
+            severityPerStyle[violation.rootStyle.identity] = maxOf(
+                violation.severity,
+                severityPerStyle.getOrDefault(violation.rootStyle.identity, Severity.entries[0])
             )
-        }
 
-        // If the constraint violations don't stem from the current Styling, submit null, which will retain the previous
-        // notifications. Once again, this is to avoid notification flicker in the style form.
-        val submittedConstraintViolations = if (styling === this.styling) constraintViolations else null
+        // Update the grayed-out statuses and the violation icons of styles.
+        stylingTree.adjustAppearance(
+            isGrayedOut = if (usedStyles == null) null else { style ->
+                style is ListedStyle && usedStyles.none { it.identity == style.identity }
+            },
+            getExtraIcons = { style ->
+                val severity = severityPerStyle[(style as Style).identity]
+                if (severity == null || severity == Severity.INFO) emptyList() else listOf(severity.icon)
+            }
+        )
 
         // Assemble the override context. If the project couldn't be drawn, submit null, which will retain the old one.
         val submittedOverrideCtx = drawnProject?.let {
@@ -480,7 +479,7 @@ class EditStylingPanel(private val ctrl: ProjectController) :
         }
 
         // Submit the constraint violations and override context.
-        formAdjuster.updateConstraintViolationsAndOverrideCtx(submittedConstraintViolations, submittedOverrideCtx)
+        formAdjuster.updateConstraintViolationsAndOverrideCtx(constraintViolations, submittedOverrideCtx)
     }
 
     override fun getMinimumSize(): Dimension =

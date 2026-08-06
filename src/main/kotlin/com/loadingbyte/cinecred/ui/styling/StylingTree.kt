@@ -68,13 +68,23 @@ class StylingTree : JTree(DefaultTreeModel(DefaultMutableTreeNode(), true)) {
 
     @Suppress("UNCHECKED_CAST")
     fun <T : Any> addListType(
-        type: Class<T>, label: String, icon: Icon,
-        onSelect: (T) -> Unit, objToString: (T) -> String, isVolatile: ((T) -> Boolean)? = null
+        type: Class<T>,
+        label: String,
+        icon: Icon,
+        onSelect: (T) -> Unit,
+        objToIdentity: (T) -> Any,
+        objToString: (T) -> String,
+        isVolatile: ((T) -> Boolean)? = null
     ) {
         val node = DefaultMutableTreeNode(label, true)
         model.insertNodeInto(node, rootNode, rootNode.childCount)
         listTypeInfos[type] = TypeInfo.List(
-            icon, node, onSelect as (Any) -> Unit, objToString as (Any) -> String, isVolatile as ((Any) -> Boolean)?
+            icon,
+            node,
+            onSelect as (Any) -> Unit,
+            objToIdentity as (Any) -> Any,
+            objToString as (Any) -> String,
+            isVolatile as ((Any) -> Boolean)?
         )
     }
 
@@ -299,9 +309,10 @@ class StylingTree : JTree(DefaultTreeModel(DefaultMutableTreeNode(), true)) {
         get() = lastSelectedPathComponent as DefaultMutableTreeNode?
 
     private fun similarNode(typeInfo: TypeInfo.List, candidates: List<TreeNode>, obj: Any): DefaultMutableTreeNode? {
+        val objIdentity = typeInfo.objToIdentity(obj)
         val objName = typeInfo.objToString(obj)
         val candidates = candidates.requireIsInstance<DefaultMutableTreeNode>()
-        return candidates.find { (it.userObject as StoredObj).obj == obj }
+        return candidates.find { typeInfo.objToIdentity((it.userObject as StoredObj).obj) == objIdentity }
             ?: candidates.find { typeInfo.objToString((it.userObject as StoredObj).obj) == objName }
     }
 
@@ -335,6 +346,7 @@ class StylingTree : JTree(DefaultTreeModel(DefaultMutableTreeNode(), true)) {
             override val icon: Icon,
             override val node: DefaultMutableTreeNode,
             override val onSelect: (Any) -> Unit,
+            val objToIdentity: (Any) -> Any,
             val objToString: (Any) -> String,
             val isVolatile: ((Any) -> Boolean)?
         ) : TypeInfo

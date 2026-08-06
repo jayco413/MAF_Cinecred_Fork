@@ -27,6 +27,7 @@ fun <S : Style> getPreset(styleClass: Class<S>): S = when (styleClass) {
 
 
 fun presetGlobal() = Global(
+    identity = UUID.randomUUID(),
     resolution = Resolution(2048, 858),
     fps = FPS(24, 1),
     timecodeFormat = TimecodeFormat.SMPTE_NON_DROP_FRAME,
@@ -46,6 +47,7 @@ fun presetGlobal() = Global(
 
 
 fun presetPageStyle() = PageStyle(
+    identity = UUID.randomUUID(),
     name = "???",
     subsequentGapFrames = 24,
     behavior = PageBehavior.SCROLL,
@@ -62,6 +64,7 @@ fun presetPageStyle() = PageStyle(
 
 
 fun presetContentStyle() = ContentStyle(
+    identity = UUID.randomUUID(),
     name = "???",
     blockOrientation = BlockOrientation.VERTICAL,
     spineAttachment = SpineAttachment.BODY_CENTER,
@@ -148,6 +151,7 @@ fun presetContentStyle() = ContentStyle(
 
 
 fun presetLetterStyle() = LetterStyle(
+    identity = UUID.randomUUID(),
     name = "???",
     font = FontRef(Font.bundled("Archivo Narrow Regular")!!),
     variations = FontVariations(persistentMapOf()),
@@ -173,6 +177,7 @@ fun presetLetterStyle() = LetterStyle(
 
 
 fun presetLayer() = Layer(
+    identity = UUID.randomUUID(),
     name = "",
     collapsed = true,
     coloring = LayerColoring.PLAIN,
@@ -218,12 +223,14 @@ fun presetLayer() = Layer(
 
 
 fun presetTransitionStyle() = TransitionStyle(
+    identity = UUID.randomUUID(),
     name = "???",
     graph = Transition.LINEAR
 )
 
 
 fun presetPictureStyle() = PictureStyle(
+    identity = UUID.randomUUID(),
     name = "???",
     volatile = false,
     picture = PictureRef(""),
@@ -242,6 +249,7 @@ fun presetPictureStyle() = PictureStyle(
 
 
 fun presetTapeStyle() = TapeStyle(
+    identity = UUID.randomUUID(),
     name = "???",
     volatile = false,
     tape = TapeRef(""),

@@ -233,7 +233,7 @@ class ProjectController(
         if (creditsWorkbooks == null ||
             projectFonts == null || pictureLoaders == null || tapes == null || origStyling == null
         )
-            return ProcessingResult(input, emptyList(), emptyList(), null, null)
+            return ProcessingResult(input, emptyList(), emptyList(), null)
 
         try {
             var styling: Styling = origStyling
@@ -263,7 +263,7 @@ class ProjectController(
             val earlyConstraintViolations = verifyConstraints(styling)
             if (earlyConstraintViolations.any { it.severity == ERROR }) {
                 val error = ParserMsg(null, null, null, null, null, ERROR, l10n("ui.edit.stylingError"))
-                return ProcessingResult(input, listOf(error), earlyConstraintViolations, styling, null)
+                return ProcessingResult(input, listOf(error), earlyConstraintViolations, null)
             }
 
             // Parse each credits workbook.
@@ -381,12 +381,12 @@ class ProjectController(
             val project = Project(styling, creditsBooks.toPersistentList())
             val drawnProject = DrawnProject(project, drawnCreditsBooks.toPersistentList())
 
-            return ProcessingResult(input, log, constraintViolations, styling, drawnProject)
+            return ProcessingResult(input, log, constraintViolations, drawnProject)
         } catch (e: Exception) {
             // If an error occurs during processing, inform the user in the log instead of crashing the program.
             LOGGER.error("Could not process and draw the project '{}'.", projectDir, e)
             val error = ParserMsg(null, null, null, null, null, ERROR, e.userNotification)
-            return ProcessingResult(input, listOf(error), emptyList(), null, null)
+            return ProcessingResult(input, listOf(error), emptyList(), null)
         }
     }
 
@@ -475,12 +475,11 @@ class ProjectController(
         val input: Input,
         val processingLog: List<ParserMsg>,
         val constraintViolations: List<ConstraintViolation>,
-        val styling: Styling?,
         val drawnProject: DrawnProject?
     )
 
     private fun doneProcessing(processingResult: ProcessingResult) {
-        val (input, processingLog, constraintViolations, styling, drawnProject) = processingResult
+        val (input, processingLog, constraintViolations, drawnProject) = processingResult
         SwingUtilities.invokeLater {
             val logCmp = compareByDescending(ParserMsg::severity)
                 .thenComparingInt { msg -> input.creditsWorkbooks?.indexOfFirst { it.fileName == msg.fileName } ?: -1 }
@@ -493,8 +492,7 @@ class ProjectController(
             val log = (input.ioLog + processingLog).sortedWith(logCmp)
             previewCtrl.updateLog(log)
             logCtrl.updateLog(log)
-            if (styling != null)
-                stylingDockable.updateProject(styling, constraintViolations, drawnProject)
+            stylingDockable.updateProject(constraintViolations, drawnProject)
             if (drawnProject != null) {
                 toolbarCtrl.updateProject(drawnProject)
                 previewCtrl.updateProject(drawnProject)

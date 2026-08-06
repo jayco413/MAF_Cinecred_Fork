@@ -3,6 +3,7 @@ package com.loadingbyte.cinecred.project
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.toPersistentList
 import java.lang.reflect.ParameterizedType
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
@@ -14,8 +15,10 @@ fun <S : Style> getStyleSettings(styleClass: Class<S>): List<StyleSetting<S, *>>
     val cached = settingsCache[styleClass]
     return if (cached == null)
         styleClass.declaredFields
-            .map { field ->
+            .mapNotNull { field ->
                 when {
+                    Style::identity.name == field.name ->
+                        null
                     Opt::class.java == field.type ->
                         ReflectedOptStyleSetting(styleClass, field.name)
                     Override::class.java == field.type ->
@@ -59,11 +62,11 @@ fun <S : Style> S.copy(notarizedSettingValues: List<NotarizedStyleSettingValue<i
         val notarized = notarizedSettingValues.find { (it as NotarSetImpl).setting == setting }
         if (notarized != null) (notarized as NotarSetImpl).settingValue else setting.get(this)
     }
-    return javaClass.cast(javaClass.constructors[0].newInstance(*constructorArgs))
+    return javaClass.cast(javaClass.constructors[0].newInstance(identity, *constructorArgs))
 }
 
-fun <S : Style> newStyleUnsafe(styleClass: Class<S>, settingValues: List<*>): S =
-    styleClass.cast(styleClass.constructors[0].newInstance(*settingValues.toTypedArray()))
+fun <S : Style> newStyleUnsafe(styleClass: Class<S>, identity: UUID, settingValues: List<*>): S =
+    styleClass.cast(styleClass.constructors[0].newInstance(identity, *settingValues.toTypedArray()))
 
 
 sealed interface NotarizedStyleSettingValue<S : Style>
@@ -79,6 +82,7 @@ sealed class StyleSetting<S : Style, SUBJ : Any>(styleClass: Class<S>, val name:
     val type: Class<SUBJ>
 
     init {
+        require(name != Style::identity.name)
         var baseType = declaringClass.getGetter(name).genericReturnType
         if (isNested)
             baseType = (baseType as ParameterizedType).actualTypeArguments[0]

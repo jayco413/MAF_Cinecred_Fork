@@ -26,6 +26,7 @@ class StyleForm<S : Style>(
     private val rootFormRowLookup = HashMap<StyleSetting<S, *>, FormRow>()
     private val externallyManagedLabelsLookup = HashMap<StyleSetting<S, *>, List<JLabel>>()
 
+    private var identity = UUID.randomUUID()
     private val latentValues = latent.associateWithTo(HashMap<StyleSetting<in S, *>, Any?>()) { null }
     private var disableOnChange = false
 
@@ -407,6 +408,7 @@ class StyleForm<S : Style>(
     override fun open(stored /* style */: S) {
         disableOnChange = true
         try {
+            identity = stored.identity
             for ((setting, widget) in valueWidgets)
                 @Suppress("UNCHECKED_CAST")
                 (widget as Widget<Any>).value = setting.get(stored)
@@ -430,7 +432,7 @@ class StyleForm<S : Style>(
     }
 
     override fun save(): S =
-        newStyleUnsafe(styleClass, getStyleSettings(styleClass).map { setting ->
+        newStyleUnsafe(styleClass, identity, getStyleSettings(styleClass).map { setting ->
             val value = valueWidgets[setting]?.value ?: latentValues[setting]!!
             if (value is List<*>) value.toPersistentList() else value
         })
