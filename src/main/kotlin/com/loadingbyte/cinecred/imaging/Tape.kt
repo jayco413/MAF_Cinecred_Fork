@@ -261,6 +261,8 @@ class Tape private constructor(
                 else ->
                     Resolution(roundingDiv(maxDim * tapeW, tapeH).coerceAtLeast(1), maxDim)
             }
+                // Make the height divisible by 2 to avoid issues when the preview is later interpreted as interlaced.
+                .let { (w, h) -> Resolution(w, ceilDiv(h, 2) * 2) }
             val pictureRep = Picture.Raster.compatibleRepresentation(tapeRep.colorSpace, tapeRep.alpha)
             pictureSpec = Bitmap.Spec(previewRes, pictureRep)
             // Guess whether the tape is probably HDR. If yes, use bilinear resampling, because other filters have
