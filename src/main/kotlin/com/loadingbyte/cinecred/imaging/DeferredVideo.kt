@@ -917,7 +917,8 @@ class DeferredVideo private constructor(
                         // source is PREVIEW.
                         return missingMediaBitmap.value.view()
                     }
-                    Source.UNAVAILABLE -> return missingMediaBitmap.value
+                    // Once again, create a view here just like immediately above.
+                    Source.UNAVAILABLE -> return missingMediaBitmap.value.view()
                 }
                 var convertedBitmap = origBitmap
                 readConverter?.let { conv ->
