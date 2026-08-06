@@ -1096,27 +1096,26 @@ class DeferredVideo private constructor(
             filt: BitmapConverter.ResamplingFilter
         ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, filt, usingPreview = false) {
 
-            private val clamp2user: BitmapConverter
-            private val userBitmap: Bitmap
-
-            init {
-                val userSpec = Bitmap.Spec(compositedOverlayRes, userRep)
-                clamp2user = BitmapConverter(clampSpec, userSpec)
-                userBitmap = Bitmap.allocate(userSpec)
-            }
+            private var clamp2user: BitmapConverter? = null
+            private val userBitmap = Bitmap.allocate(Bitmap.Spec(compositedOverlayRes, userRep))
 
             // Note: This function is only called when shouldCompInCanvasRep() returned false. If the base bitmap is
             // chroma-subsampled, it only returns false if the overlay coincides with the subsampling grid. Hence, this
             // function can safely blit.
             override fun overlayOpaque(base: Bitmap, clampBitmap: Bitmap, x: Int, y: Int) {
-                clamp2user.convert(clampBitmap, userBitmap)
+                // Late-initialize the converter because its creation can fail if, e.g., userRep has chroma subsampling
+                // and compositedOverlayRes is odd -- but in such cases, this method would never be called anyway, and
+                // we'd instead go through canvas-based overlaying.
+                if (clamp2user == null)
+                    clamp2user = BitmapConverter(clampSpec, userBitmap.spec)
+                clamp2user!!.convert(clampBitmap, userBitmap)
                 val (w, h) = userBitmap.spec.resolution
                 base.blitLeniently(userBitmap, 0, 0, w, h, x, y)
             }
 
             override fun close() {
                 super.close()
-                clamp2user.close()
+                clamp2user?.close()
                 userBitmap.close()
             }
 
