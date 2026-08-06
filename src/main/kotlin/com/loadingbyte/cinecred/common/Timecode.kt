@@ -165,6 +165,9 @@ sealed interface Timecode : Comparable<Timecode> {
         override fun toFrames(fps: FPS) =
             Frames(roundingDiv(numerator * fps.numerator, denominator * fps.denominator).toInt())
 
+        fun toFramesFloor(fps: FPS) =
+            Frames(floorDiv(numerator * fps.numerator, denominator * fps.denominator).toInt())
+
         fun toFramesCeil(fps: FPS) =
             Frames(ceilDiv(numerator * fps.numerator, denominator * fps.denominator).toInt())
 

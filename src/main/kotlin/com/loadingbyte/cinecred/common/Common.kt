@@ -135,6 +135,8 @@ class FPS(numerator: Int, denominator: Int) {
 
 /** Implements `floor(a / b)`, but works only for non-negative denominators! */
 fun floorDiv(a: Int, b: Int) = (a - ((b - 1) and (a shr 31))) / b
+/** Implements `floor(a / b)`, but works only for non-negative denominators! */
+fun floorDiv(a: Long, b: Long) = (a - ((b - 1L) and (a shr 63))) / b
 
 /** Implements `ceil(a / b)`, but works only for non-negative denominators! */
 fun ceilDiv(a: Int, b: Int) = (a + ((b - 1) and (a.inv() shr 31))) / b

@@ -511,10 +511,14 @@ class Tape private constructor(
         /**
          * Bitmaps returned by this method must NEVER be [Bitmap.close]d by the caller. They will however automatically
          * be closed when the next frame is read or when the reader is closed. You can keep them around by making views.
+         *
+         * @throws DescendingTimecodesException
          */
         fun read(timecode: Timecode): VideoReader.Frame {
-            require(timecode >= startTimecode) { "Timecode is lower than start timecode." }
-            require(lastTimecode.let { it == null || timecode >= it }) { "Timecodes are not increasing." }
+            if (timecode < startTimecode)
+                throw DescendingTimecodesException("Timecode is lower than start timecode.")
+            if (lastTimecode.let { it != null && timecode < it })
+                throw DescendingTimecodesException("Timecodes are not increasing.")
             lastTimecode = timecode
             while (behind == null || ahead.let { it != null && it.timecode <= timecode }) {
                 behind?.run { bitmap.close() }
@@ -536,6 +540,8 @@ class Tape private constructor(
         }
 
     }
+
+    class DescendingTimecodesException(message: String) : Exception(message)
 
 
     private data class Reinterpretation(

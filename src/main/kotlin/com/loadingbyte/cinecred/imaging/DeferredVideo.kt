@@ -725,9 +725,10 @@ class DeferredVideo private constructor(
                     field = value
                 }
 
+            private val tape = resp.embeddedTape.tape
+
             private lateinit var source: Source
-            private lateinit var reader: Tape.SequentialReader
-            private lateinit var previewTape: Tape
+            private var reader: Tape.SequentialReader? = null
 
             private var readConverter: BitmapConverter? = null
             private var readConvertedSpec: Bitmap.Spec? = null
@@ -742,9 +743,8 @@ class DeferredVideo private constructor(
                     if (usePreview)
                         try {
                             source = Source.PREVIEW
-                            previewTape = embeddedTape.tape
-                            origSpec = previewTape.getPreviewFrame(resp.timecode /* random */).get().bitmap.spec
-                            val tapeRes = previewTape.spec.resolution
+                            origSpec = tape.getPreviewFrame(resp.timecode /* random */).get().bitmap.spec
+                            val tapeRes = tape.spec.resolution
                             val tapeCrop = embeddedTape.crop
                             val cropMulX = origSpec.resolution.widthPx / tapeRes.widthPx.toDouble()
                             val cropMulY = origSpec.resolution.heightPx / tapeRes.heightPx.toDouble()
@@ -762,7 +762,6 @@ class DeferredVideo private constructor(
                         }
                     else {
                         source = Source.READER
-                        reader = embeddedTape.tape.SequentialReader(resp.timecode /* the span's first timecode */)
                         origSpec = embeddedTape.tape.spec
                         readCrop = embeddedTape.crop
                     }
@@ -907,11 +906,20 @@ class DeferredVideo private constructor(
 
             fun read(timecode: Timecode): Bitmap {
                 val origBitmap = when (source) {
-                    Source.READER -> reader.read(timecode).bitmap
+                    Source.READER ->
+                        reader?.let { reader ->
+                            try {
+                                reader.read(timecode).bitmap
+                            } catch (_: Tape.DescendingTimecodesException) {
+                                // If the tape is looping, we will create a new reader at the beginning of the tape.
+                                reader.close()
+                                null
+                            }
+                        } ?: tape.SequentialReader(timecode).also { reader = it }.read(timecode).bitmap
                     Source.PREVIEW -> try {
                         // For previews, create a view immediately because preview bitmaps might be closed at any time.
                         // If the bitmap is already closed, the exception is caught and the missing bitmap is used.
-                        previewTape.getPreviewFrame(timecode).get().bitmap.view()
+                        tape.getPreviewFrame(timecode).get().bitmap.view()
                     } catch (_: Exception) {
                         // Also create a view here since the code below expects to be able to close origBitmap if the
                         // source is PREVIEW.
@@ -943,12 +951,11 @@ class DeferredVideo private constructor(
 
             fun didReadFirstField(): Boolean {
                 check(source == Source.READER) { "Interlaced processing is not yet supported in previews." }
-                return reader.didReadFirstField()
+                return reader!!.didReadFirstField()
             }
 
             fun close() {
-                if (source == Source.READER)
-                    reader.close()
+                reader?.close()
                 readConverter?.close()
                 if (missingMediaBitmap.isInitialized())
                     missingMediaBitmap.value.close()
@@ -1501,45 +1508,13 @@ class DeferredVideo private constructor(
                     val relLastFrameIdx = findRelLastFrameIdx(insn.shifts, placed.y + placedH - 0.001)
                     if (relLastFrameIdx < 0)
                         continue
-                    val rangeFrames = when (val rangeDiff = placed.embeddedTape.range.run { endExclusive - start }) {
-                        is Timecode.Frames -> rangeDiff.frames * video.fpsScaling
-                        is Timecode.Clock -> rangeDiff.toFramesCeil(video.fps).frames
-                        else -> throw IllegalStateException("Wrong timecode format: ${rangeDiff.javaClass.simpleName}")
-                    }
-                    val firstPotFrameIdx =
+                    val firstFrameIdx =
                         insn.firstFrameIdx + relFirstFrameIdx + placed.embeddedTape.leftMarginFrames * video.fpsScaling
-                    val lastPotFrameIdx =
+                    val lastFrameIdx =
                         insn.firstFrameIdx + relLastFrameIdx - placed.embeddedTape.rightMarginFrames * video.fpsScaling
-                    var firstFrameIdx = firstPotFrameIdx
-                    var lastFrameIdx = lastPotFrameIdx
-                    val extraneousFrames = (lastFrameIdx - firstFrameIdx + 1) - rangeFrames
-                    if (extraneousFrames > 0)
-                        when (placed.embeddedTape.align) {
-                            START -> lastFrameIdx -= extraneousFrames
-                            END -> firstFrameIdx += extraneousFrames
-                            MIDDLE -> {
-                                val half = extraneousFrames / 2
-                                firstFrameIdx += half
-                                lastFrameIdx -= extraneousFrames - half  // account for odd numbers
-                            }
-                        }
                     if (firstFrameIdx > lastFrameIdx)
                         continue
                     add(Span(insn, placed, firstFrameIdx, lastFrameIdx))
-                    // If the video is looping, fill up the remaining potential time with copies of the tape.
-                    if (placed.embeddedTape.loop && extraneousFrames > 0) {
-                        val spanFrames = lastFrameIdx - firstFrameIdx + 1
-                        val pS = DeferredImage.PlacedTape(placed.embeddedTape.withAlign(START), placed.x, placed.y)
-                        val pE = DeferredImage.PlacedTape(placed.embeddedTape.withAlign(END), placed.x, placed.y)
-                        while (firstFrameIdx > firstPotFrameIdx) {
-                            firstFrameIdx -= spanFrames
-                            add(Span(insn, pE, max(firstFrameIdx, firstPotFrameIdx), firstFrameIdx + (spanFrames - 1)))
-                        }
-                        while (lastFrameIdx < lastPotFrameIdx) {
-                            lastFrameIdx += spanFrames
-                            add(Span(insn, pS, lastFrameIdx - (spanFrames - 1), min(lastFrameIdx, lastPotFrameIdx)))
-                        }
-                    }
                 }
         }
 
@@ -1576,39 +1551,45 @@ class DeferredVideo private constructor(
         }
 
         fun query(frameIdx: Int): List<Response<U>> = buildList {
+            spans@
             for (span in spans)
                 if (frameIdx in span.firstFrameIdx..span.lastFrameIdx) {
                     val pastFrames = frameIdx - span.firstFrameIdx
                     val futureFrames = span.lastFrameIdx - frameIdx
 
-                    val start = span.embeddedTape.range.start
-                    val endExcl = span.embeddedTape.range.endExclusive
-                    var tmp = 0
-                    val timecode = when {
-                        span.embeddedTape.tape.fileSeq -> when (span.embeddedTape.align) {
-                            START -> start + Timecode.Frames(pastFrames / video.fpsScaling)
-                            END -> endExcl - Timecode.Frames(futureFrames / video.fpsScaling + 1)
-                            MIDDLE -> {
-                                tmp = (((start + endExcl) as Timecode.Frames).frames - 1) * video.fpsScaling +
-                                        frameIdx * 2 - (span.firstFrameIdx + span.lastFrameIdx)
-                                Timecode.Frames(tmp / (2 * video.fpsScaling))
-                            }
-                        }
-                        else -> when (span.embeddedTape.align) {
-                            START -> start + Timecode.Frames(pastFrames).toClock(video.fps)
-                            END -> endExcl - Timecode.Frames(futureFrames).toClock(video.fps) -
-                                    Timecode.Frames(1).toClock(video.origFPS)
-                            MIDDLE ->
-                                (start + endExcl - Timecode.Frames(1).toClock(video.origFPS)) / 2 +
-                                        Timecode.Frames(frameIdx).toClock(video.fps) -
-                                        Timecode.Frames(span.firstFrameIdx + span.lastFrameIdx).toClock(video.fps) / 2
-                        }
+                    // We need this safety margin because negative timecodes would throw exceptions.
+                    val safetyMargin = Timecode.Frames(span.lastFrameIdx - span.firstFrameIdx + 1).toClock(video.fps)
+                    val tapeRuntime = span.embeddedTape.range.run { endExclusive - start }.toClock(video.origFPS)
+                    // Timecode into the tape relative to the embedded tape's range start (plus safety margin).
+                    var relTimecode = when (span.embeddedTape.align) {
+                        START ->
+                            safetyMargin +
+                                    Timecode.Frames(pastFrames).toClock(video.fps)
+                        END ->
+                            safetyMargin +
+                                    tapeRuntime -
+                                    Timecode.Frames(1).toClock(video.origFPS) -
+                                    Timecode.Frames(futureFrames).toClock(video.fps)
+                        MIDDLE ->
+                            safetyMargin +
+                                    (tapeRuntime - Timecode.Frames(1).toClock(video.origFPS)) / 2 +
+                                    Timecode.Frames(frameIdx).toClock(video.fps) -
+                                    Timecode.Frames(span.firstFrameIdx + span.lastFrameIdx).toClock(video.fps) / 2
                     }
-                    val fileSeqFirstField = span.embeddedTape.tape.fileSeq && when (span.embeddedTape.align) {
-                        START -> (pastFrames * 2 / video.fpsScaling) % 2 == 0
-                        END -> (futureFrames * 2 / video.fpsScaling) % 2 == 1
-                        MIDDLE -> (tmp / video.fpsScaling) % 2 == 0
+                    // If the tape timecode is outside the embedded tape's specified range, either don't emit a tape
+                    // response, or if looping is enabled, modulate the timecode until it's within the range.
+                    while (relTimecode < safetyMargin)
+                        if (!span.embeddedTape.loop) continue@spans else relTimecode += tapeRuntime
+                    while (relTimecode >= safetyMargin + tapeRuntime)
+                        if (!span.embeddedTape.loop) continue@spans else relTimecode -= tapeRuntime
+                    relTimecode -= safetyMargin
+
+                    val timecode = span.embeddedTape.range.start + when (span.embeddedTape.tape.fileSeq) {
+                        true -> relTimecode.toFramesFloor(video.origFPS)
+                        else -> relTimecode
                     }
+                    val fileSeqFirstField = span.embeddedTape.tape.fileSeq &&
+                            (relTimecode * 2).toFramesFloor(video.origFPS).frames % 2 == 0
 
                     val relFrameIdx = frameIdx - span.insn.firstFrameIdx
                     val x = span.placed.x.roundToInt()
