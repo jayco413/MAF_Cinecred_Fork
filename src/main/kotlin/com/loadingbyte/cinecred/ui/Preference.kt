@@ -246,19 +246,19 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
             "image" -> {
                 val name = it["name"] as? String ?: return@mapNotNull null
                 val underlay = it["lay"] == "under"
-                val uuid = try {
+                val identity = try {
                     UUID.fromString(it["image"] as? String ?: return@mapNotNull null)
                 } catch (_: IllegalArgumentException) {
                     return@mapNotNull null
                 }
-                val file = IMAGE_DIR.resolve("$uuid.png")
+                val file = IMAGE_DIR.resolve("$identity.png")
                 val raster = try {
                     Picture.Raster.load(file)
                 } catch (e: IOException) {
                     LOGGER.error("Cannot read overlay image file '{}'.", file, e)
                     return@mapNotNull null
                 }
-                ImageOverlay(uuid, name, raster, rasterPersisted = true, underlay)
+                ImageOverlay(identity, name, raster, rasterPersisted = true, underlay)
             }
             else -> null
         }
@@ -269,8 +269,8 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
         try {
             if (IMAGE_DIR.exists())
                 for (file in IMAGE_DIR.listDirectoryEntries()) {
-                    val fileUUIDStr = file.nameWithoutExtension
-                    if (value.none { overlay -> overlay is ImageOverlay && overlay.uuid.toString() == fileUUIDStr })
+                    val fileIdStr = file.nameWithoutExtension
+                    if (value.none { overlay -> overlay is ImageOverlay && overlay.identity.toString() == fileIdStr })
                         file.deleteIfExists()
                 }
         } catch (e: IOException) {
@@ -279,7 +279,7 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
         // Save overlay image files which have not yet been saved.
         for (overlay in value)
             if (overlay is ImageOverlay) {
-                val file = IMAGE_DIR.resolve("${overlay.uuid}.png")
+                val file = IMAGE_DIR.resolve("${overlay.identity}.png")
                 if (!file.exists() || !overlay.rasterPersisted)
                     try {
                         file.parent.createDirectoriesSafely()
@@ -313,7 +313,7 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
                     "type" to "image",
                     "name" to overlay.name,
                     "lay" to if (overlay.underlay) "under" else "over",
-                    "image" to overlay.uuid.toString()
+                    "image" to overlay.identity.toString()
                 )
             }
         })
@@ -426,7 +426,7 @@ sealed interface LocaleWish {
 
 
 /** @throws UnrecognizedPlaceholderException */
-class DeliveryDestTemplate(val uuid: UUID, val name: String, str: String) {
+class DeliveryDestTemplate(val identity: UUID, val name: String, str: String) {
 
     enum class Placeholder(private val l10nKey: String? = null, private val fixedTag: String? = null) {
 

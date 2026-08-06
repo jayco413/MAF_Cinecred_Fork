@@ -613,7 +613,7 @@ class DeliverConfigurationForm(private val deliveryCtrl: DeliveryCtrlComms) :
 
         fun updateTemplates(templates: List<DeliveryDestTemplate>) {
             // Evaluates to null (= custom) if the previously selected template has been removed.
-            val newSel = (bundledTemplates + templates).find { it.uuid == selectedTemplate?.uuid }
+            val newSel = (bundledTemplates + templates).find { it.identity == selectedTemplate?.identity }
 
             fun makeMenuItem(template: DeliveryDestTemplate?, label: String, icon: Icon) =
                 object : DropdownPopupMenuCheckBoxItem<DeliveryDestTemplate?>(

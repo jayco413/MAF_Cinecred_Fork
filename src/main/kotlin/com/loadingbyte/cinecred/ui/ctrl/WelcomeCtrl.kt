@@ -609,7 +609,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     override fun preferences_configureOverlay_verifyName(name: String) = when {
         name.isBlank() -> l10n("required")
         OVERLAYS_PREFERENCE.get().any { overlay ->
-            overlay.uuid != currentlyEditedOverlay?.uuid && overlay.label == name
+            overlay.identity != currentlyEditedOverlay?.identity && overlay.label == name
         } ->
             l10n("ui.preferences.accounts.configure.labelAlreadyInUse")
         else -> null
@@ -632,13 +632,13 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         imageUnderlay: Boolean
     ) {
         val edited = currentlyEditedOverlay
-        val uuid = edited?.uuid ?: UUID.randomUUID()
+        val identity = edited?.identity ?: UUID.randomUUID()
         val newOverlay = when (type) {
-            AspectRatioOverlay::class.java -> AspectRatioOverlay(uuid, aspectRatioH, aspectRatioV)
-            LinesOverlay::class.java -> LinesOverlay(uuid, name, linesColor, linesH, linesV)
+            AspectRatioOverlay::class.java -> AspectRatioOverlay(identity, aspectRatioH, aspectRatioV)
+            LinesOverlay::class.java -> LinesOverlay(identity, name, linesColor, linesH, linesV)
             ImageOverlay::class.java ->
                 if (edited is ImageOverlay && imageFile == Path(""))
-                    ImageOverlay(uuid, name, edited.raster, edited.rasterPersisted, imageUnderlay)
+                    ImageOverlay(identity, name, edited.raster, edited.rasterPersisted, imageUnderlay)
                 else try {
                     val raster =
                         when (val pic = Picture.load(imageFile)) {
@@ -654,7 +654,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
                                 Picture.Raster.convert(bitmap)
                             }
                         }
-                    ImageOverlay(uuid, name, raster, rasterPersisted = false, imageUnderlay)
+                    ImageOverlay(identity, name, raster, rasterPersisted = false, imageUnderlay)
                 } catch (e: Exception) {
                     LOGGER.error("Could not read the overlay image file '{}'.", imageFile, e)
                     welcomeView.showCannotReadOverlayImageMessage(imageFile, e.userNotification)
@@ -697,7 +697,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     override fun preferences_configureDeliveryDestTemplate_verifyName(name: String) = when {
         name.isBlank() -> l10n("required")
         DELIVERY_DEST_TEMPLATES_PREFERENCE.get().any { template ->
-            template.uuid != currentlyEditedDeliveryDestTemplate?.uuid && template.name == name
+            template.identity != currentlyEditedDeliveryDestTemplate?.identity && template.name == name
         } ->
             l10n("ui.preferences.accounts.configure.labelAlreadyInUse")
         else -> null
@@ -723,7 +723,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         done: Boolean, name: String, templateStr: String
     ) {
         val edited = currentlyEditedDeliveryDestTemplate
-        val newTemplate = DeliveryDestTemplate(edited?.uuid ?: UUID.randomUUID(), name, templateStr)
+        val newTemplate = DeliveryDestTemplate(edited?.identity ?: UUID.randomUUID(), name, templateStr)
         currentlyEditedDeliveryDestTemplate = newTemplate
         val newTemplates = DELIVERY_DEST_TEMPLATES_PREFERENCE.get().toMutableList()
         edited?.let(newTemplates::remove)

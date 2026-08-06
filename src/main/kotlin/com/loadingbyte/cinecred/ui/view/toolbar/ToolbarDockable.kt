@@ -263,11 +263,11 @@ class ToolbarDockable(private val toolbarCtrl: ToolbarCtrlComms, playbackCtrl: P
     }
 
     override fun setAvailableOverlays(availableOverlays: List<Overlay>) {
-        val selectedUUIDs = getSelectedOverlays().mapTo(HashSet(), Overlay::uuid)
+        val selectedIdentities = getSelectedOverlays().mapTo(HashSet(), Overlay::identity)
         overlaysMenu.removeAll()
         for (overlay in availableOverlays) {
             val menuItem = object : DropdownPopupMenuCheckBoxItem<Overlay>(
-                overlaysMenu, overlay, overlay.label, overlay.icon, isSelected = overlay.uuid in selectedUUIDs
+                overlaysMenu, overlay, overlay.label, overlay.icon, isSelected = overlay.identity in selectedIdentities
             ) {
                 override fun onToggle() {
                     toolbarCtrl.onSelectOverlays(getSelectedOverlays())
