@@ -71,14 +71,18 @@ class MasterCtrl(private val uiFactory: UIFactoryComms) : MasterCtrlComms {
         // ensures that all keyboard shortcuts can reliably be used (without a focused component interfering) simply by
         // clicking "onto the void" beforehand.
         val c = event.component
-        if (event.id == MouseEvent.MOUSE_PRESSED && c != null && !c.hasFocus() &&
+        if (event.id == MouseEvent.MOUSE_PRESSED && c != null &&
+            // Note: We allow a focused JTabbedPane because clicking inside its empty content area often still reports
+            // the JTabbedPane as the clicked-on component.
+            (!c.hasFocus() || c is JTabbedPane) &&
             // Note: We exclude JList because that's used for combo box menus, and including it breaks combo boxes on
             // Windows 10 (not 11 though).
             c !is JList<*> && c !is BasicArrowButton
         )
             if (!c.isEnabled || !c.isFocusable || c is JComponent && !c.isRequestFocusEnabled ||
                 c is JPanel || c is JRootPane || c is JSplitPane || c is JScrollPane || c is JScrollBar ||
-                c is JLabel || c is JSeparator || c is JProgressBar
+                c is JLabel || c is JSeparator || c is JProgressBar ||
+                c is JTabbedPane && c.indexAtLocation(event.x, event.y) == -1
             )
                 SwingUtilities.getWindowAncestor(c)?.requestFocusInWindow()
     }
