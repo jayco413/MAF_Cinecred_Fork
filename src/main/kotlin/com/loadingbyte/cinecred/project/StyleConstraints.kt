@@ -800,8 +800,14 @@ fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
                     }
                 is PictureConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, picRef ->
-                        if (picRef.loader == null)
+                        val loader = picRef.loader
+                        if (loader == null)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.picture"))
+                        else try {
+                            loader.picture
+                        } catch (_: IllegalStateException) {
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.pictureCorrupt"))
+                        }
                     }
                 is TapeConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, tapeRef ->
