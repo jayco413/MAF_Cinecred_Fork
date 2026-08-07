@@ -17,10 +17,10 @@ version = "1.9.1-SNAPSHOT"
 
 val jdkVersion = 25
 val slf4jVersion = "2.0.18"
-val twelveMonkeysVersion = "3.13.1"
+val twelveMonkeysVersion = "3.14.0"
 val javacppVersion = "1.5.13"
 val ffmpegVersion = "8.0.1-$javacppVersion"
-val flatlafVersion = "3.7.1"
+val flatlafVersion = "3.7.2"
 
 // Versions of custom-built native libraries; upon updating, rebuild them following MAINTENANCE.md:
 val skiaVersion = "e2ea2eb" // head of branch chrome/m124
@@ -82,7 +82,7 @@ dependencies {
     implementation("ch.rabanti:nanoxlsx4j:2.5.7")
     implementation("net.sourceforge.jexcelapi:jxl:2.6.12")
     implementation("com.github.miachm.sods:SODS:1.10.1")
-    implementation("de.siegmar:fastcsv:4.3.0")
+    implementation("de.siegmar:fastcsv:4.4.0")
 
     // Spreadsheet Services
     implementation("com.googlecode.plist:dd-plist:1.29")
