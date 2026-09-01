@@ -39,6 +39,7 @@ import javax.swing.*
 import kotlin.concurrent.schedule
 import kotlin.io.path.absolute
 import kotlin.io.path.absolutePathString
+import kotlin.system.exitProcess
 
 
 private const val SINGLETON_APP_ID = "com.loadingbyte.cinecred"
@@ -50,6 +51,13 @@ private val hasCrashed = AtomicBoolean()
 
 
 fun main(args: Array<String>) {
+    if (args.firstOrNull() == "render" || System.getenv("CINECRED_RENDER_PROJECT") != null) {
+        Thread.setDefaultUncaughtExceptionHandler(UncaughtHandler)
+        initRuntime()
+        initSwingEnvironment()
+        exitProcess(runCommandLineRender(if (args.firstOrNull() == "render") args.drop(1).toTypedArray() else emptyArray()))
+    }
+
     // Cinecred is a singleton application. When the application is launched a second time, we just simulate
     // a second application instance in the same VM.
     if (Singleton.invoke(SINGLETON_APP_ID, args))
@@ -59,6 +67,12 @@ fun main(args: Array<String>) {
     // If an unexpected exception reaches the top of a thread's stack, we want to terminate the program in a
     // controlled fashion and inform the user. We also ask whether to send a crash report.
     Thread.setDefaultUncaughtExceptionHandler(UncaughtHandler)
+
+    initRuntime()
+    SwingUtilities.invokeLater { mainSwing(args) }
+}
+
+private fun initRuntime() {
 
     // Remove all existing handlers from the root logger.
     val rootLogger = Logger.getLogger("")
@@ -102,12 +116,51 @@ fun main(args: Array<String>) {
     // configured maximum heap size is pretty large, there is rarely pressure. Thus, a lot of garbage lingers around on
     // the heap and fills up the user's precious RAM.
     Timer("GCCaller", true).schedule(0, 60_000) { System.gc() }
-
-    SwingUtilities.invokeLater { mainSwing(args) }
 }
 
 
 private fun mainSwing(args: Array<String>) {
+    initSwingEnvironment()
+    // Run the demo code if configured, and then abort the regular startup.
+    demoCallback?.let { it(); return }
+
+    masterCtrl = UIFactory().master()
+
+    // Globally listen to all key events.
+    KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(masterCtrl::preGlobalKeyEvent)
+    KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventPostProcessor(masterCtrl::postGlobalKeyEvent)
+
+    // On macOS, allow the user to open the about and preferences tabs via the OS.
+    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_ABOUT))
+        Desktop.getDesktop().setAboutHandler { masterCtrl.showWelcomeFrame(tab = WelcomeTab.ABOUT) }
+    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_PREFERENCES))
+        Desktop.getDesktop().setPreferencesHandler { masterCtrl.showWelcomeFrame(tab = WelcomeTab.PREFERENCES) }
+
+    // On macOS, don't suddenly terminate the application when the user quits it or logs off, but instead try to close
+    // all windows, which in turn triggers all "unsaved changes" dialogs.
+    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_QUIT_HANDLER))
+        Desktop.getDesktop().setQuitHandler { _, response ->
+            if (masterCtrl.tryCloseProjectsAndDisposeAllFrames())
+                response.performQuit()
+            else
+                response.cancelQuit()
+        }
+
+    // Apply the locale configured by the user. If it changes in the future, re-apply it.
+    // Note that we need to call the macOS menu localizer after having set the preference handler, otherwise the
+    // "Preferences" menu item is not available yet and hence not localized.
+    comprehensivelyApplyLocale(UI_LOCALE_PREFERENCE.get().locale)
+    MacOSMenuLocalizer.localize()
+    UI_LOCALE_PREFERENCE.addListener { wish ->
+        comprehensivelyApplyLocale(wish.locale)
+        MacOSMenuLocalizer.localize()
+    }
+
+    // Finally open the UI.
+    openUI(args)
+}
+
+private fun initSwingEnvironment() {
     // On Linux, the WM_CLASS property is set to the main class name by default. This leads to the main class name being
     // displayed as the application name on, e.g., the Gnome Desktop. We fix this by setting WM_CLASS to the app name.
     // Notice that we could also set it to "cinecred" (in lower case) as Gnome would then find the matching
@@ -170,44 +223,6 @@ private fun mainSwing(args: Array<String>) {
     fixTextFieldVerticalCentering()
     // Fix the inability to get a dock progress bar to appear on macOS.
     fixTaskbarProgressBarOnMacOS()
-
-    // Run the demo code if configured, and then abort the regular startup.
-    demoCallback?.let { it(); return }
-
-    masterCtrl = UIFactory().master()
-
-    // Globally listen to all key events.
-    KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(masterCtrl::preGlobalKeyEvent)
-    KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventPostProcessor(masterCtrl::postGlobalKeyEvent)
-
-    // On macOS, allow the user to open the about and preferences tabs via the OS.
-    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_ABOUT))
-        Desktop.getDesktop().setAboutHandler { masterCtrl.showWelcomeFrame(tab = WelcomeTab.ABOUT) }
-    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_PREFERENCES))
-        Desktop.getDesktop().setPreferencesHandler { masterCtrl.showWelcomeFrame(tab = WelcomeTab.PREFERENCES) }
-
-    // On macOS, don't suddenly terminate the application when the user quits it or logs off, but instead try to close
-    // all windows, which in turn triggers all "unsaved changes" dialogs.
-    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_QUIT_HANDLER))
-        Desktop.getDesktop().setQuitHandler { _, response ->
-            if (masterCtrl.tryCloseProjectsAndDisposeAllFrames())
-                response.performQuit()
-            else
-                response.cancelQuit()
-        }
-
-    // Apply the locale configured by the user. If it changes in the future, re-apply it.
-    // Note that we need to call the macOS menu localizer after having set the preference handler, otherwise the
-    // "Preferences" menu item is not available yet and hence not localized.
-    comprehensivelyApplyLocale(UI_LOCALE_PREFERENCE.get().locale)
-    MacOSMenuLocalizer.localize()
-    UI_LOCALE_PREFERENCE.addListener { wish ->
-        comprehensivelyApplyLocale(wish.locale)
-        MacOSMenuLocalizer.localize()
-    }
-
-    // Finally open the UI.
-    openUI(args)
 }
 
 

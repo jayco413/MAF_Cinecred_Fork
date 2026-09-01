@@ -1,6 +1,7 @@
 package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.*
+import com.loadingbyte.cinecred.common.RenderProfiling
 import com.loadingbyte.cinecred.imaging.DeferredImage.EmbeddedTape.Align.*
 import com.loadingbyte.cinecred.imaging.Y.Companion.toY
 import java.awt.Point
@@ -315,7 +316,8 @@ class DeferredVideo private constructor(
         private val cache: DeferredImage.CanvasMaterializationCache? = null,
         private val randomAccessDraftMode: Boolean = false,
         private val animateFlashingText: Boolean = false,
-        private val diskCache: RenderDiskCache.Session? = null
+        private val diskCache: RenderDiskCache.Session? = null,
+        private val profiling: RenderProfiling? = null
     ) : AutoCloseable {
 
         init {
@@ -362,20 +364,49 @@ class DeferredVideo private constructor(
 
         /** The returned bitmap is permitted to be [Bitmap.close]d, but must not be modified. */
         fun materializeFrame(frameIdx: Int): Bitmap? {
-            if (!randomAccessDraftMode) {
-                require(frameIdx >= lastFrameIdx) { "Backend is not in random access mode." }
-                lastFrameIdx = frameIdx
-            }
-            if (frameIdx !in 0..<numFrames)
-                return null
+            val result = materializeFrameInternal(frameIdx, ownSharedFrames = true) ?: return null
+            return result.bitmap
+        }
 
-            val (bitmap, writable, shift) = when (userSpec.scan) {
-                Bitmap.Scan.PROGRESSIVE -> obtainDynamicProgressiveFrame(frameIdx)
-                else -> obtainDynamicInterlacedFrame(frameIdx)
+        data class ExportMaterializedFrame(val bitmap: Bitmap, val owned: Boolean)
+
+        /** Like [materializeFrame], but may return shared views for the caller to copy into its own buffers. */
+        fun materializeFrameForExport(frameIdx: Int): ExportMaterializedFrame? =
+            materializeFrameInternal(frameIdx, ownSharedFrames = false)
+
+        private fun materializeFrameInternal(frameIdx: Int, ownSharedFrames: Boolean): ExportMaterializedFrame? {
+            return profiling.measure("backend.materializeFrame") {
+                if (!randomAccessDraftMode) {
+                    require(frameIdx >= lastFrameIdx) { "Backend is not in random access mode." }
+                    lastFrameIdx = frameIdx
+                }
+                if (frameIdx !in 0..<numFrames)
+                    return@measure null
+
+                val (bitmap, writable, shift) = when (userSpec.scan) {
+                    Bitmap.Scan.PROGRESSIVE -> obtainDynamicProgressiveFrame(frameIdx)
+                    else -> obtainDynamicInterlacedFrame(frameIdx)
+                }
+                val (width, height) = userSpec.resolution
+                if (writable && width == workWidth && height == workHeight)
+                    ExportMaterializedFrame(bitmap, owned = true)
+                else {
+                    val view = bitmap.view(0, shift, width, height, 1)
+                    if (writable) {
+                        bitmap.close()
+                        ExportMaterializedFrame(view, owned = true)
+                    } else if (!ownSharedFrames) {
+                        ExportMaterializedFrame(view, owned = false)
+                    } else {
+                        profiling.measure("backend.copySharedFrame") {
+                            val ownedBitmap = Bitmap.allocate(userSpec)
+                            ownedBitmap.blit(view)
+                            view.close()
+                            ExportMaterializedFrame(ownedBitmap, owned = true)
+                        }
+                    }
+                }
             }
-            val (width, height) = userSpec.resolution
-            return if (writable && width == workWidth && height == workHeight) bitmap else
-                bitmap.view(0, shift, width, height, 1).also { if (writable) bitmap.close() }
         }
 
         private data class Frame(val bitmap: Bitmap, val writable: Boolean, val shift: Int)
@@ -386,12 +417,25 @@ class DeferredVideo private constructor(
 
         private class Render(
             val transparentCanvasBitmap: Bitmap,
+            private val groundedCanvasBitmap: Bitmap?,
             val userBitmap: Bitmap,
             val renderShift: Double,
-            private val overlayBitmapFile: ((DeferredImage.FlashingStateKey) -> Path?)?
+            private val grounding: Color4f?,
+            private val canvasCeiling: Float?,
+            private val diskCache: RenderDiskCache.Session?,
+            private val overlayBitmapFile: ((DeferredImage.FlashingStateKey) -> Path?)?,
+            private val overlayUserBitmapFile: ((DeferredImage.FlashingStateKey) -> Path?)?,
+            private val profiling: RenderProfiling?
         ) : AutoCloseable {
             private val flashingOverlays =
                 HashMap<DeferredImage.FlashingStateKey, SoftReference<Bitmap>>()
+            private val flashingUserBitmaps =
+                HashMap<DeferredImage.FlashingStateKey, SoftReference<Bitmap>>()
+            private val flashingCanvasToUser = BitmapConverter(
+                transparentCanvasBitmap.spec,
+                userBitmap.spec,
+                promiseOpaque = grounding != null
+            )
 
             @Synchronized
             fun getOrCreateFlashingOverlay(
@@ -401,20 +445,91 @@ class DeferredVideo private constructor(
                 val overlay = flashingOverlays[stateKey]?.get()
                 if (overlay != null)
                     return overlay
-                val loaded = overlayBitmapFile?.invoke(stateKey)?.let {
-                    RenderDiskCache.loadBitmap(it, transparentCanvasBitmap.spec)
+                val file = overlayBitmapFile?.invoke(stateKey)
+                val loaded = file?.let {
+                    diskCache?.loadOrCreateBitmap(
+                        it,
+                        transparentCanvasBitmap.spec,
+                        profiling,
+                        loadTimingKey = "diskCache.overlayLoad",
+                        storeTimingKey = "diskCache.overlayStore",
+                        hitCountKey = "diskCache.overlayHit",
+                        missCountKey = "diskCache.overlayMiss",
+                        create = create
+                    )
                 }
                 if (loaded != null)
                     return loaded.also { flashingOverlays[stateKey] = SoftReference(it) }
-                return create().also { created ->
-                    flashingOverlays[stateKey] = SoftReference(created)
-                    overlayBitmapFile?.invoke(stateKey)?.let { RenderDiskCache.storeBitmap(it, created) }
+                return create().also { created -> flashingOverlays[stateKey] = SoftReference(created) }
+            }
+
+            @Synchronized
+            fun getOrCreateFlashingUserBitmap(
+                stateKey: DeferredImage.FlashingStateKey,
+                createOverlay: () -> Bitmap
+            ): Bitmap {
+                val combined = flashingUserBitmaps[stateKey]?.get()
+                if (combined != null)
+                    return combined
+                val bitmap = overlayUserBitmapFile?.invoke(stateKey)?.let { file ->
+                    diskCache?.getOrCreateSharedBitmap(
+                        file,
+                        profiling,
+                        hitCountKey = "sharedCache.overlayUserHit",
+                        missCountKey = "sharedCache.overlayUserMiss"
+                    ) {
+                        profiling.measure("flashingUserBitmap.create") {
+                            val overlay = getOrCreateFlashingOverlay(stateKey, createOverlay)
+                            val combinedCanvasBitmap = profiling.measure("flashingUserBitmap.composeCanvas") {
+                                Bitmap.allocate(transparentCanvasBitmap.spec).also { canvasBitmap ->
+                                    canvasBitmap.blit(groundedCanvasBitmap ?: transparentCanvasBitmap)
+                                    Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                                        canvas.drawImageFast(overlay)
+                                    }
+                                }
+                            }
+                            profiling.measure("flashingUserBitmap.canvasToUser") {
+                                Bitmap.allocate(userBitmap.spec).also { combinedUserBitmap ->
+                                    flashingCanvasToUser.convert(
+                                        combinedCanvasBitmap,
+                                        combinedUserBitmap
+                                    )
+                                    combinedCanvasBitmap.close()
+                                }
+                            }
+                        }
+                    }
+                } ?: profiling.measure("flashingUserBitmap.create") {
+                    val overlay = getOrCreateFlashingOverlay(stateKey, createOverlay)
+                    val combinedCanvasBitmap = profiling.measure("flashingUserBitmap.composeCanvas") {
+                        Bitmap.allocate(transparentCanvasBitmap.spec).also { canvasBitmap ->
+                            canvasBitmap.blit(groundedCanvasBitmap ?: transparentCanvasBitmap)
+                            Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                                canvas.drawImageFast(overlay)
+                            }
+                        }
+                    }
+                    profiling.measure("flashingUserBitmap.canvasToUser") {
+                        Bitmap.allocate(userBitmap.spec).also { combinedUserBitmap ->
+                            flashingCanvasToUser.convert(
+                                combinedCanvasBitmap,
+                                combinedUserBitmap
+                            )
+                            combinedCanvasBitmap.close()
+                        }
+                    }
                 }
+                flashingUserBitmaps[stateKey] = SoftReference(bitmap)
+                return bitmap
             }
 
             override fun close() {
                 for (overlay in flashingOverlays.values)
                     overlay.get()?.close()
+                for (bitmap in flashingUserBitmaps.values)
+                    bitmap.get()?.close()
+                flashingCanvasToUser.close()
+                groundedCanvasBitmap?.close()
                 transparentCanvasBitmap.close()
                 userBitmap.close()
             }
@@ -438,7 +553,8 @@ class DeferredVideo private constructor(
             pageCache = object : PageCache<Render>(
                 progressiveVideo,
                 sequentialAccess = !randomAccessDraftMode,
-                preloading = true
+                preloading = true,
+                profiling = profiling
             ) {
                 override fun createRenders(
                     chunkIdx: Int, image: DeferredImage, baseShift: Int, microShifts: DoubleArray, height: Int
@@ -451,21 +567,33 @@ class DeferredVideo private constructor(
                     val renderCanvasSpec = Bitmap.Spec(resolution, canvasRepresentation)
                     val renderUserSpec = Bitmap.Spec(resolution, userSpec.representation)
                     val transparentCanvasBitmaps = microShifts.mapIndexed { microShiftIdx, ms ->
-                        val cached = diskCache?.chunkFile(chunkIdx, microShiftIdx)?.let {
-                            RenderDiskCache.loadBitmap(it, renderCanvasSpec)
-                        }
-                        if (cached != null)
-                            cached
-                        else
-                            Bitmap.allocate(renderCanvasSpec).also { bmp ->
-                                Canvas.forBitmap(bmp.zero(), canvasCeiling).use {
-                                    materialize(
-                                        it, image, -(baseShift + ms), frameIdx = 0,
-                                        flashingTextMode = DeferredImage.FlashingTextMode.EXCLUDE
-                                    )
+                        diskCache?.chunkFile(chunkIdx, microShiftIdx)?.let {
+                            diskCache.loadOrCreateBitmap(
+                                it,
+                                renderCanvasSpec,
+                                profiling,
+                                loadTimingKey = "diskCache.chunkLoad",
+                                storeTimingKey = "diskCache.chunkStore",
+                                hitCountKey = "diskCache.chunkHit",
+                                missCountKey = "diskCache.chunkMiss"
+                            ) {
+                                Bitmap.allocate(renderCanvasSpec).also { bmp ->
+                                    Canvas.forBitmap(bmp.zero(), canvasCeiling).use {
+                                        materialize(
+                                            it, image, -(baseShift + ms), frameIdx = 0,
+                                            flashingTextMode = DeferredImage.FlashingTextMode.EXCLUDE
+                                        )
+                                    }
                                 }
-                                diskCache?.chunkFile(chunkIdx, microShiftIdx)?.let { RenderDiskCache.storeBitmap(it, bmp) }
                             }
+                        } ?: Bitmap.allocate(renderCanvasSpec).also { bmp ->
+                            Canvas.forBitmap(bmp.zero(), canvasCeiling).use {
+                                materialize(
+                                    it, image, -(baseShift + ms), frameIdx = 0,
+                                    flashingTextMode = DeferredImage.FlashingTextMode.EXCLUDE
+                                )
+                            }
+                        }
                     }
                     BitmapConverter(
                         renderCanvasSpec, renderUserSpec,
@@ -474,22 +602,53 @@ class DeferredVideo private constructor(
                         // Note: Despite this map operation potentially being expensive if there are lots of bitmaps,
                         // we cannot parallelize it because BitmapConverter.convert() is not thread-safe.
                         return transparentCanvasBitmaps.mapIndexed { idx, transparentCanvasBitmap ->
-                            val userBitmap = Bitmap.allocate(renderUserSpec)
-                            if (grounding == null)
-                                converter.convert(transparentCanvasBitmap, userBitmap)
-                            else
-                                Bitmap.allocate(renderCanvasSpec).use { groundedCanvasBitmap ->
-                                    Canvas.forBitmap(groundedCanvasBitmap, canvasCeiling).use { canvas ->
+                            val groundedCanvasBitmap = if (grounding == null) null else
+                                diskCache?.groundedChunkFile(chunkIdx, idx)?.let { file ->
+                                    diskCache.getOrCreateSharedBitmap(
+                                        file,
+                                        profiling,
+                                        hitCountKey = "sharedCache.groundedChunkHit",
+                                        missCountKey = "sharedCache.groundedChunkMiss"
+                                    ) {
+                                        Bitmap.allocate(renderCanvasSpec).also { grounded ->
+                                            Canvas.forBitmap(grounded, canvasCeiling).use { canvas ->
+                                                canvas.fill(Canvas.Shader.Solid(grounding))
+                                                canvas.drawImageFast(transparentCanvasBitmap)
+                                            }
+                                        }
+                                    }
+                                } ?: Bitmap.allocate(renderCanvasSpec).also { grounded ->
+                                    Canvas.forBitmap(grounded, canvasCeiling).use { canvas ->
                                         canvas.fill(Canvas.Shader.Solid(grounding))
                                         canvas.drawImageFast(transparentCanvasBitmap)
                                     }
-                                    converter.convert(groundedCanvasBitmap, userBitmap)
                                 }
+                            val userBitmap = diskCache?.chunkUserFile(chunkIdx, idx)?.let { file ->
+                                diskCache.getOrCreateSharedBitmap(
+                                    file,
+                                    profiling,
+                                    hitCountKey = "sharedCache.chunkUserHit",
+                                    missCountKey = "sharedCache.chunkUserMiss"
+                                ) {
+                                    Bitmap.allocate(renderUserSpec).also { user ->
+                                        converter.convert(groundedCanvasBitmap ?: transparentCanvasBitmap, user)
+                                    }
+                                }
+                            } ?: Bitmap.allocate(renderUserSpec).also { user ->
+                                converter.convert(groundedCanvasBitmap ?: transparentCanvasBitmap, user)
+                            }
                             Render(
                                 transparentCanvasBitmap,
+                                groundedCanvasBitmap,
                                 userBitmap,
-                                baseShift + microShifts[idx]
-                            ) { stateKey -> diskCache?.overlayFile(chunkIdx, idx, stateKey) }
+                                baseShift + microShifts[idx],
+                                grounding,
+                                canvasCeiling,
+                                diskCache,
+                                { stateKey -> diskCache?.overlayFile(chunkIdx, idx, stateKey) },
+                                { stateKey -> diskCache?.overlayUserFile(chunkIdx, idx, stateKey) },
+                                profiling
+                            )
                         }
                     }
                 }
@@ -497,7 +656,7 @@ class DeferredVideo private constructor(
         }
 
         private fun obtainStaticProgressiveFrame(progressiveFrameIdx: Int, useCanvasRep: Boolean): Frame {
-            val responses = pageCache.query(progressiveFrameIdx)
+            val responses = profiling.measure("pageCache.query") { pageCache.query(progressiveFrameIdx) }
             val r = responses.singleOrNull()
             val hasFlashingText = animateFlashingText &&
                     responses.any { resp ->
@@ -508,75 +667,114 @@ class DeferredVideo private constructor(
                     }
             return when {
                 responses.isEmpty() -> {
-                    val bitmap = if (useCanvasRep) blankCanvasBitmap else blankUserBitmap
-                    Frame(bitmap, writable = false, shift = 0)
+                    profiling.measure("staticProgressive.blankFrame") {
+                        val bitmap = if (useCanvasRep) blankCanvasBitmap else blankUserBitmap
+                        Frame(bitmap, writable = false, shift = 0)
+                    }
                 }
                 hasFlashingText -> {
-                    val canvasBitmap = Bitmap.allocate(canvasWorkSpec)
-                    Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
-                        if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
-                        for (resp in responses)
-                            when (resp) {
-                                is PageCache.Response.Image ->
-                                    canvas.compositeLayer(alpha = resp.alpha) {
-                                        materialize(
-                                            canvas, resp.image, -resp.shift, progressiveFrameIdx,
-                                            DeferredImage.FlashingTextMode.ALL
-                                        )
+                    if (!useCanvasRep && r is PageCache.Response.Render && r.alpha == 1.0) {
+                        val overlayState = r.image.flashingStateKey(staticLayers, progressiveFrameIdx)
+                        if (overlayState == null)
+                            return profiling.measure("staticProgressive.cachedFlashingRender") {
+                                Frame(r.render.userBitmap, writable = false, shift = r.shift)
+                            }
+                        return profiling.measure("staticProgressive.cachedFlashingRender") {
+                            Frame(
+                                r.render.getOrCreateFlashingUserBitmap(overlayState) {
+                                    profiling.measure("flashingOverlay.create") {
+                                        val bitmap = Bitmap.allocate(r.render.transparentCanvasBitmap.spec)
+                                        Canvas.forBitmap(bitmap.zero(), canvasCeiling).use {
+                                            materialize(
+                                                it, r.image, -r.render.renderShift, progressiveFrameIdx,
+                                                DeferredImage.FlashingTextMode.ONLY
+                                            )
+                                        }
+                                        bitmap
                                     }
-                                is PageCache.Response.Render -> {
-                                    canvas.drawImageFast(
-                                        resp.render.transparentCanvasBitmap, alpha = resp.alpha, y = -resp.shift
-                                    )
-                                    val overlayState = resp.image.flashingStateKey(staticLayers, progressiveFrameIdx)
-                                    if (overlayState != null) {
-                                        val overlay = resp.render.getOrCreateFlashingOverlay(overlayState) {
-                                            val bitmap = Bitmap.allocate(resp.render.transparentCanvasBitmap.spec)
-                                            Canvas.forBitmap(bitmap.zero(), canvasCeiling).use {
+                                },
+                                writable = false,
+                                shift = r.shift
+                            )
+                        }
+                    }
+                    val canvasBitmap = profiling.measure("staticProgressive.flashing.compose") {
+                        Bitmap.allocate(canvasWorkSpec).also { canvasBitmap ->
+                            Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                                if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
+                                for (resp in responses)
+                                    when (resp) {
+                                        is PageCache.Response.Image ->
+                                            canvas.compositeLayer(alpha = resp.alpha) {
                                                 materialize(
-                                                    it, resp.image, -resp.render.renderShift, progressiveFrameIdx,
-                                                    DeferredImage.FlashingTextMode.ONLY
+                                                    canvas, resp.image, -resp.shift, progressiveFrameIdx,
+                                                    DeferredImage.FlashingTextMode.ALL
                                                 )
                                             }
-                                            bitmap
+                                        is PageCache.Response.Render -> {
+                                            canvas.drawImageFast(
+                                                resp.render.transparentCanvasBitmap, alpha = resp.alpha, y = -resp.shift
+                                            )
+                                            val overlayState = resp.image.flashingStateKey(staticLayers, progressiveFrameIdx)
+                                            if (overlayState != null) {
+                                                val overlay = resp.render.getOrCreateFlashingOverlay(overlayState) {
+                                                    profiling.measure("flashingOverlay.create") {
+                                                        val bitmap = Bitmap.allocate(resp.render.transparentCanvasBitmap.spec)
+                                                        Canvas.forBitmap(bitmap.zero(), canvasCeiling).use {
+                                                            materialize(
+                                                                it, resp.image, -resp.render.renderShift, progressiveFrameIdx,
+                                                                DeferredImage.FlashingTextMode.ONLY
+                                                            )
+                                                        }
+                                                        bitmap
+                                                    }
+                                                }
+                                                canvas.drawImageFast(overlay, alpha = resp.alpha, y = -resp.shift)
+                                            }
                                         }
-                                        canvas.drawImageFast(overlay, alpha = resp.alpha, y = -resp.shift)
                                     }
-                                }
                             }
+                        }
                     }
-                    val bitmap = if (useCanvasRep) canvasBitmap else canvas2userAndClose(canvasBitmap)
+                    val bitmap = if (useCanvasRep) canvasBitmap else
+                        profiling.measure("staticProgressive.canvasToUser") { canvas2userAndClose(canvasBitmap) }
                     Frame(bitmap, writable = true, shift = 0)
                 }
-                r is PageCache.Response.Render && r.alpha == 1.0 -> when {
-                    !useCanvasRep -> Frame(r.render.userBitmap, writable = false, shift = r.shift)
-                    grounding == null -> Frame(r.render.transparentCanvasBitmap, writable = false, shift = r.shift)
-                    else -> {
-                        val bitmap = Bitmap.allocate(canvasWorkSpec)
-                        Canvas.forBitmap(bitmap, canvasCeiling).use { canvas ->
-                            canvas.fill(Canvas.Shader.Solid(grounding))
-                            canvas.drawImageFast(r.render.transparentCanvasBitmap, y = -r.shift)
+                r is PageCache.Response.Render && r.alpha == 1.0 -> profiling.measure("staticProgressive.cachedRender") {
+                    when {
+                        !useCanvasRep -> Frame(r.render.userBitmap, writable = false, shift = r.shift)
+                        grounding == null -> Frame(r.render.transparentCanvasBitmap, writable = false, shift = r.shift)
+                        else -> {
+                            val bitmap = Bitmap.allocate(canvasWorkSpec)
+                            Canvas.forBitmap(bitmap, canvasCeiling).use { canvas ->
+                                canvas.fill(Canvas.Shader.Solid(grounding))
+                                canvas.drawImageFast(r.render.transparentCanvasBitmap, y = -r.shift)
+                            }
+                            Frame(bitmap, writable = true, shift = 0)
                         }
-                        Frame(bitmap, writable = true, shift = 0)
                     }
                 }
                 else -> {
-                    val canvasBitmap = Bitmap.allocate(canvasWorkSpec)
-                    Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
-                        if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
-                        for (resp in pageCache.query(progressiveFrameIdx))
-                            when (resp) {
-                                is PageCache.Response.Image ->
-                                    canvas.compositeLayer(alpha = resp.alpha) {
-                                        materialize(canvas, resp.image, -resp.shift, progressiveFrameIdx)
+                    val canvasBitmap = profiling.measure("staticProgressive.generalCompose") {
+                        Bitmap.allocate(canvasWorkSpec).also { canvasBitmap ->
+                            Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                                if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
+                                for (resp in responses)
+                                    when (resp) {
+                                        is PageCache.Response.Image ->
+                                            canvas.compositeLayer(alpha = resp.alpha) {
+                                                materialize(canvas, resp.image, -resp.shift, progressiveFrameIdx)
+                                            }
+                                        is PageCache.Response.Render ->
+                                            canvas.drawImageFast(
+                                                resp.render.transparentCanvasBitmap, alpha = resp.alpha, y = -resp.shift
+                                            )
                                     }
-                                is PageCache.Response.Render ->
-                                    canvas.drawImageFast(
-                                        resp.render.transparentCanvasBitmap, alpha = resp.alpha, y = -resp.shift
-                                    )
                             }
+                        }
                     }
-                    val bitmap = if (useCanvasRep) canvasBitmap else canvas2userAndClose(canvasBitmap)
+                    val bitmap = if (useCanvasRep) canvasBitmap else
+                        profiling.measure("staticProgressive.canvasToUser") { canvas2userAndClose(canvasBitmap) }
                     Frame(bitmap, writable = true, shift = 0)
                 }
             }
@@ -627,34 +825,42 @@ class DeferredVideo private constructor(
         private val tapeTracker = TapeTracker<TapeUserData>(progressiveVideo, tapeLayers)
 
         private fun obtainDynamicProgressiveFrame(frameIdx: Int): Frame {
-            val tapeResponses = tapeTracker.query(frameIdx)
+            val tapeResponses = profiling.measure("tapeTracker.query") { tapeTracker.query(frameIdx) }
             val compInCanvasRep = shouldCompInCanvasRep(tapeResponses)
-            val static = obtainStaticProgressiveFrame(frameIdx, compInCanvasRep)
+            val static = profiling.measure("backend.obtainStaticProgressiveFrame") {
+                obtainStaticProgressiveFrame(frameIdx, compInCanvasRep)
+            }
             if (tapeResponses.isEmpty())
                 return static
             val composite = if (static.writable) static.bitmap else
                 Bitmap.allocate(if (compInCanvasRep) canvasWorkSpec else userWorkSpec)
                     .apply { blit(static.bitmap, 0, static.shift, workWidth, workHeight, 0, 0, 1) }
-            for (resp in tapeResponses) {
-                val userData = takeTapeUserData(resp)
-                userData.frameOverlayer!!.overlay(composite, userData.read(resp.timecode), resp.x, resp.y, resp.alpha)
-                dropTapeUserData(resp, frameIdx)
+            profiling.measure("tapeOverlay.progressive") {
+                for (resp in tapeResponses) {
+                    val userData = takeTapeUserData(resp)
+                    userData.frameOverlayer!!.overlay(composite, userData.read(resp.timecode), resp.x, resp.y, resp.alpha)
+                    dropTapeUserData(resp, frameIdx)
+                }
             }
             val userComposite = if (!compInCanvasRep) composite else canvas2userAndClose(composite)
             return Frame(userComposite, writable = true, shift = 0)
         }
 
         private fun obtainDynamicInterlacedFrame(frameIdx: Int): Frame {
-            val fstTapeResponses = tapeTracker.query(frameIdx * 2)
-            val sndTapeResponses = tapeTracker.query(frameIdx * 2 + 1)
+            val fstTapeResponses = profiling.measure("tapeTracker.query") { tapeTracker.query(frameIdx * 2) }
+            val sndTapeResponses = profiling.measure("tapeTracker.query") { tapeTracker.query(frameIdx * 2 + 1) }
             val compInCanvasRep = shouldCompInCanvasRep(fstTapeResponses) || shouldCompInCanvasRep(sndTapeResponses)
-            val (composite, fstSrcParity, fstDstParity) = obtainStaticInterlacedFrame(frameIdx, compInCanvasRep)
+            val (composite, fstSrcParity, fstDstParity) = profiling.measure("backend.obtainStaticInterlacedFrame") {
+                obtainStaticInterlacedFrame(frameIdx, compInCanvasRep)
+            }
             if (fstTapeResponses.isEmpty() && sndTapeResponses.isEmpty())
                 return Frame(composite, writable = true, shift = 0)
             val sndSrcParity = 1 - fstSrcParity
             val sndDstParity = 1 - fstDstParity
-            overlayInterlacedTapes(composite, frameIdx * 2, fstTapeResponses, fstSrcParity, fstDstParity)
-            overlayInterlacedTapes(composite, frameIdx * 2 + 1, sndTapeResponses, sndSrcParity, sndDstParity)
+            profiling.measure("tapeOverlay.interlaced") {
+                overlayInterlacedTapes(composite, frameIdx * 2, fstTapeResponses, fstSrcParity, fstDstParity)
+                overlayInterlacedTapes(composite, frameIdx * 2 + 1, sndTapeResponses, sndSrcParity, sndDstParity)
+            }
             val userComposite = if (!compInCanvasRep) composite else canvas2userAndClose(composite)
             return Frame(userComposite, writable = true, shift = 0)
         }
@@ -964,7 +1170,8 @@ class DeferredVideo private constructor(
     private abstract class PageCache<R : AutoCloseable>(
         private val video: DeferredVideo,
         private val sequentialAccess: Boolean,
-        private val preloading: Boolean
+        private val preloading: Boolean,
+        private val profiling: RenderProfiling? = null
     ) {
 
         private val chunkSpacing: Int
@@ -1115,7 +1322,9 @@ class DeferredVideo private constructor(
         // method returns.
         private fun loadChunk(chunk: Chunk<R>): List<R> {
             try {
-                val microShiftedRenders = createRenders(chunk.index, chunk.image, chunk.shift, chunk.microShifts, chunk.height)
+                val microShiftedRenders = profiling.measure("pageCache.createRenders") {
+                    createRenders(chunk.index, chunk.image, chunk.shift, chunk.microShifts, chunk.height)
+                }
                 chunk.microShiftedRenders.set(SoftReference(microShiftedRenders))
                 return microShiftedRenders
             } finally {

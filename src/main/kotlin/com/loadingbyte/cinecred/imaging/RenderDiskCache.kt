@@ -2,6 +2,7 @@ package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.BUILD_ID
 import com.loadingbyte.cinecred.common.LOGGER
+import com.loadingbyte.cinecred.common.RenderProfiling
 import com.loadingbyte.cinecred.common.createDirectoriesSafely
 import kotlin.io.path.*
 import java.io.BufferedInputStream
@@ -16,6 +17,9 @@ import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
 import java.util.HexFormat
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.lang.ref.SoftReference
 
 
 object RenderDiskCache {
@@ -72,7 +76,7 @@ object RenderDiskCache {
     fun storeBitmap(file: Path, bitmap: Bitmap) {
         val parent = file.parent ?: return
         parent.createDirectoriesSafely()
-        val temp = parent.resolve("${file.name}.tmp")
+        val temp = Files.createTempFile(parent, "${file.name}.", ".tmp")
         try {
             DataOutputStream(BufferedOutputStream(Files.newOutputStream(temp))).use { output ->
                 output.writeInt(BITMAP_MAGIC)
@@ -144,13 +148,112 @@ object RenderDiskCache {
         }
     }
 
-    data class Session(val dir: Path) {
+    class Session(val dir: Path) {
+        private val inFlightBitmaps = ConcurrentHashMap<Path, CompletableFuture<Unit>>()
+        private val sharedBitmaps = ConcurrentHashMap<Path, SoftReference<Bitmap>>()
+        private val inFlightSharedBitmaps = ConcurrentHashMap<Path, CompletableFuture<Bitmap>>()
+
+        fun loadOrCreateBitmap(
+            file: Path,
+            spec: Bitmap.Spec,
+            profiling: RenderProfiling?,
+            loadTimingKey: String,
+            storeTimingKey: String,
+            hitCountKey: String,
+            missCountKey: String,
+            create: () -> Bitmap
+        ): Bitmap {
+            val cached = profiling?.measure(loadTimingKey) { loadBitmap(file, spec) } ?: loadBitmap(file, spec)
+            if (cached != null) {
+                profiling?.increment(hitCountKey)
+                return cached
+            }
+            profiling?.increment(missCountKey)
+
+            val future = CompletableFuture<Unit>()
+            val existing = inFlightBitmaps.putIfAbsent(file, future)
+            if (existing != null) {
+                existing.join()
+                val loaded = profiling?.measure(loadTimingKey) { loadBitmap(file, spec) } ?: loadBitmap(file, spec)
+                if (loaded != null) {
+                    profiling?.increment(hitCountKey)
+                    return loaded
+                }
+                return create()
+            }
+
+            try {
+                val reloaded = profiling?.measure(loadTimingKey) { loadBitmap(file, spec) } ?: loadBitmap(file, spec)
+                if (reloaded != null) {
+                    profiling?.increment(hitCountKey)
+                    return reloaded
+                }
+
+                return create().also { bitmap ->
+                    profiling?.measure(storeTimingKey) { storeBitmap(file, bitmap) } ?: storeBitmap(file, bitmap)
+                }
+            } finally {
+                future.complete(Unit)
+                inFlightBitmaps.remove(file, future)
+            }
+        }
+
+        fun getOrCreateSharedBitmap(
+            file: Path,
+            profiling: RenderProfiling?,
+            hitCountKey: String,
+            missCountKey: String,
+            create: () -> Bitmap
+        ): Bitmap {
+            sharedBitmaps[file]?.get()?.let { cached ->
+                profiling?.increment(hitCountKey)
+                return cached.view()
+            }
+            profiling?.increment(missCountKey)
+
+            val future = CompletableFuture<Bitmap>()
+            val existing = inFlightSharedBitmaps.putIfAbsent(file, future)
+            if (existing != null) {
+                profiling?.increment(hitCountKey)
+                return existing.join().view()
+            }
+
+            try {
+                sharedBitmaps[file]?.get()?.let { cached ->
+                    profiling?.increment(hitCountKey)
+                    future.complete(cached)
+                    return cached.view()
+                }
+
+                val bitmap = create()
+                sharedBitmaps[file] = SoftReference(bitmap)
+                future.complete(bitmap)
+                return bitmap.view()
+            } catch (t: Throwable) {
+                future.completeExceptionally(t)
+                throw t
+            } finally {
+                inFlightSharedBitmaps.remove(file, future)
+            }
+        }
+
         fun chunkFile(chunkIdx: Int, microShiftIdx: Int): Path =
             dir.resolve("chunk-$chunkIdx").resolve("base-$microShiftIdx.bin")
+
+        fun groundedChunkFile(chunkIdx: Int, microShiftIdx: Int): Path =
+            dir.resolve("chunk-$chunkIdx").resolve("grounded-$microShiftIdx.bin")
+
+        fun chunkUserFile(chunkIdx: Int, microShiftIdx: Int): Path =
+            dir.resolve("chunk-$chunkIdx").resolve("user-$microShiftIdx.bin")
 
         fun overlayFile(chunkIdx: Int, microShiftIdx: Int, stateKey: DeferredImage.FlashingStateKey): Path =
             dir.resolve("chunk-$chunkIdx").resolve(
                 "overlay-$microShiftIdx-${sha256Hex(stateKey.colorIndices.joinToString(","))}.bin"
+            )
+
+        fun overlayUserFile(chunkIdx: Int, microShiftIdx: Int, stateKey: DeferredImage.FlashingStateKey): Path =
+            dir.resolve("chunk-$chunkIdx").resolve(
+                "overlay-user-$microShiftIdx-${sha256Hex(stateKey.colorIndices.joinToString(","))}.bin"
             )
     }
 

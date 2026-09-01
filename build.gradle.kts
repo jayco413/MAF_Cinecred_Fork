@@ -267,11 +267,13 @@ for (platform in Platform.values()) {
     val platformNatives = platformNativesTasks.getValue(platform)
     val mainClass_ = mainClass
     val platformAddOpens = addOpensFor(platform.os)
+    val splashJvmArgs =
+        if (providers.environmentVariable("CINECRED_RENDER_PROJECT").isPresent) emptyList()
+        else listOf("-splash:${tasks.processResources.get().destinationDir}/$splashScreen")
     val jvmArgs_ = listOf(
         "-Djava.library.path=${platformNatives.get().destinationDir}",
-        "-splash:${tasks.processResources.get().destinationDir}/$splashScreen",
         "--add-modules", addModules.joinToString(",")
-    ) + platformAddOpens.flatMap { listOf("--add-opens", "$it=ALL-UNNAMED") } + javaOptions.split(" ")
+    ) + splashJvmArgs + platformAddOpens.flatMap { listOf("--add-opens", "$it=ALL-UNNAMED") } + javaOptions.split(" ")
     tasks.register<JavaExec>("runOn${platform.label.capitalized()}") {
         group = "Execution"
         description = "Runs the program on ${platform.label.capitalized()}."
