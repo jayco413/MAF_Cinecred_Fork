@@ -1,19 +1,24 @@
 package com.loadingbyte.cinecred.ui.view.welcome
 
 import com.formdev.flatlaf.FlatClientProperties.*
-import com.loadingbyte.cinecred.common.BUNDLED_FONTS
 import com.loadingbyte.cinecred.common.VERSION
 import com.loadingbyte.cinecred.common.l10n
+import com.loadingbyte.cinecred.common.useResourceStream
+import com.loadingbyte.cinecred.ui.Report
 import com.loadingbyte.cinecred.ui.comms.License
 import com.loadingbyte.cinecred.ui.comms.WelcomeCtrlComms
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
 import com.loadingbyte.cinecred.ui.helper.*
 import net.miginfocom.swing.MigLayout
 import java.awt.BorderLayout
+import java.awt.Font
 import java.awt.Insets
 import java.awt.event.ItemEvent
+import java.awt.font.FontRenderContext
+import java.awt.font.LineBreakMeasurer
+import java.awt.font.TextAttribute
 import java.net.URI
-import java.util.*
+import java.text.AttributedString
 import javax.swing.*
 import javax.swing.SwingConstants.LEFT
 import javax.swing.SwingConstants.TOP
@@ -22,6 +27,10 @@ import javax.swing.text.StyleConstants
 
 
 class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
+
+    // ========== ENCAPSULATION LEAKS ==========
+    @Deprecated("ENCAPSULATION LEAK") val leakedTabs: JTabbedPane get() = tabPane
+    // =========================================
 
     val projectsPanel = ProjectsPanel(welcomeCtrl)
     val preferencesPanel = PreferencesPanel(welcomeCtrl)
@@ -37,9 +46,9 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     private val updateMessageTextPane: JTextPane
 
     init {
-        // We force the whole panel to have an even width so that the logo is guaranteed to be centered in the tab bar.
+        // We force the whole panel to have an even width so that the emblem is always centered in the tab bar.
         val brandPanel = JPanel(MigLayout("center, wrap", "[80, center]", "15[][]-3[]20")).apply {
-            add(JLabel(SVGIcon.load("/logo.svg").getScaledIcon(0.25)))
+            add(JLabel(EMBLEM_ICON.getScaledIcon(0.25)))
             add(JLabel("Cinecred").apply {
                 font = TITILLIUM_SEMI.deriveFont(H2)
                 putClientProperty(STYLE, "foreground: #FFF")
@@ -95,6 +104,18 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             add(licenseScrollPane, "newline, grow, push, gaptop 10")
         }
 
+        val reportButton = JButton(l10n("ui.welcome.report"), EMAIL_ICON.getScaledIcon(2.0)).apply {
+            iconTextGap = 10
+            putClientProperty(STYLE_CLASS, "h2")
+            putClientProperty(BUTTON_TYPE, BUTTON_TYPE_BORDERLESS)
+            addActionListener { Report().send(Report.Type.BUG) }
+        }
+        val reportPanel = JPanel(MigLayout("insets 30", "", "[]25[]")).apply {
+            putClientProperty(STYLE, "background: $CONTENT_BG_COLOR")
+            add(newLabelTextArea(l10n("ui.report.msg")), "growx, pushx")
+            add(reportButton, "newline, center")
+        }
+
         updateMessageTextPane = newLabelTextPane()
         val updateBrowseButton = JButton(l10n("ui.update.browse"), BEARING_BOTTOM_ICON.getScaledIcon(2.0)).apply {
             iconTextGap = 10
@@ -104,7 +125,7 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         }
         updatePanel = JPanel(MigLayout("insets 60", "[grow 1]15[grow 1]", "[]30[]25[]")).apply {
             putClientProperty(STYLE, "background: $CONTENT_BG_COLOR")
-            add(JLabel(SVGIcon.load("/logo.svg").getScaledIcon(0.4)), "right")
+            add(JLabel(EMBLEM_ICON.getScaledIcon(0.4)), "right")
             add(JLabel("Cinecred").apply {
                 font = TITILLIUM_SEMI.deriveFont(H1)
                 putClientProperty(STYLE, "foreground: #FFF")
@@ -123,13 +144,28 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             putClientProperty(TABBED_PANE_TAB_INSETS, Insets(10, 14, 10, 14))
             putClientProperty(TABBED_PANE_MINIMUM_TAB_WIDTH, 110)
             putClientProperty(TABBED_PANE_LEADING_COMPONENT, brandPanel)
-            addTab(l10n("ui.welcome.projects"), FOLDER_ICON, projectsPanel)
-            addTab(l10n("ui.welcome.preferences"), PREFERENCES_ICON, preferencesPanel)
-            addTab(l10n("ui.welcome.changelog"), GIFT_ICON, changelogPanel)
-            addTab(l10n("ui.welcome.about"), INFO_ICON.getRecoloredIcon(PALETTE_GRAY_COLOR), aboutPanel)
+            addTab(breakTitle(l10n("ui.welcome.projects")), FOLDER_ICON, projectsPanel)
+            addTab(breakTitle(l10n("ui.welcome.preferences")), PREFERENCES_ICON, preferencesPanel)
+            addTab(breakTitle(l10n("ui.welcome.changelog")), GIFT_ICON, changelogPanel)
+            addTab(breakTitle(l10n("ui.welcome.about")), INFO_ICON.getRecoloredIcon(PALETTE_GRAY_COLOR), aboutPanel)
+            addTab(breakTitle(l10n("ui.welcome.report")), BUG_ICON, reportPanel)
         }
         layout = BorderLayout()
         add(tabPane, BorderLayout.CENTER)
+    }
+
+    private fun JTabbedPane.breakTitle(title: String): String {
+        val iter = AttributedString(title, mapOf(TextAttribute.FONT to font)).iterator
+        val lbm = LineBreakMeasurer(iter, FontRenderContext(null, true, true))
+        val lines = mutableListOf<String>()
+        while (lbm.position != title.length) {
+            val lineEndPos = lbm.nextOffset(100f)
+            if (lbm.position == 0 && lineEndPos == title.length)
+                return title
+            lines.add(title.substring(lbm.position, lineEndPos))
+            lbm.position = lineEndPos
+        }
+        return "<html><center>${lines.joinToString("<br>")}</center></html>"
     }
 
 
@@ -179,9 +215,9 @@ class WelcomePanel(welcomeCtrl: WelcomeCtrlComms) : JPanel() {
 
         private const val CONTENT_BG_COLOR = "\$TabbedPane.hoverColor"
 
-        private val TITILLIUM_REGU = BUNDLED_FONTS.first { it.getFontName(Locale.ROOT) == "Titillium Regular Upright" }
-        private val TITILLIUM_SEMI = BUNDLED_FONTS.first { it.getFontName(Locale.ROOT) == "Titillium Semibold Upright" }
-        private val TITILLIUM_BOLD = BUNDLED_FONTS.first { it.getFontName(Locale.ROOT) == "Titillium Bold Upright" }
+        private val TITILLIUM_REGU = useResourceStream("/fonts/Titillium-RegularUpright.otf", Font::createFonts)[0]
+        private val TITILLIUM_SEMI = useResourceStream("/fonts/Titillium-SemiboldUpright.otf", Font::createFonts)[0]
+        private val TITILLIUM_BOLD = useResourceStream("/fonts/Titillium-BoldUpright.otf", Font::createFonts)[0]
 
         private val H0 = UIManager.getFont("h0.font").size2D
         private val H1 = UIManager.getFont("h1.font").size2D

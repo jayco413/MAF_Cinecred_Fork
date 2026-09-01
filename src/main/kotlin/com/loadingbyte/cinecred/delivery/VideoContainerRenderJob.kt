@@ -4,7 +4,7 @@ import com.formdev.flatlaf.util.SystemInfo
 import com.loadingbyte.cinecred.common.LOGGER
 import com.loadingbyte.cinecred.common.RenderProfiling
 import com.loadingbyte.cinecred.common.createDirectoriesSafely
-import com.loadingbyte.cinecred.common.measure
+import com.loadingbyte.cinecred.common.userNotification
 import com.loadingbyte.cinecred.delivery.RenderFormat.CineFormProfile.*
 import com.loadingbyte.cinecred.delivery.RenderFormat.Config
 import com.loadingbyte.cinecred.delivery.RenderFormat.Config.Assortment.Companion.choice
@@ -35,26 +35,19 @@ import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.BT2020
 import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.BT709
 import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.DCI_P3
 import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.DISPLAY_P3
-import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.BLENDING
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.BT1886
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.HLG
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.LINEAR
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.PQ
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.SRGB
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.ST428
-import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.STATIC
-import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.TAPES
+import com.loadingbyte.cinecred.project.Scan
 import com.loadingbyte.cinecred.project.Styling
 import org.bytedeco.ffmpeg.global.avcodec.*
 import org.bytedeco.ffmpeg.global.avutil.*
 import java.nio.file.Path
-import java.util.concurrent.atomic.AtomicReference
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.LinkedBlockingQueue
 import kotlin.io.path.name
-import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.pow
 
 
@@ -67,12 +60,6 @@ class VideoContainerRenderJob private constructor(
     private val projectDir: Path,
     private val file: Path
 ) : RenderJob {
-
-    private sealed interface MaterializedFrame {
-        data class Ready(val frameIdx: Int, val bitmap: Bitmap) : MaterializedFrame
-        data class Failed(val throwable: Throwable) : MaterializedFrame
-        data object Finished : MaterializedFrame
-    }
 
     override val prefix: Path
         get() = file
@@ -95,193 +82,90 @@ class VideoContainerRenderJob private constructor(
     }
 
     private fun render(progressCallback: (Int) -> Unit, settings: VideoWriterSettings) {
+        val yuv = settings.pixelFormat.family == Bitmap.PixelFormat.Family.YUV
+        val matte = config[TRANSPARENCY] == MATTE
+        val colorSpace = if (matte) ColorSpace.of(BT709, LINEAR) else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
+        val ceiling = if (colorSpace.transfer.isHDR) null else 1f
+        val scan = config[SCAN]
+        val grounding = if (config[TRANSPARENCY] == GROUNDED) styling.global.grounding else null
+        var scaledVideo = video.copy(2.0.pow(config[SPATIAL_SCALING_LOG2]), fpsScaling = config[FPS_SCALING])
+        if (sliders.resolution != null)
+            scaledVideo = scaledVideo.copy(
+                resolutionPaddingH = (sliders.resolution.widthPx - scaledVideo.resolution.widthPx) / 2.0,
+                resolutionPaddingV = (sliders.resolution.heightPx - scaledVideo.resolution.heightPx) / 2.0,
+            )
+
+        val diskCache = RenderDiskCache.open(
+            projectDir, file,
+            renderKey(
+                job = "video-container",
+                format = format.label,
+                configIdx = format.configs.indexOf(config),
+                sliders = sliders,
+                video = scaledVideo,
+                spec = "grounding=${styling.global.grounding} ceiling=$ceiling matte=$matte scan=$scan " +
+                        "pixFmt=${settings.pixelFormat} codec=${settings.codecName}"
+            )
+        )
         val profiling = RenderProfiling("video render profile for '${file.name}'")
-        try {
-            val yuv = settings.pixelFormat.family == Bitmap.PixelFormat.Family.YUV
-            val matte = config[TRANSPARENCY] == MATTE
-            val colorSpace =
-                if (matte) ColorSpace.of(BT709, LINEAR) else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
-            val ceiling = if (colorSpace.transfer.isHDR) null else 1f
-            val scan = config[SCAN]
-            val grounding = if (config[TRANSPARENCY] == GROUNDED) styling.global.grounding else null
-            var scaledVideo = video.copy(2.0.pow(config[SPATIAL_SCALING_LOG2]), fpsScaling = config[FPS_SCALING])
-            if (sliders.resolution != null)
-                scaledVideo = scaledVideo.copy(
-                    resolutionPaddingH = (sliders.resolution.widthPx - scaledVideo.resolution.widthPx) / 2.0,
-                    resolutionPaddingV = (sliders.resolution.heightPx - scaledVideo.resolution.heightPx) / 2.0,
-                )
 
-            val writerSpec = Bitmap.Spec(
-                scaledVideo.resolution,
-                Bitmap.Representation(
-                    settings.pixelFormat,
-                    if (!yuv) Bitmap.Range.FULL else Bitmap.Range.LIMITED,
-                    colorSpace,
-                    if (!yuv) null else if (matte) BT709_NCL else config[YUV],
-                    if (settings.pixelFormat.hasChromaSub) AVCHROMA_LOC_LEFT else AVCHROMA_LOC_UNSPECIFIED,
-                    if (config[TRANSPARENCY] == TRANSPARENT) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
-                ),
-                scan,
-                if (scan == Bitmap.Scan.PROGRESSIVE) Bitmap.Content.PROGRESSIVE_FRAME else Bitmap.Content.INTERLEAVED_FIELDS
-            )
+        val deliverer = VideoDeliverer(
+            scaledVideo, styling.global.timecodeFormat, grounding, styling.global.locale, sliders.slate,
+            Bitmap.Representation(
+                settings.pixelFormat,
+                if (!yuv) Bitmap.Range.FULL else Bitmap.Range.LIMITED,
+                colorSpace,
+                if (!yuv) null else if (matte) BT709_NCL else config[YUV],
+                if (settings.pixelFormat.hasChromaSub) AVCHROMA_LOC_LEFT else AVCHROMA_LOC_UNSPECIFIED,
+                if (config[TRANSPARENCY] == TRANSPARENT) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
+            ),
+            ceiling, scan, matte, diskCache, profiling
+        )
 
-            var backendSpec = writerSpec
-            var blackWriterBitmap: Bitmap? = null
-            if (matte) {
-                val backendPxFmtCode = when (val depth = writerSpec.representation.pixelFormat.depth) {
-                    8 -> AV_PIX_FMT_GBRAP
-                    10 -> AV_PIX_FMT_GBRAP10
-                    12 -> AV_PIX_FMT_GBRAP12
-                    16 -> AV_PIX_FMT_GBRAP16
-                    else -> throw IllegalArgumentException("No color format for depth $depth.")
-                }
-                val backendRep = Bitmap.Representation(
-                    Bitmap.PixelFormat.of(backendPxFmtCode), ColorSpace.of(BT709, BLENDING), Bitmap.Alpha.PREMULTIPLIED
-                )
-                val rgbRep = Bitmap.Representation(
-                    Bitmap.PixelFormat.of(AV_PIX_FMT_GBRPF32), colorSpace, Bitmap.Alpha.OPAQUE
-                )
-                backendSpec = writerSpec.copy(representation = backendRep)
-                blackWriterBitmap = Bitmap.allocate(writerSpec)
-                Bitmap.allocate(writerSpec.copy(representation = rgbRep)).zero()
-                    .use { BitmapConverter.convert(it, blackWriterBitmap) }
-            }
-            val diskCache = RenderDiskCache.open(
-                projectDir,
-                file,
-                buildString {
-                    append("job=video-container\n")
-                    append("format=${format.label}\n")
-                    append("configIndex=${format.configs.indexOf(config)}\n")
-                    append("resolutionSlider=${sliders.resolution}\n")
-                    append("videoResolution=${scaledVideo.resolution}\n")
-                    append("videoFps=${scaledVideo.fps}\n")
-                    append("writerSpec=$writerSpec\n")
-                    append("backendSpec=$backendSpec\n")
-                    append("grounding=${styling.global.grounding}\n")
-                    append("ceiling=$ceiling\n")
-                    append("animateFlashingText=true\n")
-                }
-            )
-
-            val numFrames = scaledVideo.numFrames
-            val chunkSize = 24
-            val workerCount = max(1, min(min(Runtime.getRuntime().availableProcessors() / 4, 6), (numFrames + chunkSize - 1) / chunkSize))
-            val queue = LinkedBlockingQueue<MaterializedFrame>(workerCount * chunkSize)
-            val reusableOutputBitmaps = ConcurrentLinkedQueue<Bitmap>()
-            val nextChunk = AtomicInteger(0)
-            val failure = AtomicReference<Throwable?>(null)
-            val materializers = List(workerCount) { workerIdx ->
-                Thread({
-                    try {
-                        DeferredVideo.BitmapBackend(
-                            scaledVideo, listOf(STATIC), listOf(TAPES), grounding, backendSpec, ceiling,
-                            animateFlashingText = true, diskCache = diskCache, profiling = profiling
-                        ).use { backend ->
-                            while (true) {
-                                val chunkIdx = nextChunk.getAndIncrement()
-                                val startFrameIdx = chunkIdx * chunkSize
-                                if (startFrameIdx >= numFrames)
-                                    break
-                                val endFrameIdx = min(numFrames, startFrameIdx + chunkSize)
-                                for (frameIdx in startFrameIdx..<endFrameIdx) {
-                                    val materialized = profiling.measure("materializer.frame") {
-                                        backend.materializeFrameForExport(frameIdx)!!
-                                    }
-                                    val outputBitmap = if (!matte) {
-                                        if (materialized.owned)
-                                            materialized.bitmap
-                                        else {
-                                            profiling.measure("materializer.copySharedFrame") {
-                                                val outputBitmap = reusableOutputBitmaps.poll()
-                                                    ?: Bitmap.allocate(writerSpec)
-                                                outputBitmap.blit(materialized.bitmap)
-                                                materialized.bitmap.close()
-                                                outputBitmap
-                                            }
-                                        }
-                                    }
-                                    else {
-                                        val matteBitmap = Bitmap.allocate(writerSpec).zero()
-                                        matteBitmap.blit(blackWriterBitmap!!)
-                                        matteBitmap.blitComponent(materialized.bitmap, 3, 0)
-                                        if (!yuv) {
-                                            matteBitmap.blitComponent(materialized.bitmap, 3, 1)
-                                            matteBitmap.blitComponent(materialized.bitmap, 3, 2)
-                                        }
-                                        materialized.bitmap.close()
-                                        matteBitmap
-                                    }
-                                    queue.put(MaterializedFrame.Ready(frameIdx, outputBitmap))
-                                    if (Thread.interrupted())
-                                        throw InterruptedException()
-                                }
-                            }
-                        }
-                    } catch (_: InterruptedException) {
-                        // Return
-                    } catch (t: Throwable) {
-                        if (failure.compareAndSet(null, t))
-                            queue.offer(MaterializedFrame.Failed(t))
-                    } finally {
-                        queue.offer(MaterializedFrame.Finished)
-                    }
-                }, "VideoFrameMaterializer-$workerIdx")
-            }
-            VideoWriter(
-                file, writerSpec, scaledVideo.fps, settings.codecName, settings.codecProfile, settings.codecOptions,
-                emptyMap()
-            ).use { videoWriter ->
-                val pendingFrames = HashMap<Int, Bitmap>()
-                try {
-                    materializers.forEach(Thread::start)
-                    var nextFrameIdx = 0
-                    var finishedWorkers = 0
-                    while (nextFrameIdx < numFrames) {
-                        when (val item = profiling.measure("writer.queueWait") { queue.take() }) {
-                            is MaterializedFrame.Ready -> {
-                                pendingFrames[item.frameIdx] = item.bitmap
-                                while (true) {
-                                    val bitmap = pendingFrames.remove(nextFrameIdx) ?: break
-                                    profiling.measure("writer.write") { videoWriter.write(bitmap) }
-                                    reusableOutputBitmaps.offer(bitmap)
-                                    progressCallback(MAX_RENDER_PROGRESS * (nextFrameIdx + 1) / numFrames)
-                                    nextFrameIdx++
-                                }
-                            }
-                            is MaterializedFrame.Failed -> throw item.throwable
-                            MaterializedFrame.Finished -> {
-                                finishedWorkers++
-                                check(finishedWorkers < workerCount || nextFrameIdx >= numFrames) {
-                                    "Materializers finished before all frames were written."
-                                }
-                            }
-                        }
+        // We have a second thread materialize frames into a queue, and the current thread take frames from the queue
+        // and submitting them to the VideoWriter. While this doesn't give us a huge performance boost over doing
+        // everything sequentially in the same thread, we gain a bit when a slow encoder (like ProRes) meets an
+        // expensive-to-materialize portion of the credits (like a blend).
+        val queue = LinkedBlockingQueue<Any>(32)
+        val materializer = Thread({
+            try {
+                deliverer.use {
+                    while (true) {
+                        queue.put(deliverer.deliverFrame() ?: break)
                         if (Thread.interrupted())
-                            throw InterruptedException()
-                    }
-                } finally {
-                    materializers.forEach(Thread::interrupt)
-                    materializers.forEach { it.join(1000L) }
-                    while (true) {
-                        when (val item = queue.poll() ?: break) {
-                            is MaterializedFrame.Ready -> item.bitmap.close()
-                            is MaterializedFrame.Failed, MaterializedFrame.Finished -> {}
-                        }
-                    }
-                    for (bitmap in pendingFrames.values)
-                        bitmap.close()
-                    pendingFrames.clear()
-                    while (true) {
-                        val bitmap = reusableOutputBitmaps.poll() ?: break
-                        bitmap.close()
+                            break
                     }
                 }
+            } catch (_: InterruptedException) {
+                // Return
+            } catch (e: Exception) {
+                queue.put(e)
             }
+        }, "VideoFrameMaterializer")
 
-            blackWriterBitmap?.close()
-        } finally {
-            LOGGER.info(profiling.summary())
+        VideoWriter(
+            file, deliverer.userSpec, scaledVideo.fps, settings.codecName, settings.codecProfile, settings.codecOptions,
+            emptyMap()
+        ).use { videoWriter ->
+            try {
+                // Start the materializer only after the VideoWriter has been successfully created, to not waste compute
+                // when the VideoWriter creation fails and we have to fall back to other VideoWriterSettings.
+                materializer.start()
+                for (frameIdx in 0..<deliverer.numFrames) {
+                    when (val got = queue.take()) {
+                        is Bitmap -> videoWriter.write(got)
+                        else -> throw RuntimeException((got as Throwable).userNotification, got)
+                    }
+                    progressCallback(MAX_RENDER_PROGRESS * (frameIdx + 1) / deliverer.numFrames)
+                    if (Thread.interrupted())
+                        throw InterruptedException()
+                }
+            } finally {
+                materializer.interrupt()
+                materializer.join(1000L)
+                while ((queue.poll() as? Bitmap)?.also(Bitmap::close) != null) continue
+                LOGGER.debug(profiling.summary())
+            }
         }
     }
 
@@ -338,7 +222,7 @@ class VideoContainerRenderJob private constructor(
             .flatMapTo(HashSet()) { it.extensions },
         defaultFileExt,
         configAssortment * choice(SPATIAL_SCALING_LOG2) * choice(FPS_SCALING),
-        widthMod, heightMod, minWidth, minHeight
+        isRaster = true, widthMod, heightMod, minWidth, minHeight
     ) {
 
         abstract fun videoWriterSettings(config: Config): List<VideoWriterSettings>
@@ -375,7 +259,7 @@ class VideoContainerRenderJob private constructor(
         private val codecPresetOptions: List<String>
     ) : Format(
         label, codecId, "mp4",
-        opaqueTransparenciesTimesColorProps() * choice(DEPTH, 8, 10) * fixed(SCAN, Bitmap.Scan.PROGRESSIVE) *
+        opaqueTransparenciesTimesColorProps() * choice(DEPTH, 8, 10) * fixed(SCAN, Scan.PROGRESSIVE) *
                 choice(GENERIC_PROFILE),
         widthMod = 2,
         heightMod = 2
@@ -432,7 +316,7 @@ class VideoContainerRenderJob private constructor(
 
     private class DNxHRFormat : Format(
         "DNxHR", AV_CODEC_ID_DNXHD, "mxf",
-        opaqueTransparenciesTimesColorProps() * fixed(SCAN, Bitmap.Scan.PROGRESSIVE) *
+        opaqueTransparenciesTimesColorProps() * fixed(SCAN, Scan.PROGRESSIVE) *
                 (choice(DNXHR_PROFILE, DNXHR_LB, DNXHR_SQ, DNXHR_HQ) * fixed(DEPTH, 8) +
                         choice(DNXHR_PROFILE, DNXHR_HQX, DNXHR_444) * fixed(DEPTH, 10)),
         minWidth = 256,
@@ -462,7 +346,7 @@ class VideoContainerRenderJob private constructor(
         "CineForm", AV_CODEC_ID_CFHD, "mov",
         opaqueTransparenciesTimesColorProps() * fixed(DEPTH, 10) * choice(SCAN) *
                 choice(CINEFORM_PROFILE, CF_422_LOW, CF_422_MED, CF_422_HI, CF_422_FILM1, CF_422_FILM2, CF_422_FILM3) +
-                allTransparenciesTimesColorSpace() * fixed(DEPTH, 12) * fixed(SCAN, Bitmap.Scan.PROGRESSIVE) *
+                allTransparenciesTimesColorSpace() * fixed(DEPTH, 12) * fixed(SCAN, Scan.PROGRESSIVE) *
                 choice(CINEFORM_PROFILE, CF_444_LOW, CF_444_MED, CF_444_HI, CF_444_FILM1, CF_444_FILM2, CF_444_FILM3),
         widthMod = 16,
         heightMod = 8,
@@ -492,7 +376,7 @@ class VideoContainerRenderJob private constructor(
 
     private class TheoraFormat : Format(
         "Theora", AV_CODEC_ID_THEORA, "ogv",
-        opaqueTransparenciesTimesColorProps() * fixed(DEPTH, 8) * fixed(SCAN, Bitmap.Scan.PROGRESSIVE) *
+        opaqueTransparenciesTimesColorProps() * fixed(DEPTH, 8) * fixed(SCAN, Scan.PROGRESSIVE) *
                 choice(GENERIC_PROFILE)
     ) {
         override fun videoWriterSettings(config: Config): List<VideoWriterSettings> {

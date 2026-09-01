@@ -18,11 +18,10 @@ internal class CsvFormatTest {
         try {
             file.writeBytes("\"¡El Gatito con Zapatos Azules!\",Johannes Bürner\r\n".toByteArray(windows1252))
 
-            val (sheets, log) = CsvFormat.read(file, "Credits")
+            val sheet = CsvFormat.read(file, "Credits").single()
 
-            assertEquals(emptyList<ParserMsg>(), log)
-            assertEquals("¡El Gatito con Zapatos Azules!", sheets.single()[0, 0])
-            assertEquals("Johannes Bürner", sheets.single()[0, 1])
+            assertEquals("¡El Gatito con Zapatos Azules!", sheet[0, 0])
+            assertEquals("Johannes Bürner", sheet[0, 1])
         } finally {
             file.deleteIfExists()
         }
@@ -34,10 +33,10 @@ internal class CsvFormatTest {
         try {
             file.writeBytes("\"¡El Gatito con Zapatos Azules!\",Johannes Bürner\r\n".toByteArray(Charsets.UTF_8))
 
-            val (sheets, _) = CsvFormat.read(file, "Credits")
+            val sheet = CsvFormat.read(file, "Credits").single()
 
-            assertEquals("¡El Gatito con Zapatos Azules!", sheets.single()[0, 0])
-            assertEquals("Johannes Bürner", sheets.single()[0, 1])
+            assertEquals("¡El Gatito con Zapatos Azules!", sheet[0, 0])
+            assertEquals("Johannes Bürner", sheet[0, 1])
         } finally {
             file.deleteIfExists()
         }

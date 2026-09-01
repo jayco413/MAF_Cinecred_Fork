@@ -1,7 +1,8 @@
 package com.loadingbyte.cinecred.projectio
 
-import com.loadingbyte.cinecred.common.*
-import java.awt.Font
+import com.loadingbyte.cinecred.common.VERSION
+import com.loadingbyte.cinecred.common.l10n
+import com.loadingbyte.cinecred.imaging.Font
 import kotlin.math.abs
 import kotlin.math.pow
 
@@ -22,7 +23,9 @@ private val migrations = listOf(
     null to ::migrateStylingFrom100,
     "1.7.0" to ::migrateStylingFrom170,
     "1.8.0" to null,
-    "1.8.1" to null,
+    "1.8.1" to ::migrateStylingFrom181,
+    "1.9.0" to null,
+    "1.9.1" to null,
 ).also { migrations ->
     val appVersion = VERSION.removeSuffix("-SNAPSHOT")
     if (migrations.none { (version, _) -> version == appVersion })
@@ -146,9 +149,9 @@ fun migrateStylingFrom100(ctx: StylingReaderContext, rawStyling: RawStyling) {
                 // Retrieve the letter style's height and referenced AWT font, which we both need for the conversion.
                 // Continue only if we can get a handle on both.
                 val heightPx = (letterStyle["heightPx"] as? Number)?.toDouble() ?: continue
-                val awtFont = (letterStyle["fontName"] as? String)?.let(ctx::resolveFont) ?: continue
+                val font = (letterStyle["fontName"] as? String)?.let(ctx::resolveFont) ?: continue
                 // Find the point size in the same way as version 1.3.1 used to do it.
-                val rootPointSize = legacy131FindSize(awtFont, leadTopRem + leadBotRem, heightPx)
+                val rootPointSize = legacy131FindSize(font, leadTopRem + leadBotRem, heightPx)
                 // Use the point size to convert the leading from "rem" to "rh".
                 val leadTopRh = leadTopRem * rootPointSize / heightPx
                 val leadBotRh = leadBotRem * rootPointSize / heightPx
@@ -161,7 +164,7 @@ fun migrateStylingFrom100(ctx: StylingReaderContext, rawStyling: RawStyling) {
                     // offset & scaling into the user-provided values. For that, retrieve the automatic values in
                     // the same way as version 1.3.1 used to do it.
                     val ss = letterStyle["superscript"] as? String
-                    val (ssScaling, ssHOffset, ssVOffset) = legacy131FindSuperscriptOffsetAndScaling(awtFont, ss)
+                    val (ssScaling, ssHOffset, ssVOffset) = legacy131FindSuperscriptOffsetAndScaling(font, ss)
                     // Use all gathered information to convert the offset & scaling from "rem" to "rfh".
                     val fontHeightPx = heightPx * (1.0 - leadTopRh - leadBotRh)
                     letterStyle["superscript"] = "CUSTOM"
@@ -348,7 +351,7 @@ fun migrateStylingFrom170(ctx: StylingReaderContext, rawStyling: RawStyling) {
 
     // 1.7.0 -> 1.8.0: There are now transition styles, and card page fades now reference a transition style.
     if (rawStyling.transitionStyles.isEmpty()) {
-        val linearName = l10n("project.template.transitionStyleLinear")
+        val linearName = l10n("linear")
         rawStyling.transitionStyles.add(mutableMapOf("name" to linearName))
         for (pageStyle in rawStyling.pageStyles) {
             if (pageStyle["cardFadeInFrames"].let { it is Number && it.toInt() != 0 })
@@ -360,20 +363,66 @@ fun migrateStylingFrom170(ctx: StylingReaderContext, rawStyling: RawStyling) {
 }
 
 
+fun migrateStylingFrom181(ctx: StylingReaderContext, rawStyling: RawStyling) {
+    // 1.8.1 -> 1.9.0: Flow lines are now called rows, and the HGap is now called HCellGap.
+    for (contentStyle in rawStyling.contentStyles) {
+        contentStyle["flowLineHJustify"]?.let { contentStyle["flowRowHJustify"] = it }
+        contentStyle["flowLineWidthPx"]?.let { contentStyle["flowRowWidthPx"] = it }
+        contentStyle["flowLineGapPx"]?.let { contentStyle["flowRowGapPx"] = it }
+        contentStyle["flowHGapPx"]?.let { contentStyle["flowCellHGapPx"] = it }
+    }
+
+    // 1.8.1 -> 1.9.0: Vertical head/tail justification is now phrased in terms of vertical fragments.
+    for (contentStyle in rawStyling.contentStyles)
+        for (prefix in arrayOf("head", "tail"))
+            when (contentStyle["${prefix}VShelve"]) {
+                "OVERALL_MIDDLE" -> {
+                    contentStyle["${prefix}VJustifyBodyFragment"] = "ALL_ROWS"
+                    contentStyle["${prefix}VJustify${prefix.replaceFirstChar(Char::uppercaseChar)}Fragment"] =
+                        "ALL_LINES"
+                }
+                "FIRST" -> contentStyle["${prefix}VJustifyBodyFragment"] = "FIRST_ROW_FIRST_LINE"
+                "LAST" -> contentStyle["${prefix}VJustifyBodyFragment"] = "LAST_ROW_FIRST_LINE"
+            }
+
+    // 1.8.1 -> 1.9.0: Angles have changed & must now be mod 360; gradients get stops & a new interpolation default.
+    for (letterStyle in rawStyling.letterStyles)
+        (letterStyle["layers"] as? List<*>)?.forEach { layer ->
+            if (layer is MutableMap<*, *>) {
+                @Suppress("UNCHECKED_CAST")
+                layer as MutableMap<String, Any>
+                (layer["gradientAngleDeg"] as? Number)?.let { layer["gradientAngleDeg"] = 90 - it.toDouble() }
+                (layer["offsetAngleDeg"] as? Number)?.let { layer["offsetAngleDeg"] = (-it.toDouble()).mod(360.0) }
+                when (layer["coloring"]) {
+                    "PLAIN" ->
+                        layer["color1"]?.let { layer["plainColor"] = it }
+                    "GRADIENT" -> {
+                        val stops = mutableListOf<List<Any?>>()
+                        (layer["color1"] as? List<*>)?.let { stops.add(it + listOf(0.0)) }
+                        (layer["color2"] as? List<*>)?.let { stops.add(it + listOf(1.0)) }
+                        layer["gradientStops"] = stops
+                        layer.putIfAbsent("gradientInterpolation", "SRGB")
+                    }
+                }
+            }
+        }
+}
+
+
 private inline fun Any?.letIfNumber(block: (Double) -> Unit) {
     if (this is Number) block(toDouble())
 }
 
 
 /** Legacy 1.3.1 implementation of `findSize()` in `FormattedString`. */
-private fun legacy131FindSize(awtFont: Font, extraLeadingEm: Double, targetHeightPx: Double): Float {
+private fun legacy131FindSize(font: Font, extraLeadingEm: Double, targetHeightPx: Double): Double {
     // Step 1: Exponential search to determine the rough range of the font size we're looking for.
-    var size = 2f
+    var size = 2.0
     // Upper-bound the number of repetitions to avoid:
     //   - Accidental infinite looping.
     //   - Too large fonts, as they cause the Java font rendering engine to destroy its own fonts.
     for (i in 0..<10) {
-        val height = awtFont.deriveFont(size * 2f).lineMetrics.height + extraLeadingEm * (size * 2f)
+        val height = font.case(size * 2.0).height + extraLeadingEm * (size * 2.0)
         if (height >= targetHeightPx)
             break
         size *= 2f
@@ -382,14 +431,14 @@ private fun legacy131FindSize(awtFont: Font, extraLeadingEm: Double, targetHeigh
     // Step 2: Binary search to find the exact font size.
     // If $size is still 2, we look for a size between 0 and 4.
     // Otherwise, we look for a size between $size and $size*2.
-    val minSize = if (size == 2f) 0f else size
-    val maxSize = size * 2f
-    var intervalLength = (maxSize - minSize) / 2f
+    val minSize = if (size == 2.0) 0.0 else size
+    val maxSize = size * 2.0
+    var intervalLength = (maxSize - minSize) / 2.0
     size = minSize + intervalLength
     // Upper-bound the number of repetitions to avoid accidental infinite looping.
     for (i in 0..<20) {
-        intervalLength /= 2f
-        val height = awtFont.deriveFont(size).lineMetrics.height + extraLeadingEm * size
+        intervalLength /= 2.0
+        val height = font.case(size).height + extraLeadingEm * size
         when {
             abs(height - targetHeightPx) < 0.001 -> break
             height > targetHeightPx -> size -= intervalLength
@@ -402,24 +451,23 @@ private fun legacy131FindSize(awtFont: Font, extraLeadingEm: Double, targetHeigh
 
 
 /** Legacy 1.3.1 implementation of the superscript routine in `StyledStringFormatter`. */
-private fun legacy131FindSuperscriptOffsetAndScaling(awtFont: Font, superscript: String?): Legacy131SSOffsetAndScaling {
+private fun legacy131FindSuperscriptOffsetAndScaling(font: Font, superscript: String?): Legacy131SSOffsetAndScaling {
     var ssScaling = 1.0
     var ssHOffset = 0.0
     var ssVOffset = 0.0
 
-    val ssMetrics = awtFont.getSuperscriptMetrics()
-        ?: SuperscriptMetrics(2 / 3.0, 0.0, 0.375, 2 / 3.0, 0.0, -0.375)
+    val fontCase = font.case()
 
     fun sup() {
-        ssHOffset += ssMetrics.supHOffsetEm * ssScaling
-        ssVOffset += ssMetrics.supVOffsetEm * ssScaling
-        ssScaling *= ssMetrics.supScaling
+        ssHOffset += fontCase.supHOffsetEm * ssScaling
+        ssVOffset += fontCase.supVOffsetEm * ssScaling
+        ssScaling *= fontCase.supScaling
     }
 
     fun sub() {
-        ssHOffset += ssMetrics.subHOffsetEm * ssScaling
-        ssVOffset += ssMetrics.subVOffsetEm * ssScaling
-        ssScaling *= ssMetrics.subScaling
+        ssHOffset += fontCase.subHOffsetEm * ssScaling
+        ssVOffset += fontCase.subVOffsetEm * ssScaling
+        ssScaling *= fontCase.subScaling
     }
 
     // @formatter:off

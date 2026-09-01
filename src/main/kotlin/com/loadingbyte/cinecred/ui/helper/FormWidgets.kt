@@ -5,18 +5,23 @@ import com.formdev.flatlaf.ui.FlatBorder
 import com.formdev.flatlaf.ui.FlatButtonUI
 import com.formdev.flatlaf.ui.FlatUIUtils
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.imaging.Color4f
-import com.loadingbyte.cinecred.imaging.Transition
+import com.loadingbyte.cinecred.imaging.*
+import com.loadingbyte.cinecred.imaging.Canvas
+import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.project.*
+import kotlinx.collections.immutable.mutate
+import kotlinx.collections.immutable.persistentMapOf
 import net.miginfocom.swing.MigLayout
 import java.awt.*
 import java.awt.datatransfer.DataFlavor
 import java.awt.datatransfer.Transferable
 import java.awt.dnd.*
 import java.awt.event.*
-import java.awt.geom.CubicCurve2D
-import java.awt.geom.Ellipse2D
-import java.awt.geom.Line2D
+import java.awt.event.KeyEvent.VK_BACK_SPACE
+import java.awt.event.KeyEvent.VK_DELETE
+import java.awt.event.KeyListener
+import java.awt.geom.*
+import java.awt.image.BufferedImage
 import java.nio.file.Path
 import java.text.NumberFormat
 import java.text.ParseException
@@ -32,7 +37,9 @@ import kotlin.io.path.absolutePathString
 import kotlin.io.path.pathString
 import kotlin.jvm.optionals.getOrNull
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 
 enum class WidthSpec(val mig: String) {
@@ -109,6 +116,17 @@ class TextWidget(
 }
 
 
+class PasswordWidget(
+    widthSpec: WidthSpec? = null
+) : AbstractTextComponentWidget<String>(JPasswordField(), widthSpec) {
+    override var value: String
+        get() = text
+        set(value) {
+            text = value
+        }
+}
+
+
 class TextListWidget(
     widthSpec: WidthSpec? = null
 ) : AbstractTextComponentWidget<List<String>>(JTextArea(), widthSpec) {
@@ -128,7 +146,7 @@ class TextModulesWidget(
 ) : AbstractTextComponentWidget<String>(JTextArea(), widthSpec) {
 
     private val insertModuleBtn = JButton(ADD_ICON)
-    private val popup = DropdownPopupMenu(insertModuleBtn)
+    private val popup = DropdownPopupMenu()
 
     override val components = listOf<JComponent>(JScrollPane(tc), insertModuleBtn)
     override val constraints = listOf(super.constraints.single() + ", hmax ${10 * STD_HEIGHT}", "growy")
@@ -275,207 +293,79 @@ class FileWidget(
 }
 
 
-open class SpinnerWidget<V : Number>(
-    private val valueClass: Class<V>,
-    model: SpinnerNumberModel,
-    decimalFormatPattern: String? = null,
+open class ScrubberWidget<V : Number>(
+    scheme: Scrubber.Scheme<V>,
+    limiter: Scrubber.Limiter<V>? = null,
+    sensitivity: Double? = null,
     widthSpec: WidthSpec? = null
 ) : Form.AbstractWidget<V>() {
 
-    protected val spinner = JSpinner(model)
+    protected val scrubber = Scrubber(scheme)
 
     init {
-        require(valueClass == Int::class.javaObjectType || valueClass == Double::class.javaObjectType)
+        limiter?.let(scrubber::limiter::set)
+        sensitivity?.also(scrubber::sensitivity::set)
 
-        spinner.addChangeListener {
-            val newValue = valueClass.cast(spinner.value)
+        scrubber.addValueListener {
+            val newValue = scrubber.value
             // Only update the widget's value if the new value diverges sufficiently from the old one. We need this
-            // check because the spinner uses its formatter's stringToValue() function once BEFORE the value is actually
+            // check since the scrubber uses its formatter's stringToValue() function once BEFORE the value is actually
             // increased or decreased, and due to floating point inaccuracy, that can change the value ever so slightly.
-            if (valueClass != Double::class.javaObjectType || abs(newValue.toDouble() - value.toDouble()) > 0.00001) {
+            if (newValue !is Float && newValue !is Double || abs(newValue.toDouble() - value.toDouble()) > 0.00001) {
                 value = newValue
                 notifyChangeListeners()
             }
         }
-
-        spinner.editor = when (decimalFormatPattern) {
-            null -> JSpinner.NumberEditor(spinner)
-            else -> JSpinner.NumberEditor(spinner, decimalFormatPattern)
-        }.apply { (textField.formatter as DefaultFormatter).makeSafe() }
     }
 
-    override val components = listOf(spinner)
+    override val components = listOf(scrubber)
     override val constraints = listOf("hmin $STD_HEIGHT, " + (widthSpec ?: WidthSpec.NARROW).mig)
 
-    override var value: V = valueClass.cast(spinner.value)
+    var scheme: Scrubber.Scheme<V> by scrubber::scheme
+    var limiter: Scrubber.Limiter<V>? by scrubber::limiter
+    var sensitivity: Double by scrubber::sensitivity
+
+    override var value: V = scrubber.value
         set(value) {
             field = value
-            spinner.value = value
+            scrubber.value = value
         }
-
-}
-
-
-class MultipliedSpinnerWidget(
-    model: SpinnerNumberModel,
-    decimalFormatPattern: String? = null,
-    widthSpec: WidthSpec? = null
-) : SpinnerWidget<Double>(Double::class.javaObjectType, model, decimalFormatPattern, widthSpec) {
-
-    private val step = model.stepSize as Double
-
-    var multiplier: Double = 1.0
-        set(multiplier) {
-            if (field == multiplier)
-                return
-            field = multiplier
-            // Note: We have verified that changing the formatter only causes valueToString(), but not stringToValue()
-            // calls. Hence, the value in the spinner model remains unmodified each time the multiplier is changed.
-            // As such, no floating point drift occurs.
-            (spinner.editor as JSpinner.DefaultEditor).textField.formatterFactory =
-                DefaultFormatterFactory(MultipliedFormatter(spinner.model as SpinnerNumberModel, multiplier))
-            // Also adapt the step size to the multiplier. Notice that this triggers ChangeEvents, which we discard.
-            withoutChangeListeners { (spinner.model as SpinnerNumberModel).stepSize = step / multiplier }
-        }
-
-
-    private class MultipliedFormatter(
-        private val model: SpinnerNumberModel,
-        private val multiplier: Double
-    ) : NumberFormatter() {
-        init {
-            valueClass = model.value.javaClass
-            makeSafe()
-        }
-
-        // Necessary to have limits on the text input. If the multiplier is negative, the bounds need to be flipped.
-        // Otherwise, the user would only be allowed to input out-of-bounds numbers.
-        override fun getMinimum(): Comparable<*>? = if (multiplier < 0) model.maximum else model.minimum
-        override fun getMaximum(): Comparable<*>? = if (multiplier < 0) model.minimum else model.maximum
-        override fun setMinimum(minimum: Comparable<*>?) = throw UnsupportedOperationException()
-        override fun setMaximum(maximum: Comparable<*>?) = throw UnsupportedOperationException()
-
-        override fun valueToString(value: Any?): String =
-            super.valueToString(value as Double * multiplier)
-
-        override fun stringToValue(string: String?): Double =
-            (super.stringToValue(string) as Number).toDouble() / multiplier
-    }
 
 }
 
 
 class TimecodeWidget(
-    private val model: SpinnerNumberModel,
-    fps: FPS,
-    timecodeFormat: TimecodeFormat,
+    scheme: Scrubber.FramesAsTimecodeScheme,
+    limiter: Scrubber.Limiter<Int>,
     widthSpec: WidthSpec? = null
-) : SpinnerWidget<Int>(Int::class.javaObjectType, model, widthSpec = widthSpec ?: WidthSpec.FIT) {
-
-    var fps: FPS = fps
-        set(fps) {
-            if (field == fps)
-                return
-            field = fps
-            updateFormatter()
-        }
-
-    var timecodeFormat: TimecodeFormat = timecodeFormat
-        set(timecodeFormat) {
-            if (field == timecodeFormat)
-                return
-            field = timecodeFormat
-            updateFormatter()
-        }
-
-    private val signed = model.minimum.let { it == null || (it as Int) < 0 }
-    private val editor = makeTimecodeEditor(spinner)
-
+) : ScrubberWidget<Int>(scheme, limiter, sensitivity = 1.0, widthSpec = widthSpec ?: WidthSpec.FIT) {
     init {
-        spinner.putClientProperty(STYLE_CLASS, "monospaced")
-        spinner.editor = editor
-        updateFormatter()
+        scrubber.putClientProperty(STYLE_CLASS, "monospaced")
     }
-
-    private fun updateFormatter() {
-        editor.textField.formatterFactory = DefaultFormatterFactory(TimecodeFormatter())
-    }
-
-
-    private inner class TimecodeFormatter : DefaultFormatter() {
-        init {
-            valueClass = Int::class.javaObjectType
-            makeSafe()
-        }
-
-        // We need to catch exceptions here because formatTimecode() throws some when using non-fractional FPS together
-        // with a drop-frame timecode.
-        override fun valueToString(value: Any?): String = try {
-            val tc = formatTimecode(fps, timecodeFormat, abs(value as Int))
-            if (value < 0) "-$tc" else if (signed) "+$tc" else tc
-        } catch (_: IllegalArgumentException) {
-            ""
-        }
-
-        override fun stringToValue(string: String?): Int = try {
-            val c0 = string!![0]
-            val n = parseTimecode(fps, timecodeFormat, if (c0 == '+' || c0 == '-') string.substring(1) else string)
-            val s = if (signed && c0 == '-') -n else n
-            require(model.minimum.let { it == null || it as Int <= s })
-            require(model.maximum.let { it == null || it as Int >= s })
-            s
-        } catch (_: Exception) {
-            throw ParseException("", 0)
-        }
-
-    }
-
 }
 
 
 class TapeSliceWidget : Form.AbstractWidget<TapeSlice>() {
 
     private val formatCB = JComboBox(TimecodeFormat.entries.mapTo(Vector(), ::FormatWrapper))
-    private val inCB = LargeCheckBox(STD_HEIGHT)
-    private val outCB = LargeCheckBox(STD_HEIGHT)
-    private val inSpinner = JSpinner(TimecodeModel(zeroTimecode(format)))
-    private val outSpinner = JSpinner(TimecodeModel(zeroTimecode(format)))
-    private val inEditor = makeTimecodeEditor(inSpinner)
-    private val outEditor = makeTimecodeEditor(outSpinner)
-    private val inResetBtn = JButton(RESET_ICON).apply { toolTipText = l10n("ui.form.tapeSliceResetIn") }
-    private val outResetBtn = JButton(RESET_ICON).apply { toolTipText = l10n("ui.form.tapeSliceResetOut") }
+    private val inWidget = OverrideWidget(TimecodeWidget())
+    private val outWidget = OverrideWidget(TimecodeWidget())
 
     init {
-        formatCB.addItemListener { e -> if (e.stateChange == ItemEvent.SELECTED) onFPSOrTcFormatOrRangeChanged() }
-        inCB.addItemListener { inSpinner.isEnabled = inCB.isSelected; notifyChangeListeners() }
-        outCB.addItemListener { outSpinner.isEnabled = outCB.isSelected; notifyChangeListeners() }
-        inSpinner.apply {
-            isEnabled = false
-            addChangeListener { notifyChangeListeners() }
-            putClientProperty(STYLE_CLASS, "monospaced")
-            editor = inEditor
-        }
-        outSpinner.apply {
-            isEnabled = false
-            addChangeListener { notifyChangeListeners() }
-            putClientProperty(STYLE_CLASS, "monospaced")
-            editor = outEditor
-        }
-        inResetBtn.addActionListener { range?.start?.let(::coerceToFormat)?.let { inSpinner.value = it } }
-        outResetBtn.addActionListener { range?.endInclusive?.let(::coerceToFormat)?.let { outSpinner.value = it } }
+        formatCB.addItemListener { e -> if (e.stateChange == ItemEvent.SELECTED) onFPSOrTcFormatOrRangeChanged(true) }
+        inWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
+        outWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
         onFPSOrTcFormatOrRangeChanged()
     }
 
-    override val components = listOf<JComponent>(
-        formatCB,
-        JLabel(l10n("ui.form.tapeSliceIn"), JLabel.TRAILING), inCB, inSpinner, inResetBtn,
-        JLabel(l10n("ui.form.tapeSliceOut"), JLabel.TRAILING), outCB, outSpinner, outResetBtn
-    )
-    override val constraints = listOf(
-        "hmin $STD_HEIGHT, " + WidthSpec.FIT.mig,
-        "newline, sg inout", "", "hmin $STD_HEIGHT, " + WidthSpec.FIT.mig, "",
-        "newline, sg inout", "", "hmin $STD_HEIGHT, " + WidthSpec.FIT.mig, ""
-    )
+    override val components =
+        listOf<JComponent>(formatCB) +
+                JLabel(l10n("ui.form.tapeSliceIn"), JLabel.TRAILING) + inWidget.components +
+                JLabel(l10n("ui.form.tapeSliceOut"), JLabel.TRAILING) + outWidget.components
+    override val constraints =
+        listOf("hmin $STD_HEIGHT, " + WidthSpec.FIT.mig) +
+                "newline, sg inout" + inWidget.constraints +
+                "newline, sg inout" + outWidget.constraints
 
     var fps: FPS? = null
         set(fps) {
@@ -504,19 +394,14 @@ class TapeSliceWidget : Form.AbstractWidget<TapeSlice>() {
         }
 
     override var value: TapeSlice
-        get() = TapeSlice(
-            Opt(inCB.isSelected, inSpinner.value as Timecode),
-            Opt(outCB.isSelected, outSpinner.value as Timecode)
-        )
+        get() = TapeSlice(format, inWidget.value.value, outWidget.value.value)
         set(value) {
-            if (value == this.value)
+            if (value == this.value && value.timecodeFormat == format)
                 return
             withoutChangeListeners {
-                format = value.inPoint.value.format
-                inCB.isSelected = value.inPoint.isActive
-                outCB.isSelected = value.outPoint.isActive
-                inSpinner.value = value.inPoint.value
-                outSpinner.value = value.outPoint.value
+                format = value.timecodeFormat
+                inWidget.value = Override(value.inPoint)
+                outWidget.value = Override(value.outPoint)
             }
             notifyChangeListeners()
         }
@@ -529,21 +414,17 @@ class TapeSliceWidget : Form.AbstractWidget<TapeSlice>() {
             formatCB.isEditable = false
         }
 
-    private fun onFPSOrTcFormatOrRangeChanged() {
-        inEditor.textField.formatterFactory = DefaultFormatterFactory(TimecodeFormatter())
-        outEditor.textField.formatterFactory = DefaultFormatterFactory(TimecodeFormatter())
-        if (updateSpinnerValue(inSpinner) or updateSpinnerValue(outSpinner))
+    private fun onFPSOrTcFormatOrRangeChanged(formatChanged: Boolean = false) {
+        var valueChanged = false
+        withoutChangeListeners {
+            inWidget.defaultValue = range?.start?.let(::coerceToFormat)
+            outWidget.defaultValue = range?.endInclusive?.let(::coerceToFormat)
+            valueChanged = formatChanged or
+                    (inWidget.wrapped as TimecodeWidget).onFPSOrTcFormatOrRangeChanged() or
+                    (outWidget.wrapped as TimecodeWidget).onFPSOrTcFormatOrRangeChanged()
+        }
+        if (valueChanged)
             notifyChangeListeners()
-    }
-
-    private fun updateSpinnerValue(spinner: JSpinner): Boolean {
-        val oldValue = spinner.value as Timecode
-        val newValue = coerceToFormat(oldValue) ?: zeroTimecode(format)
-        val model = TimecodeModel(newValue)
-        spinner.model = model
-        // Firing a state change event is necessary to update the text field.
-        withoutChangeListeners { model.fireStateChanged() }
-        return oldValue != newValue
     }
 
     private fun coerceToFormat(timecode: Timecode): Timecode? =
@@ -554,94 +435,36 @@ class TapeSliceWidget : Form.AbstractWidget<TapeSlice>() {
                 null
             }
 
-    private fun isInRange(timecode: Timecode): Boolean {
-        val range = this.range ?: return true
-        val start = range.start
-        val end = range.endInclusive
-        if (timecode is Timecode.Frames && start is Timecode.Frames && end is Timecode.Frames ||
-            timecode is Timecode.Clock && start is Timecode.Clock && end is Timecode.Clock
-        )
-            return timecode in range
-        try {
-            fps?.let { fps -> return timecode.toClock(fps) in start.toClock(fps)..end.toClock(fps) }
-        } catch (_: IllegalArgumentException) {
-        }
-        // This is a last-resort best-effort check.
-        if (timecode is Timecode.ExactFramesInSecond && start is Timecode.Clock && end is Timecode.Clock)
-            return timecode.seconds in start.seconds..end.seconds
-        return true
-    }
 
-
-    private class FormatWrapper(override val item: TimecodeFormat) : ComboBoxWrapper {
+    private data class FormatWrapper(override val item: TimecodeFormat) : ComboBoxWrapper {
         override fun toString() = item.label
-        override fun hashCode() = item.hashCode()
-        override fun equals(other: Any?) = this === other || other is FormatWrapper && item == other.item
     }
 
 
-    private inner class TimecodeModel(private var timecode: Timecode) : AbstractSpinnerModel() {
+    private inner class TimecodeWidget : Form.AbstractWidget<Timecode>() {
 
-        public override fun fireStateChanged() = super.fireStateChanged()
+        private val scrubber = Scrubber(Scrubber.TimecodeScheme(fps, format))
 
-        override fun getValue() = timecode
-
-        override fun setValue(value: Any) {
-            if (timecode != value) {
-                timecode = value as Timecode
-                fireStateChanged()
+        init {
+            scrubber.apply {
+                sensitivity = 1.0
+                addValueListener { notifyChangeListeners() }
+                putClientProperty(STYLE_CLASS, "monospaced")
             }
         }
 
-        override fun getNextValue() = getNeighboringValue(1)
-        override fun getPreviousValue() = getNeighboringValue(-1)
+        override val components = listOf(scrubber)
+        override val constraints = listOf("hmin $STD_HEIGHT, " + WidthSpec.FIT.mig)
 
-        private fun getNeighboringValue(sign: Int): Timecode? {
-            val fps = fps
-            val tc = timecode
-            var neighbor: Timecode? = null
-            if (fps != null && tc !is Timecode.Clock /* exclude clock to not deteriorate its precision */)
-                try {
-                    neighbor = Timecode.Frames(max(0, tc.toFrames(fps).frames + sign)).toFormat(tc.format, fps)
-                } catch (_: IllegalArgumentException) {
-                }
-            if (neighbor == null)
-                neighbor = when (tc) {
-                    is Timecode.Frames -> Timecode.Frames(max(0, tc.frames + sign))
-                    is Timecode.Clock -> when {
-                        sign == 1 -> tc + Timecode.Clock(1, 1)
-                        tc.seconds != 0 -> tc - Timecode.Clock(1, 1)
-                        else -> Timecode.Clock(0, 1)
-                    }
-                    is Timecode.ExactFramesInSecond -> Timecode.ExactFramesInSecond(
-                        seconds = max(0, tc.seconds + if (sign == -1 && tc.frames != 0) 0 else sign), frames = 0
-                    )
-                    is Timecode.SMPTENonDropFrame, is Timecode.SMPTEDropFrame -> null
-                }
-            return if (neighbor != null && isInRange(neighbor)) neighbor else null
-        }
+        override var value by scrubber::value
 
-    }
-
-
-    private inner class TimecodeFormatter : DefaultFormatter() {
-
-        init {
-            valueClass = Timecode::class.javaObjectType
-            makeSafe()
-        }
-
-        override fun valueToString(value: Any?): String =
-            (value as? Timecode)?.toString(fps) ?: ""
-
-        override fun stringToValue(string: String?): Timecode = try {
-            val tc = parseTimecode(format, string!!)
-            // These checks throw if the entered timecode is invalid.
-            require(isInRange(tc))
-            fps?.let(tc::toFrames)
-            tc
-        } catch (_: Exception) {
-            throw ParseException("", 0)
+        fun onFPSOrTcFormatOrRangeChanged(): Boolean {
+            scrubber.scheme = Scrubber.TimecodeScheme(fps, format)
+            scrubber.limiter = range?.let { Scrubber.TimecodeLimiter(it.start, it.endInclusive) }
+            val oldValue = value
+            val newValue = coerceToFormat(oldValue) ?: zeroTimecode(format)
+            value = newValue
+            return oldValue != newValue
         }
 
     }
@@ -875,6 +698,10 @@ class FPSWidget(
     widthSpec: WidthSpec? = null
 ) : EditableComboBoxWidget<FPS>(FPS::class.java, SUGGESTED_FPS, ::toDisplayString, ::fromDisplayString, widthSpec) {
 
+    init {
+        value = FPS(24, 1)
+    }
+
     companion object {
 
         private val SUGGESTED_FRAC_FPS = listOf(
@@ -905,7 +732,11 @@ class FPSWidget(
             } catch (_: ParseException) {
                 // Try the next parser.
             }
-            return FPS.fromString(str)
+            try {
+                return FPS.fromString(str)
+            } catch (_: Exception) {
+                throw ParseException("", 0)
+            }
         }
 
     }
@@ -1209,11 +1040,36 @@ class ToggleButtonGroupWidget<V : Any>(
 }
 
 
+abstract class AbstractColorWidget<V : Any>(
+    allowNonSRGB: Boolean,
+    allowAlpha: Boolean
+) : Form.AbstractWidget<V>() {
+
+    protected val picker = ColorPicker(allowNonSRGB, allowAlpha)
+    protected val popup = DropdownPopupMenu(
+        preShow = { picker.resetUI(); picker.swatchColors = swatchColors },
+        // Note: Without invokeLater(), the focus is not transferred.
+        postShow = { SwingUtilities.invokeLater { picker.requestFocusInWindow() } }
+    )
+
+    init {
+        popup.add(picker)
+    }
+
+    var swatchColors: List<Color4f> = emptyList()
+
+    companion object {
+        const val CHECKER = 4
+    }
+
+}
+
+
 class ColorWellWidget(
     allowNonSRGB: Boolean = true,
     allowAlpha: Boolean = true,
     widthSpec: WidthSpec? = null
-) : Form.AbstractWidget<Color4f>() {
+) : AbstractColorWidget<Color4f>(allowNonSRGB, allowAlpha) {
 
     private val btn = object : JButton(" ") {
         init {
@@ -1226,32 +1082,21 @@ class ColorWellWidget(
                 // Clip the drawing to the rounded shape of the button (minus some slack).
                 val arc = FlatUIUtils.getBorderArc(this)
                 g2.clip(FlatUIUtils.createComponentRectangle(0.5f, 0.5f, width - 1f, height - 1f, arc))
-                g2.drawCheckerboard(width, height, 6)
+                g2.drawCheckerboard(width, height)
             }
 
             super.paintComponent(g)
         }
     }
 
-    private val picker = ColorPicker(allowNonSRGB, allowAlpha)
-    private val popup = DropdownPopupMenu(
-        btn,
-        preShow = { picker.resetUI(); picker.swatchColors = swatchColors },
-        // Note: Without invokeLater(), the focus is not transferred.
-        postShow = { SwingUtilities.invokeLater { picker.requestFocusInWindow() } }
-    )
-
     init {
         picker.addChangeListener { value = picker.value }
-        popup.add(picker)
         popup.addMouseListenerTo(btn)
         popup.addKeyListenerTo(btn)
     }
 
     override val components = listOf<JComponent>(btn)
     override val constraints = listOf("hmin $STD_HEIGHT, " + (widthSpec ?: WidthSpec.NARROW).mig)
-
-    var swatchColors: List<Color4f> = emptyList()
 
     override var value: Color4f = Color4f.BLACK
         set(value) {
@@ -1261,13 +1106,250 @@ class ColorWellWidget(
             notifyChangeListeners()
         }
 
-    private fun Graphics.drawCheckerboard(width: Int, height: Int, n: Int) {
-        val checkerSize = ceilDiv(height, n)
-        for (x in 0..<width / checkerSize)
-            for (y in 0..<n) {
+    private fun Graphics.drawCheckerboard(width: Int, height: Int) {
+        for (x in 0..<ceilDiv(width, CHECKER))
+            for (y in 0..<ceilDiv(height, CHECKER)) {
                 color = if ((x + y) % 2 == 0) Color.WHITE else Color.LIGHT_GRAY
-                fillRect(x * checkerSize, y * checkerSize, checkerSize, checkerSize)
+                fillRect(x * CHECKER, y * CHECKER, CHECKER, CHECKER)
             }
+    }
+
+}
+
+
+class ColorGradientWidget(
+    allowNonSRGB: Boolean = true,
+    allowAlpha: Boolean = true,
+    widthSpec: WidthSpec? = null,
+    private val minSize: Int = 2
+) : AbstractColorWidget<List<GradientStop>>(allowNonSRGB, allowAlpha) {
+
+    private val track = Track()
+    private var editedBtn: StopButton? = null
+
+    init {
+        picker.addChangeListener {
+            editedBtn?.let { btn ->
+                btn.stop = btn.stop.copy(color = picker.value)
+                onChange()
+            }
+        }
+    }
+
+    override val components = listOf<JComponent>(track)
+    override val constraints = listOf("hmin $STD_HEIGHT, " + (widthSpec ?: WidthSpec.WIDE).mig)
+
+    var interpolation: GradientInterpolation = GradientInterpolation.OKLAB
+        set(interpolation) {
+            if (field == interpolation)
+                return
+            field = interpolation
+            track.rerenderImageAndRepaint()
+        }
+
+    override var value: List<GradientStop>
+        get() =
+            buildList {
+                for (idx in 0..<track.componentCount)
+                    add(track.getComponent(idx).stop)
+                sortBy { it.position }
+            }
+        set(value) {
+            while (track.componentCount > value.size)
+                track.remove(track.componentCount - 1)
+            for ((idx, stop) in value.withIndex())
+                if (idx == track.componentCount)
+                    track.add(StopButton(stop))
+                else
+                    track.getComponent(idx).stop = stop
+            track.revalidate()
+            onChange()
+        }
+
+    private fun onChange() {
+        track.rerenderImageAndRepaint()
+        notifyChangeListeners()
+    }
+
+
+    companion object {
+        const val BTN_W = 16
+    }
+
+
+    private inner class StopButton(stop: GradientStop) :
+        JButton(" "), MouseListener, KeyListener, HighFrequencyDragListener {
+
+        var stop: GradientStop = stop
+            set(stop) {
+                if (field == stop)
+                    return
+                field = stop
+            }
+
+        init {
+            background = Color(0, 0, 0, 0)
+            putClientProperty(STYLE, "borderWidth: 4; borderColor: #999")
+            toolTipText = l10n("ui.form.colorTooltip")
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addMouseListener(this)
+            addKeyListener(this)
+            addHighFrequencyDragListener(this)
+            popup.addKeyListenerTo(this)
+        }
+
+        private fun edit() {
+            editedBtn = null
+            picker.value = stop.color
+            editedBtn = this
+            popup.toggle(this)
+        }
+
+        private fun remove() {
+            if (track.componentCount > minSize) {
+                track.remove(this)
+                onChange()
+            }
+        }
+
+        override fun mouseClicked(e: MouseEvent) {
+            if (SwingUtilities.isLeftMouseButton(e))
+                edit()
+            else if (SwingUtilities.isRightMouseButton(e))
+                remove()
+        }
+
+        override fun mousePressed(e: MouseEvent) {}
+        override fun mouseReleased(e: MouseEvent) {}
+        override fun mouseEntered(e: MouseEvent) {}
+        override fun mouseExited(e: MouseEvent) {}
+
+        override fun keyPressed(e: KeyEvent) {
+            if (e.modifiersEx == 0 && e.keyCode.let { it == VK_DELETE || it == VK_BACK_SPACE })
+                remove()
+        }
+
+        override fun keyReleased(e: KeyEvent) {}
+        override fun keyTyped(e: KeyEvent) {}
+
+        override fun onDrag(startPointer: Point, currentPointer: Point, modifiersEx: Int) {
+            stop = stop.copy(position = track.x2position(SwingUtilities.convertPoint(this, currentPointer, track).x))
+            // Layout immediately for a more fluent look.
+            track.doLayout()
+            onChange()
+        }
+
+    }
+
+
+    private inner class Track : JComponent(), MouseListener {
+
+        private var image: BufferedImage? = null
+
+        init {
+            layout = TrackLayout()
+            border = BorderFactory.createCompoundBorder(
+                BorderFactory.createEmptyBorder(3, 0, 3, 0),
+                FlatBorder()
+            )
+            toolTipText = l10n("ui.form.gradientTooltip")
+            cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
+            addMouseListener(this)
+        }
+
+        override fun getComponent(n: Int): StopButton =
+            super.getComponent(n) as StopButton
+
+        fun position2x(position: Double): Int = BTN_W / 2 + (position.coerceIn(0.0, 1.0) * (width - BTN_W)).roundToInt()
+        fun x2position(x: Int): Double = ((x - BTN_W / 2) / (width - BTN_W).toDouble()).coerceIn(0.0, 1.0)
+
+        fun rerenderImageAndRepaint() {
+            image = null
+            // We must not use paintImmediately(), because when the overall layout changes at the same time and hence
+            // the component is relocated, that would paint the component too early, flashing it at the wrong location.
+            repaint()
+        }
+
+        override fun mouseClicked(e: MouseEvent) {
+            if (SwingUtilities.isLeftMouseButton(e)) {
+                val btn = StopButton(GradientStop(Color4f.WHITE, x2position(e.x)))
+                add(btn)
+                btn.requestFocusInWindow()
+                // Layout immediately to make the new button appear quicker.
+                doLayout()
+                onChange()
+            }
+        }
+
+        override fun mousePressed(e: MouseEvent) {}
+        override fun mouseReleased(e: MouseEvent) {}
+        override fun mouseEntered(e: MouseEvent) {}
+        override fun mouseExited(e: MouseEvent) {}
+
+        override fun paintComponent(g: Graphics) {
+            val insets = this.insets
+            val w = width - insets.left - insets.right
+            val h = height - insets.top - insets.bottom
+            if (w <= 0 || h <= 0)
+                return
+            if (image.let { it == null || it.width != w || it.height != h }) {
+                val bridge = BitmapJ2DBridge(graphicsConfiguration.colorModel)
+                val res = Resolution(w, h)
+                val canvasRep = Canvas.compatibleRepresentation(bridge.nativeRepresentation.colorSpace)
+                Bitmap.allocate(Bitmap.Spec(res, canvasRep)).use { canvasBmp ->
+                    Bitmap.allocate(Bitmap.Spec(res, bridge.nativeRepresentation)).use { nativeBmp ->
+                        Canvas.forBitmap(canvasBmp.zero()).use { canvas ->
+                            val stops = value
+                            // Draw a background checkerboard.
+                            if (stops.isEmpty() || stops.any { it.color.a != 1f }) {
+                                for (x in 0..<ceilDiv(w, CHECKER))
+                                    for (y in 0..<ceilDiv(h, CHECKER)) {
+                                        val rect = Rectangle(x * CHECKER, y * CHECKER, CHECKER, CHECKER)
+                                        val color = if ((x + y) % 2 == 0) Color4f.WHITE else Color4f.LIGHT_GRAY
+                                        canvas.fillShape(rect, Canvas.Shader.Solid(color))
+                                    }
+                            }
+                            // Draw the gradient itself.
+                            if (stops.size == 1)
+                                canvas.fillShape(Rectangle(w, h), Canvas.Shader.Solid(stops[0].color))
+                            else if (stops.size >= 2) {
+                                val interp = when (interpolation) {
+                                    GradientInterpolation.OKLAB -> Canvas.GradientInterpolation.OKLAB
+                                    GradientInterpolation.SRGB -> Canvas.GradientInterpolation.SRGB
+                                }
+                                val d = BTN_W / 2 - insets.left
+                                val shader = Canvas.Shader.LinearGradient(
+                                    Point2D.Double(d.toDouble(), 0.0), Point2D.Double((w - d).toDouble(), 0.0),
+                                    stops.map { it.color }, stops.mapToDoubleArray { it.position }, interp
+                                )
+                                canvas.fillShape(Rectangle(w, h), shader)
+                            }
+                        }
+                        BitmapConverter.convert(canvasBmp, nativeBmp)
+                        image = bridge.toNativeImage(nativeBmp)
+                    }
+                }
+            }
+            g.drawImage(image, insets.left, insets.top, null)
+        }
+
+    }
+
+
+    private class TrackLayout : LayoutManager {
+
+        override fun addLayoutComponent(name: String, comp: Component) {}
+        override fun removeLayoutComponent(comp: Component) {}
+        override fun minimumLayoutSize(parent: Container) = Dimension(1, 1)
+        override fun preferredLayoutSize(parent: Container) = Dimension(1, 1)
+
+        override fun layoutContainer(parent: Container) {
+            for (idx in 0..<parent.componentCount) {
+                val btn = (parent as Track).getComponent(idx)
+                btn.setBounds(parent.position2x(btn.stop.position) - BTN_W / 2, 0, BTN_W, parent.height)
+            }
+        }
+
     }
 
 }
@@ -1305,17 +1387,19 @@ abstract class AbstractResolutionWidget<V : Any> protected constructor(
                 is Preset.Null -> p.label
             }
         }
-    ).apply { value = CHOICE_PRESETS[1] /* start out with Full HD */ }
+    )
 
-    private val widthWidget = makeDimensionSpinner()
-    private val heightWidget = makeDimensionSpinner()
+    private val widthWidget = makeDimensionScrubber()
+    private val heightWidget = makeDimensionScrubber()
     private val timesLabel = JLabel("\u00D7")
 
     private var initializedCustom = false
-    private var prevChoicePreset = presetWidget.value as Preset.Choice
+    private var prevChoicePreset = CHOICE_PRESETS[1]  // start out with Full HD
 
-    private fun makeDimensionSpinner() =
-        SpinnerWidget(Int::class.javaObjectType, SpinnerNumberModel(1, 1, null, 10), "#", WidthSpec.LITTLE)
+    private fun makeDimensionScrubber() = ScrubberWidget(
+        Scrubber.NumericScheme(Int::class.javaObjectType, unit = "px"), Scrubber.NumberLimiter(min = 1),
+        sensitivity = 1.0, widthSpec = WidthSpec.LITTLE
+    )
 
     init {
         // When a wrapped widget changes, notify this widget's change listeners that that widget has changed.
@@ -1342,6 +1426,8 @@ abstract class AbstractResolutionWidget<V : Any> protected constructor(
                     prevChoicePreset = preset
             notifyChangeListenersAboutOtherWidgetChange(widget)
         }
+        presetWidget.value = prevChoicePreset
+
         widthWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
         heightWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
     }
@@ -1508,7 +1594,7 @@ class FontChooserWidget(
         // is no longer available, we do not want any notifications to trigger.
         withoutChangeListeners {
             val selected = value
-            val families = projectFamilies.list + BUNDLED_FAMILIES.list + SYSTEM_FAMILIES.list
+            val families = sorted(projectFamilies) + sorted(BUNDLED_FAMILIES) + sorted(SYSTEM_FAMILIES)
             // It is important that the family combo box initially has no selection, so that the value setter we call
             // one line later always triggers the family combo box's selection listener (even if when the value setter
             // sets the first family as selected!) and hence correctly populates the font combo box.
@@ -1518,6 +1604,9 @@ class FontChooserWidget(
             value = selected
         }
     }
+
+    private fun sorted(fontFamilies: FontFamilies) =
+        fontFamilies.list.sortedWithCollator(caseInsensitiveCollator()) { it.getFamily(Locale.getDefault()) }
 
     private fun getFamilyOf(font: Font) =
         projectFamilies.getFamily(font) ?: BUNDLED_FAMILIES.getFamily(font) ?: SYSTEM_FAMILIES.getFamily(font)
@@ -1540,7 +1629,7 @@ class FontChooserWidget(
 
         data class ForFont(override val font: Font, private val family: FontFamily?) : FontWrapper {
             // Retrieve the subfamily name from the font's family object. The fallback should never be needed.
-            override fun toString(): String = family?.getSubfamilyOf(font, Locale.getDefault()) ?: font.fontName
+            override fun toString(): String = family?.getSubfamilyOf(font, Locale.getDefault()) ?: font.name
             override val item get() = font
         }
 
@@ -1555,12 +1644,12 @@ class FontChooserWidget(
 
     private inner class FontSampleListCellRenderer<E : FontProvider> : ListCellRenderer<E> {
 
-        private val label1 = JLabel()
-        private val label2 = JLabel()
+        private val label1 = JLabel().apply { isOpaque = false }
+        private val label2 = ShapeLabel().apply { isOpaque = false }
         // Note: filly ensures that label1 is vertically centered also in an enlarged combo box.
         private val panel = JPanel(MigLayout("insets 0, filly", "[]40:::push[]")).apply {
             add(label1)
-            add(label2, "width 100!, height ::22")
+            add(label2)
         }
 
         private val sampleTextCache = WeakHashMap<Font, Optional<String>>()
@@ -1574,10 +1663,8 @@ class FontChooserWidget(
 
             val bg = if (isSelected) list.selectionBackground else list.background
             val fg = if (isSelected) list.selectionForeground else list.foreground
-            label1.background = bg
             label1.foreground = fg
             label1.font = list.font
-            label2.background = bg
             label2.foreground = fg
             panel.background = bg
             panel.foreground = fg
@@ -1603,25 +1690,41 @@ class FontChooserWidget(
                     )
                 }.getOrNull()
             if (sampleText == null) {
-                label2.font = list.font
-                // We empty the text instead of turning the label invisible, as the latter triggers costly revalidation.
-                label2.text = ""
+                // Don't turn the label invisible, as that turns out to be costly.
+                label2.shape = null
+                label2.preferredSize = Dimension(100, 0)
             } else {
-                label2.font = sampleFont!!.deriveFont(list.font.size2D * 1.25f)
-                label2.text = sampleText
+                val h = 22
+                val fontCase = sampleFont!!.case(list.font.size2D * 1.25)
+                val dy = (h + fontCase.run { ascent - descent - lineGap }) / 2
+                label2.shape = GlyphString.of(sampleText, fontCase).appendOutlineTo(Path2D.Float(), 0.0, dy)
+                label2.preferredSize = Dimension(100, h)
             }
 
             return panel
         }
 
         private fun trySampleText(sampleFont: Font, sampleText: String?): String? {
-            val missingGlyph = sampleFont.missingGlyphCode
-            val gv = sampleFont.createGlyphVector(REF_FRC, sampleText ?: return null)
+            val glyphString = GlyphString.of(sampleText ?: return null, sampleFont.case())
             // Only display the sample when at least one glyph is not the missing glyph placeholder.
-            for (glyphIdx in 0..<gv.numGlyphs)
-                if (gv.getGlyphCode(glyphIdx) != missingGlyph)
-                    return sampleText
-            return null
+            return if (glyphString.segments.any { gs -> gs.hasNonMissingGlyph }) sampleText else null
+        }
+
+    }
+
+
+    private class ShapeLabel : JComponent() {
+
+        var shape: Shape? = null
+
+        override fun paintComponent(g: Graphics) {
+            val shape = this.shape
+            if (shape != null)
+                g.withNewG2 { g2 ->
+                    g2.setHighQuality()
+                    g2.color = foreground
+                    g2.fill(shape)
+                }
         }
 
     }
@@ -1629,38 +1732,204 @@ class FontChooserWidget(
 }
 
 
-class FontFeatureWidget : Form.AbstractWidget<FontFeature>() {
+class FontVariationsWidget : Form.AbstractWidget<FontVariations>(), Form.RowManagingWidget<FontVariations> {
 
-    private val tagWidget = InconsistentComboBoxWidget(
-        String::class.java, emptyList(),
-        // Clip the string because ellipsis would take up the majority of the space in a label as narrow as this one.
-        toString = ::noEllipsisLabel,
-        widthSpec = WidthSpec.LITTLE
-    )
-    private val valWidget = SpinnerWidget(
-        Int::class.javaObjectType, SpinnerNumberModel(1, 0, null, 1), widthSpec = WidthSpec.TINIER
-    )
+    private val scrubberWidgets: List<ScrubberWidget<Double>>
+    private val overrideWidgets: List<OverrideWidget<Double>>
+
+    private var stashedVariations = emptyMap<String, Double>()
+    private val severities = HashMap<String, Severity>()
+    private val notices = HashMap<String, Form.Notice>()
 
     init {
-        // When a wrapped widget changes, notify this widget's change listeners that that widget has changed.
-        tagWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
-        valWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
+        scrubberWidgets = mutableListOf()
+        overrideWidgets = mutableListOf()
+        repeat(MAX_NUM_AXES) {
+            val scrubberWidget = ScrubberWidget(
+                Scrubber.NumericScheme(Double::class.javaObjectType), widthSpec = WidthSpec.LITTLE
+            )
+            val overrideWidget = OverrideWidget(scrubberWidget)
+            overrideWidget.isVisible = false
+            // When an override widget changes, notify this widget's change listeners that that widget has changed.
+            overrideWidget.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
+            scrubberWidgets.add(scrubberWidget)
+            overrideWidgets.add(overrideWidget)
+        }
     }
 
-    override val components: List<JComponent> = tagWidget.components + JLabel("=") + valWidget.components
-    override val constraints = tagWidget.constraints + listOf("") + valWidget.constraints
+    override val components = overrideWidgets.flatMap { widget -> widget.components }
+    override val constraints = overrideWidgets.flatMap { widget ->
+        listOf(widget.constraints[0] + ", newline") + widget.constraints.drop(1)
+    }
 
-    override var value: FontFeature
-        get() = FontFeature(tagWidget.value, valWidget.value)
-        set(value) {
-            tagWidget.value = value.tag
-            valWidget.value = value.value
+    private val labelComps = mutableListOf<JLabel>()
+    private val noticeIconComps = mutableListOf<JLabel>()
+    private val noticeMsgComps = mutableListOf<JTextArea>()
+
+    override fun supplyRow(labelComp: JLabel, noticeIconComp: JLabel, noticeMsgComp: JTextArea) {
+        labelComps.add(labelComp)
+        noticeIconComps.add(noticeIconComp)
+        noticeMsgComps.add(noticeMsgComp)
+        labelComp.isVisible = false
+        noticeIconComp.isVisible = false
+        noticeMsgComp.isVisible = false
+    }
+
+    var axes: List<Font.Axis> = emptyList()
+        set(axes) {
+            if (field == axes)
+                return
+            val rem = HashMap(value)
+            field = if (axes.size <= MAX_NUM_AXES) axes else axes.subList(0, MAX_NUM_AXES)
+            for (idx in 0..<MAX_NUM_AXES) {
+                val isRowVisible = idx < axes.size
+                if (!isRowVisible && !overrideWidgets[idx].isVisible)
+                    break
+                overrideWidgets[idx].isVisible = isRowVisible
+                labelComps[idx].isVisible = isRowVisible
+                noticeIconComps[idx].isVisible = isRowVisible
+                noticeMsgComps[idx].isVisible = isRowVisible
+                if (isRowVisible) {
+                    val axis = axes[idx]
+                    val label = try {
+                        l10n("ui.form.fontAxis.${axis.tag}")
+                    } catch (_: MissingResourceException) {
+                        lookupFontLabel(axis.nameMap) ?: axis.tag
+                    }
+                    labelComps[idx].apply { text = label; toolTipText = label }
+                    withoutChangeListeners {
+                        scrubberWidgets[idx].apply {
+                            limiter = Scrubber.NumberLimiter(axis.minValue, axis.maxValue)
+                            sensitivity = ceil((axis.maxValue - axis.minValue) * 0.01) * 0.1
+                        }
+                        overrideWidgets[idx].apply {
+                            defaultValue = axis.defaultValue
+                            value = Override(rem.remove(axis.tag))
+                        }
+                    }
+                }
+            }
+            stashedVariations = rem
+            applySeverities()
+            applyNotices()
         }
 
-    override fun applyConfigurator(configurator: (Form.Widget<*>) -> Unit) {
-        configurator(this)
-        tagWidget.applyConfigurator(configurator)
-        valWidget.applyConfigurator(configurator)
+    override var value: FontVariations
+        get() =
+            FontVariations(persistentMapOf<String, Double>().mutate { map ->
+                for ((idx, axis) in axes.withIndex())
+                    overrideWidgets[idx].value.value?.let { map[axis.tag] = it }
+                map.putAll(stashedVariations)
+            })
+        set(value) {
+            val rem = HashMap(value)
+            for ((idx, axis) in axes.withIndex())
+                withoutChangeListeners { overrideWidgets[idx].value = Override(rem.remove(axis.tag)) }
+            stashedVariations = rem
+            notifyChangeListeners()
+        }
+
+    override fun getSeverity(index: Int) =
+        if (index == -1) throw UnsupportedOperationException() else axes.getOrNull(index)?.let { severities[it.tag] }
+
+    override fun setSeverity(index: Int, severity: Severity?) {
+        if (index == -1) {
+            if (severity != null)
+                throw UnsupportedOperationException()
+            severities.clear()
+        } else if (index in 0..<axes.size) {
+            val tag = axes[index].tag
+            if (severity == null) severities.remove(tag) else severities[tag] = severity
+        }
+        applySeverities()
+    }
+
+    private fun applySeverities() {
+        for ((idx, axis) in axes.withIndex())
+            scrubberWidgets[idx].setSeverity(-1, severities[axis.tag])
+    }
+
+    override fun getNoticeOverride(rowIndex: Int) = axes.getOrNull(rowIndex)?.let { notices[it.tag] }
+
+    override fun setNoticeOverride(rowIndex: Int, notice: Form.Notice?) {
+        val tag = axes[rowIndex].tag
+        if (notice == null) notices.remove(tag) else notices[tag] = notice
+        applyNotices()
+    }
+
+    override fun clearNoticeOverrides() {
+        notices.clear()
+        applyNotices()
+    }
+
+    private fun applyNotices() {
+        for ((idx, axis) in axes.withIndex()) {
+            val notice = notices[axis.tag]
+            noticeIconComps[idx].icon = notice?.severity?.icon
+            noticeMsgComps[idx].text = notice?.msg
+        }
+    }
+
+    companion object {
+        // Surely, no font will have more axes than this.
+        private const val MAX_NUM_AXES = 16
+    }
+
+}
+
+
+class FontFeatureWidget : Form.AbstractWidget<FontFeature>() {
+
+    private val cb = JComboBox<FacetWrapper>().apply {
+        addItemListener { e -> if (e.stateChange == ItemEvent.SELECTED) notifyChangeListeners() }
+    }
+    private val scrubber = Scrubber(Scrubber.NumericScheme(Int::class.javaObjectType)).apply {
+        limiter = Scrubber.NumberLimiter(min = 0)
+        addValueListener { notifyChangeListeners() }
+    }
+
+    override val components = listOf<JComponent>(cb, JLabel("="), scrubber)
+    override val constraints = listOf("hmin $STD_HEIGHT, wmax 150", "", "hmin $STD_HEIGHT, ${WidthSpec.TINIER.mig}")
+
+    var facets: List<Font.Facet> = listOf()
+        set(items) {
+            if (field == items)
+                return
+            field = items
+            val sortedItems = items.sortedWithCollator(caseInsensitiveCollator(), Font.Facet::tag)
+                .sortedBy { facet -> facet.nameMap.isEmpty() }
+            val oldSelectedTag = selectedTag
+            cb.model = DefaultComboBoxModel(sortedItems.mapTo(Vector()) { FacetWrapper(it.tag, it.nameMap) }).apply {
+                selectedItem = if (oldSelectedTag.isNullOrEmpty()) null else
+                    FacetWrapper(oldSelectedTag, items.find { it.tag == oldSelectedTag }?.nameMap)
+            }
+            if (selectedTag != oldSelectedTag)
+                notifyChangeListeners()
+        }
+
+    override var value: FontFeature
+        get() = FontFeature(selectedTag ?: "", scrubber.value)
+        set(value) {
+            if (this.value == value)
+                return
+            withoutChangeListeners {
+                val facet = facets.find { it.tag == value.tag }
+                cb.isEditable = facet == null
+                cb.selectedItem = FacetWrapper(value.tag, facet?.nameMap)
+                cb.isEditable = false
+                scrubber.value = value.value
+            }
+            notifyChangeListeners()
+        }
+
+    private val selectedTag: String?
+        get() = (cb.selectedItem as FacetWrapper?)?.item
+
+
+    private class FacetWrapper(override val item: String, private val nameMap: Map<Locale, String>?) : ComboBoxWrapper {
+        override fun toString() = nameMap?.let(::lookupFontLabel) ?: item
+        override fun hashCode() = item.hashCode()
+        override fun equals(other: Any?) = this === other || other is FacetWrapper && item == other.item
     }
 
 }
@@ -1689,7 +1958,7 @@ class TransitionWidget : Form.AbstractWidget<Transition>() {
         private val disabledBorderColor = UIManager.getColor("Component.disabledBorderColor")
         private val normalForeground = UIManager.getColor("textText")
         private val disabledForeground = UIManager.getColor("textInactiveText")
-        private val borderWidth = (UIManager.get("Component.borderWidth") as Number).toInt()
+        private val borderWidth = UIManager.getInt("Component.borderWidth")
 
         private val timeLabel = l10n("ui.form.transitionTime")
         private val valueLabel = l10n("ui.form.transitionValue")
@@ -1697,37 +1966,25 @@ class TransitionWidget : Form.AbstractWidget<Transition>() {
         init {
             preferredSize = Dimension(300, 300)
 
-            val mouseListener = object : MouseAdapter() {
+            addHighFrequencyDragListener(object : HighFrequencyDragListener {
                 private var dragging = 0
 
-                override fun mousePressed(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON1) {
-                        val p = e.point
-                        val d1 = p.distance(x1, y1)
-                        val d2 = p.distance(x2, y2)
-                        if (d1 < 30 || d2 < 30)
-                            dragging = if (d1 < d2) 1 else 2
-                    }
+                override fun onStartDragging(startPointer: Point): Boolean {
+                    val d1 = startPointer.distance(x1, y1)
+                    val d2 = startPointer.distance(x2, y2)
+                    dragging = if (d1 > 30 && d2 > 30) 0 else if (d1 < d2) 1 else 2
+                    return dragging != 0
                 }
 
-                override fun mouseReleased(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON1)
-                        dragging = 0
-                }
-
-                override fun mouseDragged(e: MouseEvent) {
-                    if (dragging != 0) {
-                        val ctrlX = ((e.x - marginLeft) / (canvasWidth - 1).toDouble()).coerceIn(0.0, 1.0)
-                        val ctrlY = (1 - (e.y - marginTop) / (canvasHeight - 1).toDouble()).coerceIn(0.0, 1.0)
-                        when (dragging) {
-                            1 -> value = value.copy(ctrl1X = ctrlX, ctrl1Y = ctrlY)
-                            2 -> value = value.copy(ctrl2X = ctrlX, ctrl2Y = ctrlY)
-                        }
+                override fun onDrag(startPointer: Point, currentPointer: Point, modifiersEx: Int) {
+                    val ctrlX = ((currentPointer.x - marginLeft) / (canvasWidth - 1).toDouble()).coerceIn(0.0, 1.0)
+                    val ctrlY = (1 - (currentPointer.y - marginTop) / (canvasHeight - 1).toDouble()).coerceIn(0.0, 1.0)
+                    when (dragging) {
+                        1 -> value = value.copy(ctrl1X = ctrlX, ctrl1Y = ctrlY)
+                        2 -> value = value.copy(ctrl2X = ctrlX, ctrl2Y = ctrlY)
                     }
                 }
-            }
-            addMouseListener(mouseListener)
-            addMouseMotionListener(mouseListener)
+            })
         }
 
         override fun paintComponent(g: Graphics) {
@@ -1794,48 +2051,115 @@ class TransitionWidget : Form.AbstractWidget<Transition>() {
 }
 
 
-class OptWidget<E : Any>(
+abstract class AbstractToggleableWidget<V : Any, E : Any>(
     val wrapped: Form.Widget<E>
-) : Form.AbstractWidget<Opt<E>>() {
+) : Form.AbstractWidget<V>() {
+
+    protected abstract val toggleComponent: JComponent
+    protected abstract val isActive: Boolean
+
+    protected fun onToggle() {
+        wrapped.isEnabled = toggleComponent.isEnabled && isActive
+        notifyChangeListeners()
+    }
 
     init {
-        // By default, the checkbox is deselected, so the wrapped widget needs to be disabled.
+        // By default, the toggle component is inactive, so the wrapped widget needs to be disabled.
         wrapped.isEnabled = false
-        // When the wrapped widget changes, notify this widget's change listeners that that widget has changed.
-        wrapped.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
     }
-
-    private val cb = LargeCheckBox(STD_HEIGHT).apply {
-        addItemListener {
-            wrapped.isEnabled = isSelected
-            notifyChangeListeners()
-        }
-    }
-
-    override val components = listOf(cb) + wrapped.components
-    override val constraints = listOf("") + wrapped.constraints
-
-    override var value: Opt<E>
-        get() = Opt(cb.isSelected, wrapped.value)
-        set(value) {
-            cb.isSelected = value.isActive
-            wrapped.value = value.value
-        }
 
     override fun applyVisible(isVisible: Boolean) {
-        cb.isVisible = isVisible
+        toggleComponent.isVisible = isVisible
         wrapped.isVisible = isVisible
     }
 
     override fun applyEnabled(isEnabled: Boolean) {
-        cb.isEnabled = isEnabled
-        wrapped.isEnabled = isEnabled && cb.isSelected
+        toggleComponent.isEnabled = isEnabled
+        wrapped.isEnabled = isEnabled && isActive
     }
 
     override fun applyConfigurator(configurator: (Form.Widget<*>) -> Unit) {
         configurator(this)
         wrapped.applyConfigurator(configurator)
     }
+
+}
+
+
+class OptWidget<E : Any>(
+    wrapped: Form.Widget<E>
+) : AbstractToggleableWidget<Opt<E>, E>(wrapped) {
+
+    init {
+        // When the wrapped widget changes, notify this widget's change listeners that that widget has changed.
+        wrapped.changeListeners.add(::notifyChangeListenersAboutOtherWidgetChange)
+    }
+
+    override val toggleComponent = LargeCheckBox(STD_HEIGHT).apply {
+        addItemListener { onToggle() }
+    }
+
+    override val components = listOf(toggleComponent) + wrapped.components
+    override val constraints = listOf("") + wrapped.constraints
+
+    override val isActive: Boolean
+        get() = toggleComponent.isSelected
+
+    override var value: Opt<E>
+        get() = Opt(toggleComponent.isSelected, wrapped.value)
+        set(value) {
+            toggleComponent.isSelected = value.isActive
+            wrapped.value = value.value
+        }
+
+}
+
+
+class OverrideWidget<E : Any>(
+    wrapped: Form.Widget<E>
+) : AbstractToggleableWidget<Override<E>, E>(wrapped) {
+
+    init {
+        // When the wrapped widget changes, notify this widget's change listeners that that widget has changed.
+        wrapped.changeListeners.add { widget ->
+            if (isActive)
+                notifyChangeListenersAboutOtherWidgetChange(widget)
+        }
+    }
+
+    override val toggleComponent = JButton(EDIT_ICON).apply {
+        addActionListener { isActive = !isActive }
+    }
+
+    override val components = wrapped.components + toggleComponent
+    override val constraints = wrapped.constraints + ""
+
+    override var isActive = false
+        set(isActive) {
+            if (field == isActive)
+                return
+            field = isActive
+            toggleComponent.icon = if (isActive) RESET_ICON else EDIT_ICON
+            if (!isActive)
+                defaultValue?.let { wrapped.value = it }
+            onToggle()
+        }
+
+    var defaultValue: E? = null
+        set(defaultValue) {
+            if (field == defaultValue)
+                return
+            field = defaultValue
+            if (!isActive && defaultValue != null)
+                wrapped.value = defaultValue
+        }
+
+    override var value: Override<E>
+        get() = Override(if (isActive) wrapped.value else null)
+        set(value) {
+            isActive = value.value != null
+            (value.value ?: defaultValue)?.let { wrapped.value = it }
+        }
 
 }
 
@@ -1852,19 +2176,25 @@ abstract class AbstractListWidget<E : Any, W : Form.Widget<E>>(
         set(elementCount) {
             if (field == elementCount)
                 return
+            val oldElementCount = field
+            field = elementCount
             while (partWidgets.size < elementCount)
                 appendNewPart()
-            for (idx in elementCount..<field)
+            for (idx in elementCount..<oldElementCount)
                 setPartVisible(idx, partWidgets[idx], false)
-            if (field < elementCount) {
-                val fillElement = getFillElement()
-                for (idx in field..<elementCount) {
+            if (oldElementCount < elementCount) {
+                val fillElement = when {
+                    newElementIsLastElement && oldElementCount >= 1 ->
+                        getPartElement(oldElementCount - 1, partWidgets[oldElementCount - 1])
+                    newElement != null -> newElement
+                    else -> throw IllegalStateException("No way to choose value of new ListWidget element.")
+                }
+                for (idx in oldElementCount..<elementCount) {
                     val widget = partWidgets[idx]
                     setPartVisible(idx, widget, true)
                     withoutChangeListeners { setPartElement(idx, widget, fillElement) }
                 }
             }
-            field = elementCount
             notifyChangeListeners()
         }
 
@@ -1879,13 +2209,6 @@ abstract class AbstractListWidget<E : Any, W : Form.Widget<E>>(
                 withoutChangeListeners { setPartElement(idx, widget, value[idx]) }
             notifyChangeListeners()
         }
-
-    private fun getFillElement(): E = when {
-        newElementIsLastElement && elementCount >= 1 ->
-            getPartElement(elementCount - 1, partWidgets[elementCount - 1])
-        newElement != null -> newElement
-        else -> throw IllegalStateException("No way to choose value of new ListWidget element.")
-    }
 
     /** Already prepares some parts so that user interaction will appear quicker later on. */
     protected fun addInitialParts() {
@@ -1951,7 +2274,7 @@ abstract class AbstractListWidget<E : Any, W : Form.Widget<E>>(
         for ((fromIdx, toIdx) in mapping.withIndex())
             if (toIdx != -1) {
                 val element = adjustElementOnReorder(oldList[fromIdx], mapping)
-                if (toIdx >= oldList.size || oldList[toIdx] != element)
+                if (toIdx >= oldList.size || oldList[toIdx] !== element)
                     setPartElement(toIdx, partWidgets[toIdx], element)
             }
     }
@@ -2061,6 +2384,20 @@ class SimpleListWidget<E : Any>(
     }
 
     override fun setPartVisible(idx: Int, widget: Form.Widget<E>, isVisible: Boolean) {
+        if (!isVisible) {
+            // If we didn't reassign the focus manually, a random component would gain it once the part is hidden.
+            val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+            if (focusOwner != null) {
+                val isDelBtnFocused = !fixedSize && focusOwner == delBtns[idx]
+                val isWidgetFocused = widget.components.any { SwingUtilities.isDescendingFrom(focusOwner, it) }
+                when {
+                    (isDelBtnFocused || isWidgetFocused) && elementCount == 0 ->
+                        if (!fixedSize) components[0].requestFocusInWindow() else components[0].transferFocusBackward()
+                    isDelBtnFocused -> delBtns[elementCount - 1].requestFocusInWindow()
+                    isWidgetFocused -> delBtns[elementCount - 1].transferFocus()
+                }
+            }
+        }
         if (!fixedSize)
             delBtns[idx].isVisible = isVisible
         widget.isVisible = isVisible
@@ -2110,6 +2447,22 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
     }
 
     override fun setPartVisible(idx: Int, widget: W, isVisible: Boolean) {
+        if (!isVisible) {
+            // If we didn't reassign the focus manually, a random component would gain it once the part is hidden.
+            val focusOwner = KeyboardFocusManager.getCurrentKeyboardFocusManager().focusOwner
+            if (focusOwner != null) {
+                val isAddBtnFocused = focusOwner == addButtons[idx + 1]
+                val isDelBtnFocused = focusOwner == layerPanels[idx].delBtn
+                val isLayerPanelFocused = SwingUtilities.isDescendingFrom(focusOwner, layerPanels[idx])
+                when {
+                    (isAddBtnFocused || isDelBtnFocused || isLayerPanelFocused) && elementCount == 0 ->
+                        addButtons[0].requestFocusInWindow()
+                    isAddBtnFocused -> addButtons[elementCount].requestFocusInWindow()
+                    isDelBtnFocused -> layerPanels[elementCount - 1].delBtn.requestFocusInWindow()
+                    isLayerPanelFocused -> addButtons[elementCount].transferFocus()
+                }
+            }
+        }
         layerPanels[idx].isVisible = isVisible
         addButtons[idx + 1].isVisible = isVisible
     }
@@ -2142,6 +2495,7 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
 
         val nameWidget: TextWidget
         val advancedBtn: JToggleButton
+        val delBtn: JButton
 
         init {
             putClientProperty(STYLE, "background: @componentBackground")
@@ -2161,9 +2515,15 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
             // By default, advancedBtn is not selected, so inform the wrapped widget about that.
             toggleAdvanced(widget, false)
 
-            val delBtn = JButton(l10n("ui.form.layerDelete"), TRASH_ICON)
+            delBtn = JButton(l10n("ui.form.layerDelete"), TRASH_ICON)
             delBtn.putClientProperty(BUTTON_TYPE, BUTTON_TYPE_TOOLBAR_BUTTON)
-            delBtn.addActionListener { userDel(idx) }
+            delBtn.addActionListener {
+                // If the user clicks on a delBtn, focus the delBtn that visually takes its place.
+                // The if statement ensures that we don't compete with setPartVisible() about focus.
+                if (idx in 1..elementCount - 2)
+                    layerPanels[idx - 1].delBtn.requestFocusInWindow()
+                userDel(idx)
+            }
 
             val widgetPanel = JPanel(MigLayout()).apply { border = FlatBorder() }
             for ((comp, constr) in widget.components.zip(widget.constraints))
@@ -2181,31 +2541,7 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
             // Add a transfer handler for dragging.
             transferHandler = LayerPanelTransferHandler(idx)
             // Add a mouse listener that notifies the transfer handler when dragging should start.
-            val mouseListener = object : MouseAdapter() {
-                private val thresh = DragSource.getDragThreshold()
-                private var startPoint: Point? = null
-
-                override fun mousePressed(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON1)
-                        startPoint = e.point
-                }
-
-                override fun mouseReleased(e: MouseEvent) {
-                    if (e.button == MouseEvent.BUTTON1)
-                        startPoint = null
-                }
-
-                override fun mouseDragged(e: MouseEvent) {
-                    startPoint?.let { s ->
-                        if (abs(e.x - s.x) > thresh || abs(e.y - s.y) > thresh) {
-                            startPoint = null
-                            startDrag(e)
-                        }
-                    }
-                }
-            }
-            addMouseListener(mouseListener)
-            addMouseMotionListener(mouseListener)
+            addThresholdedStartDragListener(::startDrag)
             // Prevent dragging when the user clicks inside the widget panel.
             widgetPanel.addMouseListener(object : MouseAdapter() {
                 override fun mousePressed(e: MouseEvent) {
@@ -2287,6 +2623,7 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
 
         init {
             preferredSize = Dimension(96 + 1, 12 + 1)
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         }
 
         override fun paintComponent(g: Graphics) {
@@ -2327,7 +2664,10 @@ class LayerListWidget<E : Any, W : Form.Widget<E>>(
         init {
             preferredSize = Dimension(0, 32)
             border = null
-            addActionListener { userAdd(addAtIdx) }
+            addActionListener {
+                userAdd(addAtIdx)
+                addButtons[addAtIdx + 1].requestFocusInWindow()
+            }
 
             // Add a transfer handler for dropping.
             transferHandler = AddButtonTransferHandler(addAtIdx)
@@ -2536,12 +2876,66 @@ class NestedFormWidget<V : Any>(
 }
 
 
-private fun String.removeAnySuffix(suffixes: List<String>, ignoreCase: Boolean = false): String {
-    for (suffix in suffixes)
-        if (endsWith(suffix, ignoreCase))
-            return dropLast(suffix.length)
-    return this
+/** Doesn't have state; instead receives interaction, fires a change event, and presents the choice in its value. */
+class ScaleActionWidget(
+    suggestedScalings: DoubleArray
+) : Form.AbstractWidget<Double>() {
+
+    override val components: List<JComponent>
+
+    init {
+        components = mutableListOf()
+
+        val fmt = NumberFormat.getInstance()
+        for (scaling in suggestedScalings)
+            components.add(JButton("\u00D7 ${fmt.format(scaling)}").apply {
+                margin = margin.apply { left = 6; right = 6 }
+                addActionListener { value = scaling }
+            })
+
+        val customBtn = JButton("\u00D7 \u2026").apply { margin = margin.apply { left = 6; right = 6 } }
+        val scalingTextField = JFormattedTextField(NumberFormatter().apply { minimum = 0.0 })
+        val rebuildBtn = JButton(l10n("ui.form.rebuild"))
+        val popup = DropdownPopupMenu(
+            preShow = { scalingTextField.value = 1.0 },
+            // Note: Without invokeLater(), the focus is not transferred.
+            postShow = { SwingUtilities.invokeLater { scalingTextField.requestFocusInWindow() } }
+        ).apply {
+            addMouseListenerTo(customBtn)
+            addKeyListenerTo(customBtn)
+            add(JPanel(MigLayout()).apply {
+                add(JLabel("\u00D7"))
+                add(scalingTextField)
+                add(rebuildBtn)
+            })
+        }
+        rebuildBtn.addActionListener {
+            popup.isVisible = false
+            (scalingTextField.value as? Double)?.let { scaling ->
+                if (scaling > 0.001 && scaling !in 0.999..1.001) value = scaling
+            }
+        }
+        components.add(customBtn)
+    }
+
+    override val constraints = List(suggestedScalings.size + 1) { "" }
+
+    override var value: Double = 1.0
+        set(value) {
+            field = value
+            notifyChangeListeners()
+        }
+
 }
+
+
+private fun lookupFontLabel(labels: Map<Locale, String>): String? =
+    if (labels.isEmpty()) null else {
+        val nameLocale = closestLocale(Locale.getDefault(), labels.keys)
+            ?: closestLocale(Locale.US, labels.keys)
+            ?: labels.keys.first()
+        labels[nameLocale]
+    }
 
 
 /**
@@ -2554,20 +2948,4 @@ private fun String.removeAnySuffix(suffixes: List<String>, ignoreCase: Boolean =
  */
 private fun DefaultFormatter.makeSafe() {
     commitsOnValidEdit = true
-}
-
-
-private fun makeTimecodeEditor(spinner: JSpinner) = object : JSpinner.DefaultEditor(spinner) {
-    init {
-        textField.isEditable = true
-    }
-
-    // There is a subtle bug in the JDK which causes JTextField and its subclasses to not utilize a one pixel wide
-    // column at the right for drawing; instead, it is always empty. However, this column is needed to draw the
-    // caret at the rightmost position when the text field has the preferred size that exactly matches the text
-    // width (which happens to this spinner when the width spec is kept as FIT). Hence, when the user positions the
-    // caret at the rightmost location, the text scrolls one pixel to the left to accommodate the caret. We did not
-    // manage to localize the source of this bug, but as a workaround, we just add one more pixel to the preferred
-    // width, thereby providing the required space for the caret when it is at the rightmost position.
-    override fun getPreferredSize() = super.getPreferredSize().apply { if (!isPreferredSizeSet) width += 1 }
 }

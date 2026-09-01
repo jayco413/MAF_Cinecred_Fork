@@ -1,9 +1,7 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<WixLocalization xmlns="http://schemas.microsoft.com/wix/2006/localization" Culture="es-ES" Codepage="1252">
-  <String Id="LanguageCode">1034</String>
-  <String Id="Slogan">@SLOGAN_ES@</String>
-  <String Id="ShortcutDlgTitle">{\WixUI_Font_Title}Accesos directos</String>
-  <String Id="ShortcutDlgDescription">Seleccione los accesos directos que desea crear.</String>
-  <String Id="ShortcutDlgDesktop">Crear un acceso directo al escritorio</String>
-  <String Id="ShortcutDlgStartMenu">Crear un acceso directo al menú Inicio</String>
+﻿<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="es-ES">
+  <String Id="Slogan" Value="@SLOGAN_ES@"/>
+  <String Id="ShortcutDlgTitle" Value="{\WixUI_Font_Title}Accesos directos"/>
+  <String Id="ShortcutDlgDescription" Value="Seleccione los accesos directos que desea crear."/>
+  <String Id="ShortcutDlgDesktop" Value="Crear un acceso directo en el escritorio"/>
+  <String Id="ShortcutDlgStartMenu" Value="Crear un acceso directo en el menú Inicio"/>
 </WixLocalization>

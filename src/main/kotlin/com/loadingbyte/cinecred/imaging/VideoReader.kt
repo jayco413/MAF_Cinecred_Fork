@@ -13,6 +13,9 @@ import org.bytedeco.ffmpeg.avutil.AVDictionary
 import org.bytedeco.ffmpeg.global.avcodec.*
 import org.bytedeco.ffmpeg.global.avformat.*
 import org.bytedeco.ffmpeg.global.avutil.*
+import org.bytedeco.ffmpeg.global.swscale.*
+import org.bytedeco.ffmpeg.swscale.SwsContext
+import org.bytedeco.javacpp.DoublePointer
 import java.nio.file.Path
 import java.util.*
 import kotlin.io.path.isRegularFile
@@ -38,6 +41,8 @@ class VideoReader(
 
     class Frame(val bitmap: Bitmap, val timecode: Timecode)
 
+    private val closureProtector = ClosureProtector()
+
     private val fileSeq = fileOrPattern.pathString.contains(Regex("%[0-9]*d"))
     private val filename = fileOrPattern.name
 
@@ -45,6 +50,7 @@ class VideoReader(
     private var st: AVStream? = null
     private var dec: AVCodecContext? = null
     private var pkt: AVPacket? = null
+    private var sws: SwsContext? = null
 
     private val queue: Queue<Frame> = ArrayDeque()
     private var frameNumber = -1
@@ -138,7 +144,8 @@ class VideoReader(
         }
 
         // Extract a bitmap spec from the decoder parameters. If some metadata is unspecified, assume Rec. 709.
-        val pixelFormat = Bitmap.PixelFormat.of(dec.pix_fmt())
+        val pixelFormat =
+            Bitmap.PixelFormat.of(if (dec.pix_fmt() == AV_PIX_FMT_PAL8) AV_PIX_FMT_RGBA else dec.pix_fmt())
         val pri = dec.color_primaries()
         val trc = dec.color_trc()
         val cs = dec.colorspace()
@@ -151,7 +158,8 @@ class VideoReader(
                     if (pixelFormat.family == Bitmap.PixelFormat.Family.YUV) Bitmap.Range.LIMITED
                     else Bitmap.Range.FULL,
                 ColorSpace.of(
-                    if (pri != AVCOL_PRI_UNSPECIFIED) ColorSpace.Primaries.of(pri) else ColorSpace.Primaries.BT709,
+                    if (pixelFormat.family == Bitmap.PixelFormat.Family.GRAY) null else
+                        if (pri != AVCOL_PRI_UNSPECIFIED) ColorSpace.Primaries.of(pri) else ColorSpace.Primaries.BT709,
                     if (trc != AVCOL_TRC_UNSPECIFIED) ColorSpace.Transfer.of(trc) else ColorSpace.Transfer.BT1886
                 ),
                 if (pixelFormat.family != Bitmap.PixelFormat.Family.YUV) null else
@@ -164,20 +172,27 @@ class VideoReader(
                 if (pixelFormat.hasAlpha) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
             ),
             when (dec.field_order()) {
-                AV_FIELD_TT, AV_FIELD_BT -> Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST
-                AV_FIELD_BB, AV_FIELD_TB -> Bitmap.Scan.INTERLACED_BOT_FIELD_FIRST
+                // Despite what the documentation of these constants says, the first letter actually determines the
+                // display order. This is confirmed by various discussions on the mailing list, and by how FFmpeg itself
+                // uses these constants.
+                AV_FIELD_TT, AV_FIELD_TB -> Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST
+                AV_FIELD_BB, AV_FIELD_BT -> Bitmap.Scan.INTERLACED_BOT_FIELD_FIRST
                 else -> Bitmap.Scan.PROGRESSIVE
             },
             when (dec.field_order()) {
-                AV_FIELD_TT, AV_FIELD_TB -> Bitmap.Content.INTERLEAVED_FIELDS
-                AV_FIELD_BB, AV_FIELD_BT -> Bitmap.Content.INTERLEAVED_FIELDS_REVERSED
+                // The "coded first" phrasing in the documentation of these constants has nothing to do with how the
+                // fields are physically interleaved; instead, FFmpeg always interleaves the top field first.
+                AV_FIELD_TT, AV_FIELD_BB, AV_FIELD_TB, AV_FIELD_BT -> Bitmap.Content.INTERLEAVED_FIELDS
                 else -> Bitmap.Content.PROGRESSIVE_FRAME
             }
         )
     }
 
     /** Reads the next frame from the video, or returns null if the video has come to an end. */
-    fun read(): Frame? {
+    fun read(): Frame? =
+        closureProtector.requireNotClosed { readFrame() }
+
+    private fun readFrame(): Frame? {
         // For file sequences, setup can be aborted early, in which case the goal is to return null here.
         if (fileSeq && ic == null)
             return null
@@ -228,17 +243,41 @@ class VideoReader(
                 val tb = st!!.time_base()
                 Timecode.Clock(frame.pts() * tb.num(), tb.den().toLong())
             }
-            queue.offer(Frame(Bitmap.wrap(spec, frame), timecode))
+            if (frame.width() != spec.resolution.widthPx || frame.height() != spec.resolution.heightPx ||
+                frame.format().let { it != spec.representation.pixelFormat.code && it != AV_PIX_FMT_PAL8 }
+            )
+                throw FFmpegException("Frame $timecode has a size or pixel format that differs from other frames.")
+            val bitmap: Bitmap
+            if (frame.format() == AV_PIX_FMT_PAL8) {
+                bitmap = Bitmap.allocate(spec)
+                // We've seen PNG image sequences where only some of the PNGs used palettes. Hence, we need to
+                // dynamically react and allocate the sws context the first time we actually encounter a palette.
+                if (sws == null)
+                    sws = sws_getContext(
+                        dec.width(), dec.height(), AV_PIX_FMT_PAL8,
+                        dec.width(), dec.height(), spec.representation.pixelFormat.code,
+                        0, null, null, null as DoublePointer?
+                    ).ffmpegThrowIfNull("Could not initialize SWS context")
+                sws_scale(
+                    sws, frame.data(), frame.linesize(), 0, frame.height(), bitmap.frame.data(), bitmap.frame.linesize()
+                )
+                av_frame_free(frame)
+            } else
+                bitmap = Bitmap.wrap(spec, frame)
+            queue.offer(Frame(bitmap, timecode))
         }
     }
 
     override fun close() {
+        closureProtector.close()
         pkt.letIfNonNull(::av_packet_free)
         pkt = null
         dec.letIfNonNull(::avcodec_free_context)
         dec = null
         ic.letIfNonNull(::avformat_close_input)
         ic = null
+        sws.letIfNonNull(::sws_freeContext)
+        sws = null
         while (true)
             (queue.poll() ?: break).bitmap.close()
     }

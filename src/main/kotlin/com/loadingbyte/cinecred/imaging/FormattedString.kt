@@ -1,15 +1,11 @@
 package com.loadingbyte.cinecred.imaging
 
-import com.loadingbyte.cinecred.common.*
-import java.awt.*
-import java.awt.font.GlyphVector
-import java.awt.font.LineBreakMeasurer
-import java.awt.font.TextAttribute
-import java.awt.font.TextLayout
+import com.loadingbyte.cinecred.common.flatMapToSequence
+import com.loadingbyte.cinecred.common.mapToFloatArray
+import com.loadingbyte.cinecred.common.transformedBy
+import java.awt.BasicStroke
+import java.awt.Shape
 import java.awt.geom.*
-import java.text.AttributedString
-import java.text.Bidi
-import java.text.BreakIterator
 import java.util.*
 import kotlin.math.*
 
@@ -25,24 +21,26 @@ class FormattedString private constructor(
        ********** MODIFIED COPIES **********
        ************************************* */
 
-    fun sub(startIdx: Int, endIdx: Int): FormattedString? = when {
-        startIdx == 0 && endIdx == string.length -> this
-        startIdx >= endIdx -> null
-        else ->
-            FormattedString(string.substring(startIdx, endIdx), attrs.sub(startIdx, endIdx), locale, justificationWidth)
+    /** Fully justifies the text to exactly fit the supplied width. */
+    fun justified(justificationWidth: Double): FormattedString {
+        val just = FormattedString(string, attrs, locale, justificationWidth = justificationWidth)
+        if (::_glyphString.isInitialized)
+            just.initializeHorizontalFrom(glyphString.justified(justificationWidth))
+        return just
     }
 
-    fun trim(): FormattedString? {
-        val startIdx = string.indexOfFirst { !it.isWhitespace() }
-        val endIdx = string.indexOfLast { !it.isWhitespace() } + 1
-        return if (startIdx == -1) null else sub(startIdx, endIdx)
+    fun breakIntoLines(lineWidth: Double): List<FormattedString> {
+        val lines = mutableListOf<FormattedString>()
+        for ((lineGlyphString, lineStartCharIdx, lineEndCharIdx) in glyphString.breakIntoLines(lineWidth)) {
+            val line = FormattedString(
+                string.substring(lineStartCharIdx, lineEndCharIdx), attrs.sub(lineStartCharIdx, lineEndCharIdx),
+                locale, justificationWidth = Double.NaN
+            )
+            line.initializeHorizontalFrom(lineGlyphString)
+            lines += line
+        }
+        return lines
     }
-
-    /**
-     * Fully justifies the formatted string to exactly fit the provided [width].
-     */
-    fun justify(width: Double): FormattedString =
-        FormattedString(string, attrs, locale, justificationWidth = width)
 
 
     /* *******************************************************
@@ -85,39 +83,39 @@ class FormattedString private constructor(
 
     private var _width: Double = Double.NaN
     private var _missesGlyphs: Boolean = false
-    private lateinit var _textLayout: TextLayout
+    private lateinit var _glyphString: GlyphString<Attribute>
 
     val width: Double
         get() = run { ensureInitializedHorizontal(); _width }
     val missesGlyphs: Boolean
         get() = run { ensureInitializedHorizontal(); _missesGlyphs }
-    private val textLayout: TextLayout
-        get() = run { ensureInitializedHorizontal(); _textLayout }
+    private val glyphString: GlyphString<Attribute>
+        get() = run { ensureInitializedHorizontal(); _glyphString }
 
     private fun ensureInitializedHorizontal() {
         if (!_width.isNaN())
             return
 
-        CustomGlyphLayoutEngine.begin(makeCustomGlyphLayoutEngineConfigSource())
-        val textLayout = TextLayout(textLayoutAttrStr.iterator, REF_FRC).let {
-            if (justificationWidth.isNaN()) it else it.getJustifiedLayout(justificationWidth.toFloat())
+        val runs = mutableListOf<GlyphString.Run<Attribute>>()
+        attrs.forEachRun { attr, runStartCharIdx, _ ->
+            val font = attr.font
+            runs += GlyphString.Run(
+                runStartCharIdx, font.fontCase, font.kerning, font.ligatures, font.features, font.hScaling,
+                font.trackingPx, attr
+            )
         }
-        CustomGlyphLayoutEngine.end()
+        var glyphString = GlyphString.of(string, runs, locale)
 
-        // The current Java implementation always uses the roman baseline everywhere. We take advantage of this
-        // implementation detail and do not implement code for different baselines. In case this behavior
-        // changes with a future Java version, we do not want out code to silently fail, hence we check here.
-        check(textLayout.baseline.toInt() == java.awt.Font.ROMAN_BASELINE)
+        if (!justificationWidth.isNaN())
+            glyphString = glyphString.justified(justificationWidth)
 
-        _width = textLayout.advance.toDouble()
-        _missesGlyphs = textLayout.getGlyphVectors().any { gv ->
-            val missingGlyph = gv.font.missingGlyphCode
-            for (glyphIdx in 0..<gv.numGlyphs)
-                if (gv.getGlyphCode(glyphIdx) == missingGlyph)
-                    return@any true
-            false
-        }
-        _textLayout = textLayout
+        initializeHorizontalFrom(glyphString)
+    }
+
+    private fun initializeHorizontalFrom(glyphString: GlyphString<Attribute>) {
+        _width = glyphString.width
+        _missesGlyphs = glyphString.segments.any { seg -> seg.hasMissingGlyph }
+        _glyphString = glyphString
     }
 
 
@@ -126,49 +124,17 @@ class FormattedString private constructor(
        ***************************** */
 
     fun drawTo(image: DeferredImage, x: Double, yBaseline: Y, layer: DeferredImage.Layer) {
-        // Get all GlyphVectors which layout the string. They are ordered such that the first GlyphVector realizes
-        // the first chars of the string, the next one realizes the chars immediately after that and so on. In case
-        // there is BIDI (bidirectional) text, they are not necessarily ordered visually from left to right.
-        // Note: We assume that every TextLineComponent of the TextLayout is indeed based on a GlyphVector.
-        // Since we do not use TextAttribute.CHAR_REPLACEMENT in this class, that assumption will always hold.
-        val gvs = textLayout.getGlyphVectors()
-
-        // For each glyph vector, find the index into the string where that glyph vector starts and ends.
-        val gvStartCharIndices = IntArray(gvs.size)
-        var charCtr = 0
-        for (gvIdx in gvs.indices) {
-            gvStartCharIndices[gvIdx] = charCtr
-            charCtr += textLayout.getGlyphVectorNumChars(gvIdx)
-        }
-
-        // Reorder the glyph vectors from left to right and enrich them with positioning and font information.
-        // This yields a list of GlyphSegments.
-        val gssArray = arrayOfNulls<GlyphSegment>(gvs.size)
-        var rightBaseX = width
-        for (gsIdx in gvs.lastIndex downTo 0) {
-            val gvIdx = textLayout.visualToLogicalGvIdx(gsIdx)
-            val gvStartCharIdx = gvStartCharIndices[gvIdx]
-            val font = attrs.getAttr(gvStartCharIdx).font
-            val baseX = textLayout.getGlyphVectorX(gvIdx).toDouble()
-            val width = rightBaseX - baseX
-            gssArray[gsIdx] = GlyphSegment(gvs[gvIdx], baseX, width, font)
-            rightBaseX = baseX
-        }
-        val gss = gssArray.requireNoNulls().asList()
-
-        // Draw each continuous stretch of glyph vectors that share the same design.
-        // Do this by iterating through the visual glyph vector indices, i.e., from left to right. The lambda "action"
+        // Draw each continuous stretch of glyph segments that share the same design.
+        // Do this by iterating through the glyph segment indices, i.e., from left to right. The lambda "action"
         // is called whenever a stretch of the same design has come to an end.
-        // Note: We consider each GlyphVector in one whole piece. We can do this because we have provoked splits in the
-        // TextLayout's TextLineComponents (and as such also in the GVs) at each point where the design changes.
+        // Note: We consider each segment in one whole piece. We can do this because we have provoked splits in the
+        // GlyphString's runs (and as such also in the segments) at each point where the design changes.
+        val segments = glyphString.segments
         forEachStretch(
-            numItems = gss.size,
-            getItem = { gsIdx ->
-                val gvIdx = textLayout.visualToLogicalGvIdx(gsIdx)
-                attrs.getAttr(gvStartCharIndices[gvIdx]).design
-            },
-            action = { design, startGsIdx, endGsIdx ->
-                drawSameDesignStretchTo(image, x, yBaseline, layer, gss.subList(startGsIdx, endGsIdx), design)
+            numItems = segments.size,
+            getItem = { segIdx -> segments[segIdx].userData.design },
+            action = { design, startSegIdx, endSegIdx ->
+                drawSameDesignStretchTo(image, x, yBaseline, layer, segments.subList(startSegIdx, endSegIdx), design)
             })
     }
 
@@ -192,11 +158,11 @@ class FormattedString private constructor(
 
     private fun drawSameDesignStretchTo(
         image: DeferredImage, x: Double, yBaseline: Y, imageLayer: DeferredImage.Layer,
-        gss: List<GlyphSegment>, design: Design
+        segments: List<GlyphString.Segment<Attribute>>, design: Design
     ) {
         // Find the x-coordinates delimiting the stretch.
-        val xLeft = gss.first().baseX
-        val xRight = gss.last().run { baseX + width }
+        val xLeft = segments.first().baseX
+        val xRight = segments.last().run { this.baseX + this.width }
         // Find the center point of the stretch.
         val center = Point2D.Double(
             (xLeft + xRight) / 2.0,
@@ -219,21 +185,31 @@ class FormattedString private constructor(
 
             // Compute the basic forms making up the layer.
             var forms = when (val shape = layer.shape) {
-                is Layer.Shape.Text -> sequenceOf(Form.GlyphSegments(anchor = center, gss, null))
+                is Layer.Shape.Text -> sequenceOf(Form.GlyphSegments(anchor = center, segments, null))
                 is Layer.Shape.Stripe -> sequenceOf(makeStripeForm(shape, xLeft, xRight))
                 is Layer.Shape.Clone -> shape.layers.flatMapToSequence(::formLayer)
             }
 
             layer.dilation?.let { dilation ->
-                val dilStroke =
-                    BasicStroke((dilation.radiusPx * 2.0).toFloat(), capForJoin(dilation.join), dilation.join)
-                forms = forms.map { form -> Form.AWTShape(form.anchor, dilate(form.awtShape, dilStroke)) }
+                forms = forms.map { form ->
+                    Form.Path(form.anchor, form.opPath.dilate(dilation.radiusPx, dilation.join))
+                }
             }
 
             // Convert the forms to contours if requested.
             layer.contour?.let { contour ->
-                val stroke = BasicStroke(contour.thicknessPx.toFloat(), capForJoin(contour.join), contour.join)
-                forms = forms.map { form -> Form.AWTShape(form.anchor, stroke.createStrokedShape(form.awtShape)) }
+                forms = forms.map { form ->
+                    if (form is Form.GlyphSegments || form is Form.Path && form.isSimple) {
+                        // If the form is text or a simple path, assume that it's well-behaved and use AWT's instead of
+                        // OpPath's stroke, since the former is faster by more than an order of magnitude.
+                        val stroke = BasicStroke(contour.thicknessPx.toFloat(), BasicStroke.CAP_BUTT, contour.join)
+                        Form.Path(form.anchor, stroke.createStrokedShape(form.awtShape), isSimple = false)
+                    } else {
+                        // Otherwise, we could in principle first clean the form and then still use AWT's stroke, but
+                        // then the runtime advantage disappears, so we might as well do it all inside OpPath.
+                        Form.Path(form.anchor, form.opPath.stroke(contour.thicknessPx / 2.0, contour.join))
+                    }
+                }
             }
 
             // Transform the forms if requested.
@@ -267,19 +243,16 @@ class FormattedString private constructor(
 
             // Poke holes into the forms to clear around other layers if requested.
             layer.clearing?.let { clearing ->
-                val clearArea = Area()
-                if (clearing.radiusPx == 0.0)
-                    for (clearForm in clearing.layers.flatMapToSequence(::formLayer))
-                        clearArea.add(Area(clearForm.awtShape))
-                else {
-                    val dilStroke =
-                        BasicStroke((clearing.radiusPx * 2.0).toFloat(), capForJoin(clearing.join), clearing.join)
-                    for (clearForm in clearing.layers.flatMapToSequence(::formLayer))
-                        clearArea.add(Area(dilate(clearForm.awtShape, dilStroke)))
-                }
-                forms = forms.map { form ->
-                    Form.AWTShape(form.anchor, Area(form.awtShape).apply { subtract(clearArea) })
-                }
+                clearing.layers
+                    .flatMapToSequence(::formLayer)
+                    .map { clearForm ->
+                        if (clearing.radiusPx == 0.0) clearForm.opPath else
+                            clearForm.opPath.dilate(clearing.radiusPx, clearing.join)
+                    }
+                    .reduceOrNull(OpPath::union)
+                    ?.let { clearOpPath ->
+                        forms = forms.map { form -> Form.Path(form.anchor, form.opPath.difference(clearOpPath)) }
+                    }
             }
 
             val formList = forms.toList()
@@ -293,32 +266,33 @@ class FormattedString private constructor(
             val invisible = when (val c = layer.coloring) {
                 is Layer.Coloring.Plain -> c.color.a == 0f
                 is Layer.Coloring.Flashing -> c.colors.all { it.a == 0f }
-                is Layer.Coloring.Gradient -> c.color1.a == 0f && c.color2.a == 0f
+                is Layer.Coloring.Gradient -> c.stops.all { it.color.a == 0f }
             }
             if (invisible)
                 continue
+            val opaque = when (val c = layer.coloring) {
+                is Layer.Coloring.Plain -> c.color.a == 1f
+                is Layer.Coloring.Flashing -> c.colors.all { it.a == 1f }
+                is Layer.Coloring.Gradient -> c.stops.all { it.color.a == 1f }
+            }
             val forms = formLayer(layerIdx)
             val coat = makeCoat(layer.coloring, center)
-            if (layer.blurRadiusPx == 0.0)
+            if (layer.blurRadiusPx == 0.0 && (forms.size <= 1 || opaque))
                 for (form in forms)
                     form.drawTo(image, x, yBaseline, coat, imageLayer)
             else if (forms.isNotEmpty()) {
-                // Merge all forms into one shape and then blur all of them in one go. This makes a difference at points
+                // If the layer is transparent or blurred, union all forms. For transparent layers, this has an effect
+                // when multiple forms overlap. For blurred layers, it additionally makes a difference at points
                 // where two forms come very close to each other, and in those cases, we pursue the behavior of other
                 // editing programs.
-                val mergedShape = if (forms.size == 1) forms[0].awtShape else {
-                    val path = Path2D.Double(forms[0].awtShape)
-                    for (i in 1..<forms.size)
-                        path.append(forms[i].awtShape, false)
-                    path
-                }
+                // Notice that we have to union the forms and can't just append them to a single path, since if they
+                // overlap, that might lead to new, unwanted holes depending on the winding rule.
+                val mergedShape = if (forms.size == 1) forms[0].awtShape else
+                    forms.asSequence().map(Form::opPath).reduce(OpPath::union).toPath()
                 image.drawShape(coat, mergedShape, x, yBaseline, fill = true, layer.blurRadiusPx, imageLayer)
             }
         }
     }
-
-    private fun capForJoin(join: Int): Int =
-        if (join == BasicStroke.JOIN_ROUND) BasicStroke.CAP_ROUND else BasicStroke.CAP_SQUARE
 
     private fun makeStripeForm(shape: Layer.Shape.Stripe, xLeft: Double, xRight: Double): Form {
         val x0 = xLeft - shape.widenLeftPx
@@ -334,11 +308,12 @@ class FormattedString private constructor(
         val dashed = if (shape.dashPatternPx == null || shape.dashPatternPx.isEmpty()) null else
             BasicStroke(
                 shape.heightPx.toFloat(), BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f,
-                shape.dashPatternPx.toFloatArray(), 0f
+                // Restrict the minimum size of a dash to prevent the path operations below from crashing.
+                shape.dashPatternPx.mapToFloatArray { it.toFloat().coerceAtLeast(0.5f) }, 0f
             ).createStrokedShape(Line2D.Double(x, shape.offsetPx, x + w, shape.offsetPx))
 
         if (dashed != null && (shape.cornerJoin == BasicStroke.JOIN_MITER || r == 0.0))
-            return Form.AWTShape(anchor, dashed)
+            return Form.Path(anchor, dashed, isSimple = true)
 
         val rect = when (shape.cornerJoin) {
             BasicStroke.JOIN_MITER -> Rectangle2D.Double(x, y, w, h)
@@ -357,8 +332,8 @@ class FormattedString private constructor(
             else -> throw IllegalStateException()
         }
 
-        val awtShape = if (dashed == null) rect else Area(rect).apply { intersect(Area(dashed)) }
-        return Form.AWTShape(anchor, awtShape)
+        return if (dashed == null) Form.Path(anchor, rect, isSimple = true) else
+            Form.Path(anchor, OpPath(dashed).intersect(OpPath(rect)))
     }
 
     private fun anchor(
@@ -369,107 +344,56 @@ class FormattedString private constructor(
         translate(-anchor.x + preTx, -anchor.y + preTy)
     }
 
-    /**
-     * Dilates a shape, that is, extends its edges outwards. The amount of dilation in pixels is half
-     * the thickness of the given [dilStroke].
-     */
-    private fun dilate(shape: Shape, dilStroke: Stroke): Shape {
-        // To dilate a shape, we apply the following procedure:
-        //  1. Convert the shape to an area. This "normalizes" the path by removing any overlaps of path segments.
-        //     Also, the outermost sub-paths of an Area are oriented counter-clockwise, and any inner sub-paths
-        //     which cut out holes or fill in parts of holes are oriented in the inverse direction of their
-        //     surrounding sub-path. All this means that the left side of any sub-path always points to a filled
-        //     area, while the right side always points to non-filled area.
-        val area = Area(shape)
-        //  2. Compute a shape whose interior realizes a stroke along the edges of the area shape. Because of the
-        //     way Java2D's algorithmic stroking works, that stroke shape will have two sub-paths for each sub-path
-        //     of the area shape. Looking at such a pair of sub-paths, the first one traces along the left side of
-        //     the original sub-path in the original direction while the second one traces along the right side in
-        //     the reverse direction.
-        val stroke = dilStroke.createStrokedShape(area)
-        //  3. Extract the second, fourth, sixth, and so on sub-path from the stroke shape and collect them in the
-        //     final output shape. As we have noted, these sub-paths trace along the right side of the sub-paths of
-        //     the area shape, and to the right side of those lies the exterior. Hence, the collected sub-paths form
-        //     a dilated version of the area shape.
-        //     You may wonder why we don't just use the dilated stroke directly and combine it with the original shape
-        //     by just adding it to the area object. First, measurements have shown this to be at least 2x slower than
-        //     our current approach, even when trying to minimize the area operations by also considering the sole
-        //     caller of this method. Second, with shapes like the symbol ^ and the miter join rule, when looking
-        //     at the peak, the stroke behaves correctly for the upper part, but extends out even above the upper part
-        //     for the lower part because the angle there is quite acute, thereby producing an incorrect result with
-        //     an artificial peak extending out above the dilated shape.
-        //     Note: Stroke shapes are double paths, and hence, we also use doubles to avoid conversions to floats.
-        val pi = stroke.getPathIterator(null)
-        val coords = DoubleArray(6)
-        val out = Path2D.Double(pi.windingRule)
-        var flag = true
-        while (!pi.isDone) {
-            val type = pi.currentSegment(coords)
-            if (type == PathIterator.SEG_MOVETO)
-                flag = !flag
-            if (flag)
-                when (type) {
-                    PathIterator.SEG_MOVETO ->
-                        out.moveTo(coords[0], coords[1])
-                    PathIterator.SEG_LINETO ->
-                        out.lineTo(coords[0], coords[1])
-                    PathIterator.SEG_QUADTO ->
-                        out.quadTo(coords[0], coords[1], coords[2], coords[3])
-                    PathIterator.SEG_CUBICTO ->
-                        out.curveTo(coords[0], coords[1], coords[2], coords[3], coords[4], coords[5])
-                    PathIterator.SEG_CLOSE ->
-                        out.closePath()
-                }
-            pi.next()
-        }
-        return out
-    }
-
     private fun makeCoat(coloring: Layer.Coloring, center: Point2D.Double): DeferredImage.Coat =
         when (coloring) {
             is Layer.Coloring.Plain -> DeferredImage.Coat.Plain(coloring.color)
             is Layer.Coloring.Flashing -> DeferredImage.Coat.Flashing(coloring.colors, coloring.intervalFrames)
             is Layer.Coloring.Gradient -> {
                 val angleRad = Math.toRadians(coloring.angleDeg)
-                val dx = sin(angleRad)
-                val dy = cos(angleRad)
+                val dx = cos(angleRad)
+                val dy = sin(angleRad)
                 val ext = coloring.extentPx.coerceAtLeast(0.01)  // Otherwise, the gradient disappears.
                 val offset1 = coloring.shiftPx - ext / 2.0
                 val offset2 = coloring.shiftPx + ext / 2.0
                 DeferredImage.Coat.Gradient(
-                    coloring.color1, coloring.color2,
                     point1 = Point2D.Double(center.x + offset1 * dx, center.y + offset1 * dy),
-                    point2 = Point2D.Double(center.x + offset2 * dx, center.y + offset2 * dy)
+                    point2 = Point2D.Double(center.x + offset2 * dx, center.y + offset2 * dy),
+                    coloring.stops, coloring.interpolation
                 )
             }
         }
-
-    private class GlyphSegment(
-        private val gv: GlyphVector,
-        val baseX: Double,
-        val width: Double,
-        val font: Font
-    ) {
-        val outline: Shape = gv.getOutline(font.hOffsetPx.toFloat(), font.vOffsetPx.toFloat())
-        val baseXOutline: Shape by lazy { gv.getOutline((font.hOffsetPx + baseX).toFloat(), font.vOffsetPx.toFloat()) }
-        val glyphCodes: IntArray get() = gv.getGlyphCodes(0, gv.numGlyphs, null)
-        fun getGlyphOffsetX(glyphIdx: Int) = glyphPos[2 * glyphIdx].toDouble()
-        private val glyphPos by lazy { gv.getGlyphPositions(0, gv.numGlyphs + 1, null) }
-        val glyphBounds: Rectangle2D get() = gv.visualBounds
-    }
 
     private sealed interface Form {
 
         val anchor: Point2D
         val awtShape: Shape
+        val opPath: OpPath
         fun transform(tx: AffineTransform): Form
         fun drawTo(img: DeferredImage, x: Double, yBaseline: Y, coat: DeferredImage.Coat, layer: DeferredImage.Layer)
 
-        class AWTShape(override val anchor: Point2D, override val awtShape: Shape) : Form {
+        class Path private constructor(
+            override val anchor: Point2D,
+            val isSimple: Boolean,
+            private val source: Any,
+            private val transform: AffineTransform?
+        ) : Form {
 
-            override fun transform(tx: AffineTransform) = AWTShape(
+            constructor(anchor: Point2D, awtShape: Shape, isSimple: Boolean) : this(anchor, isSimple, awtShape, null)
+            constructor(anchor: Point2D, opPath: OpPath) : this(anchor, false, opPath, null)
+
+            override val awtShape: Shape by lazy {
+                source as? Shape ?: (source as? OpPath)?.toPath() ?: (source as Path).awtShape.transformedBy(transform)
+            }
+
+            override val opPath: OpPath by lazy {
+                source as? OpPath ?: (source as? Shape)?.let(::OpPath) ?: (source as Path).opPath.transform(transform)
+            }
+
+            override fun transform(tx: AffineTransform) = Path(
                 anchor = tx.transform(anchor, null),
-                awtShape = awtShape.transformedBy(tx)
+                isSimple = isSimple,
+                source = source as? Path ?: this,
+                transform = if (transform == null) tx else AffineTransform(tx).apply { concatenate(transform) }
             )
 
             override fun drawTo(
@@ -482,38 +406,38 @@ class FormattedString private constructor(
 
         class GlyphSegments(
             override val anchor: Point2D,
-            val gss: List<GlyphSegment>,
-            val transform: AffineTransform?
+            private val segments: List<GlyphString.Segment<Attribute>>,
+            private val transform: AffineTransform?
         ) : Form {
 
-            // Note: Glyph outlines turn out to be float paths, and hence, the conversions here are really efficient.
-
-            override val awtShape: Shape
-                get() {
-                    if (gss.isEmpty())
-                        return Path2D.Float()
-                    val awtShape = Path2D.Float(gss[0].baseXOutline, transform)
-                    for (i in 1..<gss.size)
-                        awtShape.append(gss[i].baseXOutline.getPathIterator(transform), false)
-                    return awtShape
+            override val awtShape by lazy {
+                val path = Path2D.Float()
+                for (seg in segments) {
+                    val font = seg.userData.font
+                    seg.appendOutlineTo(path, seg.baseX + font.hOffsetPx, font.vOffsetPx)
                 }
+                transform?.let(path::transform)
+                path
+            }
+
+            override val opPath by lazy { OpPath(awtShape) }
 
             override fun transform(tx: AffineTransform) = GlyphSegments(
                 anchor = tx.transform(anchor, null),
-                gss = gss,
+                segments = segments,
                 transform = if (transform == null) tx else AffineTransform(tx).apply { concatenate(transform) }
             )
 
             override fun drawTo(
                 img: DeferredImage, x: Double, yBaseline: Y, coat: DeferredImage.Coat, layer: DeferredImage.Layer
             ) {
-                for (gs in gss) {
+                for (seg in segments) {
                     val postTx = if (transform == null) null else AffineTransform().apply {
-                        translate(-gs.baseX, 0.0)
+                        translate(-seg.baseX, 0.0)
                         concatenate(transform)
-                        translate(gs.baseX, 0.0)
+                        translate(seg.baseX, 0.0)
                     }
-                    img.drawText(coat, TextImpl(gs, postTx), x + gs.baseX, yBaseline, layer)
+                    img.drawText(coat, TextImpl(seg, postTx), x + seg.baseX, yBaseline, layer)
                 }
             }
 
@@ -522,146 +446,58 @@ class FormattedString private constructor(
     }
 
     private class TextImpl(
-        private val gs: GlyphSegment,
+        private val seg: GlyphString.Segment<Attribute>,
         private val postTx: AffineTransform?
     ) : DeferredImage.Text {
 
-        override val transform = AffineTransform().apply {
-            postTx?.let(::concatenate)
-            scale(gs.font.hScaling, 1.0)
-            translate(gs.font.hOffsetPx, gs.font.vOffsetPx)
-        }
-
-        override val heightAboveBaseline: Double
-        override val heightBelowBaseline: Double
+        override val bounds: Rectangle2D
 
         init {
-            val b = gs.glyphBounds
-            val points = doubleArrayOf(b.minX, b.minY, b.maxX, b.minY, b.minX, b.maxY, b.maxX, b.maxY)
-            transform.transform(points, 0, points, 0, 4)
-            var yMax = Double.NEGATIVE_INFINITY
-            var yMin = Double.POSITIVE_INFINITY
-            for (i in 0..<4) {
-                val y = points[i * 2 + 1]
-                yMax = max(yMax, y)
-                yMin = min(yMin, y)
-            }
-            heightAboveBaseline = -yMin
-            heightBelowBaseline = yMax
-        }
-
-        override val width get() = gs.width
-        override val fontSize get() = gs.font.awtFont.size2D.toDouble()
-        override val transformedOutline by lazy {
-            // Note: Glyph outlines turn out to be float paths, and hence, the transformation by tx is really efficient.
-            if (postTx == null) gs.outline else Path2D.Float(gs.outline, postTx)
-        }
-        override val glyphCodes get() = gs.glyphCodes
-        // Since we apply hScaling in the layout engine, we have to divide it out again here.
-        override fun getGlyphOffsetX(glyphIdx: Int) = gs.getGlyphOffsetX(glyphIdx) / gs.font.hScaling
-
-        override val fundamentalFontInfo = FFontInfoImpl(gs.font.baseAWTFont)
-
-        private class FFontInfoImpl(private val baseAWTFont: java.awt.Font) : DeferredImage.Text.FundamentalFontInfo {
-            override val fontName: String get() = baseAWTFont.psName
-            override val fontFile get() = baseAWTFont.getFontFile()
-            override val indexInCollection get() = baseAWTFont.getIndexInCollection()
-            override fun getGlyphOutline(glyphCode: Int, fontSize: Double): Shape =
-                baseAWTFont.deriveFont(mapOf(TextAttribute.SIZE to fontSize))
-                    .createGlyphVector(REF_FRC, intArrayOf(glyphCode)).getGlyphOutline(0)
-        }
-
-    }
-
-
-    /* ****************************************************
-       ********** INFORMATION EXTRACTION - OTHER **********
-       **************************************************** */
-
-    fun breakLines(wrappingWidth: Double): List<Int> {
-        // Employ a LineBreakMeasurer to find the best spots to insert a newline.
-        val breaks = mutableListOf(0)
-        CustomGlyphLayoutEngine.begin(makeCustomGlyphLayoutEngineConfigSource())
-        val tlAttrCharIter = textLayoutAttrStr.iterator
-        val lineMeasurer = LineBreakMeasurer(tlAttrCharIter, BreakIterator.getLineInstance(locale), REF_FRC)
-        while (lineMeasurer.position != tlAttrCharIter.endIndex) {
-            val lineEndPos = lineMeasurer.nextOffset(wrappingWidth.toFloat())
-            lineMeasurer.position = lineEndPos
-            breaks.add(lineEndPos)
-        }
-        CustomGlyphLayoutEngine.end()
-        return breaks
-    }
-
-    /**
-     * An [AttributedString] that can be used to actually create a [TextLayout]. It employs AWT font attributes
-     * and provokes splits in the TextLayout's TextLineComponents at strategic positions (see comments for details).
-     */
-    private val textLayoutAttrStr: AttributedString by lazy {
-        val tlAttrStr = AttributedString(string)
-        var counter = 0
-        attrs.forEachRun { attr, runStartIdx, runEndIdx ->
-            // Add AWT font attribute.
-            tlAttrStr.addAttribute(TextAttribute.FONT, attr.font.awtFont, runStartIdx, runEndIdx)
-            // Whenever something about the font changes (also non-AWT properties like our "vOffset") or the
-            // design changes, provoke a split in the TextLayout's TextLineComponents by changing
-            // the foreground color to a new one. This way, we later have an individual GlyphVector for each such
-            // segment and can hence render each segment individually. We absolutely have to provoke the split during
-            // the layouting phase and cannot just manually find the split points later because ligatures must not be
-            // substituted when there is a split point between the ligatured characters, i.e., between two "f"-s.
-            // That last point is also important for changes of the design, since we can't
-            // find the exact split point of ligatured characters.
-            tlAttrStr.addAttribute(TextAttribute.FOREGROUND, Color(counter++), runStartIdx, runEndIdx)
-        }
-        tlAttrStr
-    }
-
-    private fun makeCustomGlyphLayoutEngineConfigSource(): CustomGlyphLayoutEngine.ExtConfigSource {
-        // If the string doesn't uniformly flow from left to right, prepare a mapping from visual to logical chars.
-        var logToVis: IntArray? = null
-        var visToLog: IntArray? = null
-        val chars = string.toCharArray()
-        if (Bidi.requiresBidi(chars, 0, chars.size)) {
-            val bidi = Bidi(chars, 0, null, 0, chars.size, Bidi.DIRECTION_DEFAULT_LEFT_TO_RIGHT)
-            if (!bidi.isLeftToRight) {
-                visToLog = bidi.visualToLogicalMap()
-                logToVis = visToLog.inverseMap()
+            val font = seg.userData.font
+            val b = seg.getOutlineBounds(font.hOffsetPx, font.vOffsetPx)
+            if (postTx == null)
+                bounds = b
+            else {
+                val points = doubleArrayOf(b.minX, b.minY, b.maxX, b.minY, b.minX, b.maxY, b.maxX, b.maxY)
+                postTx.transform(points, 0, points, 0, 4)
+                var minX = Double.POSITIVE_INFINITY
+                var minY = Double.POSITIVE_INFINITY
+                var maxX = Double.NEGATIVE_INFINITY
+                var maxY = Double.NEGATIVE_INFINITY
+                for (i in 0..<4) {
+                    var x = points[i * 2]
+                    val y = points[i * 2 + 1]
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                }
+                bounds = Rectangle2D.Double(minX, minY, maxX - minX, maxY - minY)
             }
         }
 
-        return CustomGlyphLayoutEngine.ExtConfigSource { startCharIdx: Int, endCharIdx: Int ->
-            val font = attrs.getAttr(startCharIdx).font
-            // Get the fonts of the segment to the left and right of the current segment.
-            val leftFont: Font?
-            val rightFont: Font?
-            if (visToLog == null || logToVis == null) {
-                leftFont = if (startCharIdx == 0) null else attrs.getAttr(startCharIdx - 1).font
-                rightFont = if (endCharIdx == string.length) null else attrs.getAttr(endCharIdx).font
-            } else {
-                var leftVisIdx = logToVis[startCharIdx]
-                var rightVisIdx = logToVis[endCharIdx - 1]
-                if (leftVisIdx > rightVisIdx)
-                    leftVisIdx = rightVisIdx.also { rightVisIdx = leftVisIdx }
-                leftFont = if (leftVisIdx == 0) null else attrs.getAttr(visToLog[leftVisIdx - 1]).font
-                rightFont = if (rightVisIdx == string.lastIndex) null else attrs.getAttr(visToLog[rightVisIdx + 1]).font
-            }
-            // Find the inter-segment tracking to the left and the right. Each one is defined as the maximal tracking
-            // of the current or the respective neighboring segment. Then add half of those inter-segment trackings
-            // to this segment; the neighboring segments will also receive the same half trackings, so in the end,
-            // they sum up to the whole inter-segment trackings.
-            val bearingLeftPx = if (leftFont == null) 0.0 else max(font.trackingPx, leftFont.trackingPx) / 2.0
-            val bearingRightPx = if (rightFont == null) 0.0 else max(font.trackingPx, rightFont.trackingPx) / 2.0
-            // Assemble the extended configuration data object.
-            CustomGlyphLayoutEngine.ExtConfig(
-                locale, font.hScaling.toFloat(), font.trackingPx.toFloat(), bearingLeftPx.toFloat(),
-                bearingRightPx.toFloat(), font.features
-            )
+        override val outline by lazy {
+            val font = seg.userData.font
+            val path = seg.appendOutlineTo(Path2D.Float(), font.hOffsetPx, font.vOffsetPx)
+            postTx?.let(path::transform)
+            path
         }
-    }
 
+        override val glyphCount: Int get() = seg.glyphCount
+        override fun getGlyph(glyphIdx: Int) = seg.getGlyph(glyphIdx)
+        override val string get() = seg.string
+        override val fontCase get() = seg.fontCase
 
-    companion object {
-        private fun DoubleArray.toFloatArray() = FloatArray(size) { idx -> this[idx].toFloat() }
+        override fun getManualGlyphPositionX(glyphIdx: Int) = seg.getGlyphPositionXPreHScaling(glyphIdx)
+        override fun getManualGlyphPositionY(glyphIdx: Int) = seg.getGlyphPositionY(glyphIdx)
+
+        override val manualTransform = AffineTransform().apply {
+            postTx?.let(::concatenate)
+            val font = seg.userData.font
+            scale(font.hScaling, 1.0)
+            translate(font.hOffsetPx, font.vOffsetPx)
+        }
+
     }
 
 
@@ -672,7 +508,7 @@ class FormattedString private constructor(
 
 
     class Font(
-        val baseAWTFont: java.awt.Font,
+        baseFontCase: Font.Case,
         val fontHeightPx: Double,
         leadingTopPx: Double = 0.0,
         leadingBottomPx: Double = 0.0,
@@ -683,13 +519,13 @@ class FormattedString private constructor(
         vOffset: Double = 0.0,
         vOffsetUnit: Unit = Unit.PIXEL,
         trackingEm: Double = 0.0,
-        kerning: Boolean = false,
-        ligatures: Boolean = false,
-        val features: List<Feature> = emptyList()
+        val kerning: Boolean = false,
+        val ligatures: Boolean = false,
+        val features: List<Font.Feature> = emptyList()
     ) {
 
-        val awtFont: java.awt.Font
-        val unscaledAWTFont: java.awt.Font
+        val fontCase: Font.Case
+        val unscaledFontCase: Font.Case
         val fontHeightAboveBaselinePx: Double
         val fontHeightBelowBaselinePx: Double
         val totalHeightAboveBaselinePx: Double
@@ -699,63 +535,26 @@ class FormattedString private constructor(
         val trackingPx: Double
 
         init {
-            for ((key, value) in baseAWTFont.attributes)
-                require(value == null || key in ALLOWED_FONT_ATTRS) { "Disallowed font attribute: $key" }
-
-            val unscaledPointSize = findSize(baseAWTFont, fontHeightPx)
+            val unscaledPointSize = findSize(baseFontCase, fontHeightPx)
             val pointSize = unscaledPointSize * scaling
 
             hOffsetPx = if (hOffsetUnit == Unit.UNSCALED_EM) hOffset * unscaledPointSize else hOffset
             vOffsetPx = if (vOffsetUnit == Unit.UNSCALED_EM) vOffset * unscaledPointSize else vOffset
 
-            val fontAttrs = HashMap<TextAttribute, Any>()
-            fontAttrs[TextAttribute.SIZE] = pointSize
-            if (hScaling != 1.0)
-                fontAttrs[TextAttribute.WIDTH] = hScaling
-            if (kerning)
-                fontAttrs[TextAttribute.KERNING] = TextAttribute.KERNING_ON
-            if (ligatures)
-                fontAttrs[TextAttribute.LIGATURES] = TextAttribute.LIGATURES_ON
-            awtFont = baseAWTFont.deriveFont(fontAttrs)
+            fontCase = baseFontCase.withSize(pointSize)
+            unscaledFontCase = fontCase.withSize(unscaledPointSize)
 
-            unscaledAWTFont = awtFont.deriveFont(mapOf(TextAttribute.SIZE to unscaledPointSize))
-
-            fontHeightAboveBaselinePx = unscaledAWTFont.lineMetrics.run { ascent + leading / 2.0 }
-            fontHeightBelowBaselinePx = unscaledAWTFont.lineMetrics.run { descent + leading / 2.0 }
+            fontHeightAboveBaselinePx = unscaledFontCase.run { ascent + lineGap / 2.0 }
+            fontHeightBelowBaselinePx = unscaledFontCase.run { descent + lineGap / 2.0 }
             totalHeightAboveBaselinePx = fontHeightAboveBaselinePx + leadingTopPx
             totalHeightBelowBaselinePx = fontHeightBelowBaselinePx + leadingBottomPx
-            trackingPx = trackingEm * pointSize * hScaling
+            trackingPx = trackingEm * pointSize
         }
-
-        /*
-         * The above init code sets [TextAttribute.WIDTH] on the AWT [Font] object to realize hScaling. This is odd
-         * because we usually realize all text transformations ourselves at the end.
-         *
-         * We now illustrate why we need this special behavior. First note that [TextLayout] must know the final
-         * positions and advances of each glyph to gain access to the final text width. Hence, we apply hScaling to
-         * these glyph positions already in our [CustomGlyphLayoutEngine]. As such, the second stage, i.e., scaling the
-         * glyph shapes, must be glyph-wise, meaning that we cannot just apply a transform that realizes hScaling to
-         * whole rendered segments outline after the fact.
-         *
-         * It turns out that we cannot just utilize the [TextAttribute.TRANSFORM] text attribute for this, as doing that
-         * messes with the metrics exploited by [TextLayout], thereby changing the layout procedure in undesired ways.
-         * On the other hand, it also proves difficult to manually apply a glyph-wise transform to glyph outlines
-         * generated by the JDK after the fact without sacrificing performance or deeply invading private JDK APIs.
-         *
-         * To solve this problem, we apply hScaling, which if you recall is the only transformation that is necessarily
-         * glyph-wise, directly to the [Font] via [TextAttribute.WIDTH]. Doing only this thankfully does not mess with
-         * the metrics. It however imposes loose limits on the admissible hScaling values, which we encode in the
-         * styling constraints. The remaining transformations are applied later on to whole segment outlines.
-         */
 
 
         enum class Unit { PIXEL, UNSCALED_EM }
 
-        class Feature(val tag: String, val value: Int)
-
         companion object {
-
-            private val ALLOWED_FONT_ATTRS = listOf(TextAttribute.FAMILY, TextAttribute.SIZE)
 
             /**
              * This method finds the font size that produces the requested target font height in pixels.
@@ -765,30 +564,30 @@ class FormattedString private constructor(
              * However, tests have shown that the above method is not reliable with all fonts (e.g., not with
              * Open Sans). Therefore, this method uses a numerical search to find the font size.
              */
-            private fun findSize(awtFont: java.awt.Font, targetHeightPx: Double): Float {
+            private fun findSize(fontCase: Font.Case, targetHeightPx: Double): Double {
                 // Step 1: Exponential search to determine the rough range of the font size we're looking for.
-                var size = 2f
+                var size = 2.0
                 // Upper-bound the number of repetitions to avoid:
                 //   - Accidental infinite looping.
                 //   - Too large fonts, as they cause the Java font rendering engine to destroy its own fonts.
                 for (i in 0..<10) {
-                    val height = awtFont.deriveFont(size * 2f).lineMetrics.height
+                    val height = fontCase.withSize(size * 2.0).height
                     if (height >= targetHeightPx)
                         break
-                    size *= 2f
+                    size *= 2.0
                 }
 
                 // Step 2: Binary search to find the exact font size.
                 // If $size is still 2, we look for a size between 0 and 4.
                 // Otherwise, we look for a size between $size and $size*2.
-                val minSize = if (size == 2f) 0f else size
-                val maxSize = size * 2f
-                var intervalLength = (maxSize - minSize) / 2f
+                val minSize = if (size == 2.0) 0.0 else size
+                val maxSize = size * 2.0
+                var intervalLength = (maxSize - minSize) / 2.0
                 size = minSize + intervalLength
                 // Upper-bound the number of repetitions to avoid accidental infinite looping.
                 for (i in 0..<20) {
-                    intervalLength /= 2f
-                    val height = awtFont.deriveFont(size).lineMetrics.height
+                    intervalLength /= 2.0
+                    val height = fontCase.withSize(size).height
                     when {
                         abs(height - targetHeightPx) < 0.001 -> break
                         height > targetHeightPx -> size -= intervalLength
@@ -839,11 +638,11 @@ class FormattedString private constructor(
             ) : Coloring
 
             class Gradient(
-                val color1: Color4f,
-                val color2: Color4f,
                 val angleDeg: Double,
                 val extentPx: Double,
-                val shiftPx: Double = 0.0
+                val shiftPx: Double = 0.0,
+                val stops: List<DeferredImage.Coat.Gradient.Stop>,
+                val interpolation: Canvas.GradientInterpolation = Canvas.GradientInterpolation.OKLAB,
             ) : Coloring
 
         }
@@ -922,30 +721,28 @@ class FormattedString private constructor(
     private class Attributes(
         private val numRuns: Int,
         private val runAttrs: Array<Attribute?>,
-        private val runEnds: IntArray,
-        private val charLimStart: Int,
-        private val charLimLen: Int
+        private val runEndCharInd: IntArray,
+        private val charsLim0: Int,
+        private val charsLim1: Int
     ) {
 
         private fun getIdxOfRunContaining(charIdx: Int): Int {
-            val runIdx = runEnds.binarySearch(charIdx + charLimStart, toIndex = numRuns)
+            val runIdx = runEndCharInd.binarySearch(charIdx, toIndex = numRuns)
             return if (runIdx >= 0) runIdx + 1 else -runIdx - 1
         }
 
-        private val runLimStart = getIdxOfRunContaining(0)
-        private val runLimEnd = getIdxOfRunContaining(charLimLen - 1) + 1
+        private val runsLim0 = getIdxOfRunContaining(charsLim0)
+        private val runsLim1 = getIdxOfRunContaining(charsLim1 - 1) + 1
 
-        fun sub(startIdx: Int, endIdx: Int) =
-            Attributes(numRuns, runAttrs, runEnds, startIdx + charLimStart, endIdx - startIdx)
-
-        fun getAttr(charIdx: Int) = runAttrs[getIdxOfRunContaining(charIdx)]!!
+        fun sub(startCharIdx: Int, endCharIdx: Int) =
+            Attributes(numRuns, runAttrs, runEndCharInd, charsLim0 + startCharIdx, charsLim0 + endCharIdx)
 
         inline fun forEachRun(
             action: (attr: Attribute, runStartCharIdx: Int, runEndCharIdx: Int) -> Unit
         ) {
-            for (runIdx in runLimStart..<runLimEnd) {
-                val runStartCharIdx = if (runIdx == 0) 0 else (runEnds[runIdx - 1] - charLimStart).coerceAtLeast(0)
-                val runEndCharIdx = (runEnds[runIdx] - charLimStart).coerceAtMost(charLimLen)
+            for (runIdx in runsLim0..<runsLim1) {
+                val runStartCharIdx = if (runIdx == 0) 0 else (runEndCharInd[runIdx - 1] - charsLim0).coerceAtLeast(0)
+                val runEndCharIdx = (runEndCharInd[runIdx] - charsLim0).coerceAtMost(charsLim1 - charsLim0)
                 action(runAttrs[runIdx]!!, runStartCharIdx, runEndCharIdx)
             }
         }

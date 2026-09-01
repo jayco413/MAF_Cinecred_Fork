@@ -4,8 +4,6 @@ package com.loadingbyte.cinecred
 
 import com.loadingbyte.cinecred.common.LOGGER
 import com.loadingbyte.cinecred.common.Severity.ERROR
-import com.loadingbyte.cinecred.common.getBundledFont
-import com.loadingbyte.cinecred.common.getSystemFont
 import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.common.walkSafely
 import com.loadingbyte.cinecred.delivery.RenderFormat
@@ -22,14 +20,17 @@ import com.loadingbyte.cinecred.delivery.RenderFormat.Property.Companion.TRANSPA
 import com.loadingbyte.cinecred.delivery.RenderFormat.Property.Companion.YUV
 import com.loadingbyte.cinecred.delivery.RenderFormat.Sliders
 import com.loadingbyte.cinecred.drawer.DrawnCredits
+import com.loadingbyte.cinecred.drawer.DrawnCreditsBook
 import com.loadingbyte.cinecred.drawer.DrawnProject
 import com.loadingbyte.cinecred.drawer.drawPages
 import com.loadingbyte.cinecred.drawer.drawVideo
 import com.loadingbyte.cinecred.imaging.Bitmap
+import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.ContentStyle
 import com.loadingbyte.cinecred.project.Credits
+import com.loadingbyte.cinecred.project.CreditsBook
 import com.loadingbyte.cinecred.project.FontRef
 import com.loadingbyte.cinecred.project.LetterStyle
 import com.loadingbyte.cinecred.project.ListedStyle
@@ -37,7 +38,7 @@ import com.loadingbyte.cinecred.project.PageStyle
 import com.loadingbyte.cinecred.project.PictureRef
 import com.loadingbyte.cinecred.project.PictureStyle
 import com.loadingbyte.cinecred.project.PopupStyle
-import com.loadingbyte.cinecred.project.PRESET_PAGE_STYLE
+import com.loadingbyte.cinecred.project.presetPageStyle
 import com.loadingbyte.cinecred.project.Project
 import com.loadingbyte.cinecred.project.Style
 import com.loadingbyte.cinecred.project.Styling
@@ -58,9 +59,10 @@ import com.loadingbyte.cinecred.projectio.readCredits
 import com.loadingbyte.cinecred.projectio.readStyling
 import com.loadingbyte.cinecred.projectio.service.SERVICE_LINK_EXTS
 import kotlinx.collections.immutable.PersistentList
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
-import java.awt.Font
 import java.nio.file.Files
+import java.net.URI
 import java.nio.file.Path
 import java.security.MessageDigest
 import java.util.HexFormat
@@ -87,6 +89,9 @@ private data class CliRenderOptions(
 )
 
 private data class LoadedProject(
+    val creditsFileName: String,
+    val creditsFileUri: URI,
+    val fonts: SortedMap<String, Font>,
     val styling: Styling,
     val spreadsheets: List<Spreadsheet>,
     val pictureLoaders: SortedMap<String, Picture.Loader>,
@@ -111,7 +116,7 @@ fun runCommandLineRender(args: Array<String>): Int {
         loadProjectForRender(options.projectDir).use { loaded ->
             val selectedSpreadsheet = selectSpreadsheet(loaded.spreadsheets, options.spreadsheetName)
             val drawnProject = drawProjectForRender(loaded, listOf(selectedSpreadsheet))
-            val drawnCredits = drawnProject.drawnCredits.single()
+            val drawnCredits = drawnProject.drawnCreditsBooks.single().drawnCredits.single()
             val pageIndices = selectPageIndices(drawnCredits, options.firstPage, options.lastPage)
             val format = selectVideoFormat(options.format)
             val config = buildVideoConfig(format, options.profile)
@@ -127,7 +132,7 @@ fun runCommandLineRender(args: Array<String>): Int {
             val renderJob = format.createRenderJob(
                 options.projectDir,
                 config,
-                Sliders(null),
+                Sliders(null, null),
                 drawnProject.project.styling,
                 null,
                 video,
@@ -252,7 +257,7 @@ private fun loadProjectForRender(projectDir: Path): LoadedProject {
     val picturesByPath = linkedMapOf<Path, Picture.Loader>()
     val tapesByPath = linkedMapOf<Path, Tape>()
     for (fileOrDir in projectDir.walkSafely()) {
-        readFonts(fileOrDir).forEach { font -> fonts.putIfAbsent(font.getFontName(Locale.ROOT), font) }
+        readFonts(fileOrDir).forEach { font -> fonts.putIfAbsent(font.name, font) }
         Picture.Loader.recognize(fileOrDir)?.let { loader -> picturesByPath.putIfAbsent(fileOrDir, loader) }
         Tape.recognize(fileOrDir)?.let { tape -> tapesByPath.putIfAbsent(fileOrDir, tape) }
     }
@@ -263,18 +268,19 @@ private fun loadProjectForRender(projectDir: Path): LoadedProject {
     for (tape in tapesByPath.values)
         tapes.putIfAbsent(tape.fileOrDir.name, tape)
 
-    val (creditsFile, locatingLog) = ProjectIntake.locateCreditsFile(projectDir)
-    require(creditsFile != null) { locatingLog.joinToString("\n") { it.msg } }
+    val creditsFile = projectDir.walkSafely()
+        .filter { it.isRegularFile() && ProjectIntake.hasCreditsFilename(it) }
+        .minByOrNull { it.nameCount }
+        ?: throw IllegalArgumentException("No credits file found in project dir: $projectDir")
     require(creditsFile.extension !in SERVICE_LINK_EXTS) { "CLI render does not support service-link credits files." }
     val format = SPREADSHEET_FORMATS.firstOrNull { it.fileExt.equals(creditsFile.extension, ignoreCase = true) }
         ?: throw IllegalArgumentException("Unsupported credits file type: ${creditsFile.extension}")
-    val (spreadsheets, log) = format.read(creditsFile, l10n("project.template.spreadsheetName"))
-    require((locatingLog + log).none { it.severity == ERROR }) {
-        (locatingLog + log).joinToString("\n") { it.msg }
-    }
+    val spreadsheets = format.read(creditsFile, l10n("project.template.spreadsheetName"))
 
     val styling = readStyling(projectDir.resolve(STYLING_FILE_NAME), fonts, pictureLoaders, tapes)
-    return LoadedProject(styling, spreadsheets, pictureLoaders, tapes)
+    return LoadedProject(
+        creditsFile.name, creditsFile.toUri(), fonts, styling, spreadsheets, pictureLoaders, tapes
+    )
 }
 
 private fun selectSpreadsheet(spreadsheets: List<Spreadsheet>, requestedName: String?): Spreadsheet {
@@ -299,7 +305,8 @@ private fun drawProjectForRender(loaded: LoadedProject, spreadsheets: List<Sprea
         FontRef::font,
         ::FontRef,
         ::FontRef
-    ) { name -> getBundledFont(name) ?: getSystemFont(name) }?.let { styling = styling.copy(letterStyles = it) }
+    ) { name -> loaded.fonts[name] ?: Font.bundled(name) ?: Font.system(name) }
+        ?.let { styling = styling.copy(letterStyles = it) }
     updateAuxiliaryReferences(
         styling.pictureStyles,
         PictureStyle::picture.st(),
@@ -327,7 +334,7 @@ private fun drawProjectForRender(loaded: LoadedProject, spreadsheets: List<Sprea
     val credits = mutableListOf<Credits>()
     val log = mutableListOf<ParserMsg>()
     for (spreadsheet in spreadsheets) {
-        val (curCredits, curLog) = readCredits(spreadsheet, styling, pictureLoaders, tapes)
+        val (curCredits, curLog, _) = readCredits(loaded.creditsFileName, spreadsheet, styling, pictureLoaders, tapes)
         credits += curCredits
         log += curLog
     }
@@ -345,15 +352,19 @@ private fun drawProjectForRender(loaded: LoadedProject, spreadsheets: List<Sprea
             is PageStyle, is ContentStyle, is LetterStyle, is TransitionStyle -> {}
         }
 
-    val project = Project(styling, credits.toPersistentList())
+    val creditsBook = CreditsBook(loaded.creditsFileName, loaded.creditsFileUri, credits.toPersistentList())
+    val project = Project(styling, persistentListOf(creditsBook))
     val drawnCredits = credits.map { curCredits ->
-        val drawnPages = drawPages(project, curCredits)
+        val (drawnPages, _) = drawPages(styling, curCredits)
         require(drawnPages.none { it.defImage.height.resolve() > 1_000_000.0 }) {
             "Excessive page size while drawing spreadsheet '${curCredits.spreadsheetName}'."
         }
-        DrawnCredits(curCredits, drawnPages.toPersistentList(), drawVideo(project, drawnPages))
+        DrawnCredits(curCredits, drawnPages.toPersistentList(), drawVideo(styling, drawnPages))
     }
-    return DrawnProject(project, drawnCredits.toPersistentList())
+    return DrawnProject(
+        project,
+        persistentListOf(DrawnCreditsBook(creditsBook, drawnCredits.toPersistentList()))
+    )
 }
 
 private fun selectPageIndices(drawnCredits: DrawnCredits, firstPage: Int?, lastPage: Int?): Set<Int> {
@@ -383,7 +394,7 @@ private fun buildVideoConfig(format: RenderFormat, profileName: String): Config 
         this[TRANSPARENCY] = RenderFormat.Transparency.GROUNDED
         this[SPATIAL_SCALING_LOG2] = 0
         this[FPS_SCALING] = 1
-        this[SCAN] = Bitmap.Scan.PROGRESSIVE
+        this[SCAN] = com.loadingbyte.cinecred.project.Scan.PROGRESSIVE
         this[DEPTH] = 8
         this[PRIMARIES] = com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.BT709
         this[TRANSFER] = com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.BT1886
@@ -399,7 +410,7 @@ private fun readFonts(file: Path): List<Font> {
     if (!file.isRegularFile() || ext !in setOf("ttf", "ttc", "otf", "otc"))
         return emptyList()
     return try {
-        Font.createFonts(file.toFile()).asList()
+        Font.read(file, mmap = false)
     } catch (_: Exception) {
         emptyList()
     }
@@ -471,7 +482,7 @@ private fun clearLegacyPageStyleSettings(
     fun <SUBJ : Any> clearSetting(
         style: PageStyle,
         setting: com.loadingbyte.cinecred.project.DirectStyleSetting<PageStyle, SUBJ>
-    ): PageStyle = style.copy(setting.notarize(setting.get(PRESET_PAGE_STYLE)))
+    ): PageStyle = style.copy(setting.notarize(setting.get(presetPageStyle())))
 
     val legacySettings = arrayOf(PageStyle::scrollMeltWithPrev.st(), PageStyle::scrollMeltWithNext.st())
     val usedLegacySettings = log.mapNotNullTo(HashSet(), ParserMsg::migrationDataSource)
@@ -480,7 +491,7 @@ private fun clearLegacyPageStyleSettings(
     for ((idx, style) in styles.withIndex()) {
         var clearedStyle = style
         for (setting in legacySettings)
-            if (setting.get(style) != setting.get(PRESET_PAGE_STYLE) &&
+            if (setting.get(style) != setting.get(presetPageStyle()) &&
                 MigrationDataSource(style, setting) !in usedLegacySettings
             ) {
                 clearedStyle = clearSetting(clearedStyle, setting)

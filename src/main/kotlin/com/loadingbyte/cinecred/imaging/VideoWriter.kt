@@ -2,8 +2,6 @@ package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.FPS
 import com.loadingbyte.cinecred.common.VERSION
-import com.loadingbyte.cinecred.imaging.Bitmap.Content.INTERLEAVED_FIELDS
-import com.loadingbyte.cinecred.imaging.Bitmap.Content.INTERLEAVED_FIELDS_REVERSED
 import com.loadingbyte.cinecred.imaging.Bitmap.Scan.*
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext
 import org.bytedeco.ffmpeg.avformat.AVFormatContext
@@ -38,6 +36,8 @@ class VideoWriter(
     muxerOptions: Map<String, String>
 ) : AutoCloseable {
 
+    private val closureProtector = ClosureProtector()
+
     private var oc: AVFormatContext? = null
     private var st: AVStream? = null
     private var enc: AVCodecContext? = null
@@ -47,6 +47,9 @@ class VideoWriter(
 
     init {
         require(spec.representation.alpha != Bitmap.Alpha.PREMULTIPLIED) { "FFmpeg does not support premul alpha." }
+        require(
+            spec.content.let { it == Bitmap.Content.PROGRESSIVE_FRAME || it == Bitmap.Content.INTERLEAVED_FIELDS }
+        ) { "FFmpeg does not support isolated fields." }
         setupSafely({
             setup(
                 fileOrPattern, fps,
@@ -131,10 +134,11 @@ class VideoWriter(
         enc.pix_fmt(spec.representation.pixelFormat.code)
 
         // Specify color space metadata.
-        spec.representation.colorSpace?.let { colorSpace ->
-            enc.color_primaries(colorSpace.primaries.code)
-            enc.color_trc(colorSpace.transfer.code(colorSpace.primaries, spec.representation.pixelFormat.depth))
-        }
+        val primaries = spec.representation.colorSpace.primaries
+        val transfer = spec.representation.colorSpace.transfer
+        val depth = spec.representation.pixelFormat.depth
+        enc.color_primaries(if (primaries?.hasCode == true) primaries.code else AVCOL_PRI_UNSPECIFIED)
+        enc.color_trc(if (transfer.hasCode) transfer.code(primaries, depth) else AVCOL_TRC_UNSPECIFIED)
         enc.color_range(spec.representation.range.code)
         enc.chroma_sample_location(spec.representation.chromaLocation)
 
@@ -146,13 +150,12 @@ class VideoWriter(
         enc.colorspace(cs)
 
         // Specify progressive or interlaced scan.
-        val fieldOrder = when {
-            spec.scan == PROGRESSIVE -> AV_FIELD_PROGRESSIVE
-            spec.scan == INTERLACED_TOP_FIELD_FIRST && spec.content == INTERLEAVED_FIELDS -> AV_FIELD_TT
-            spec.scan == INTERLACED_TOP_FIELD_FIRST && spec.content == INTERLEAVED_FIELDS_REVERSED -> AV_FIELD_BT
-            spec.scan == INTERLACED_BOT_FIELD_FIRST && spec.content == INTERLEAVED_FIELDS -> AV_FIELD_TB
-            spec.scan == INTERLACED_BOT_FIELD_FIRST && spec.content == INTERLEAVED_FIELDS_REVERSED -> AV_FIELD_BB
-            else -> throw IllegalArgumentException("Cannot write video with bitmap spec content ${spec.content}.")
+        val fieldOrder = when (spec.scan) {
+            PROGRESSIVE -> AV_FIELD_PROGRESSIVE
+            // The "coded first" phrasing in the documentation of these constants has nothing to do with how the fields
+            // are physically interleaved. We use TT and BB because they are the least ambiguous.
+            INTERLACED_TOP_FIELD_FIRST -> AV_FIELD_TT
+            INTERLACED_BOT_FIELD_FIRST -> AV_FIELD_BB
         }
         enc.field_order(fieldOrder)
         if (spec.scan != PROGRESSIVE)
@@ -177,7 +180,7 @@ class VideoWriter(
     /** Writes the next frame to the video. */
     fun write(bitmap: Bitmap) {
         require(bitmap.spec == spec)
-        bitmap.requireNotClosed { writeFrame(bitmap.frame) }
+        closureProtector.requireNotClosed { bitmap.requireNotClosed { writeFrame(bitmap.frame) } }
     }
 
     /** Encodes one video frame and sends it to the muxer. */
@@ -231,6 +234,8 @@ class VideoWriter(
     }
 
     private fun release() {
+        closureProtector.close()
+
         enc.letIfNonNull(::avcodec_free_context)
         enc = null
 

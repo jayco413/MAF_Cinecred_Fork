@@ -1,21 +1,29 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <?define UpgradeCode = "d3f4499f-c56c-4f7d-b051-1f8eade3fc9c" ?>
 
-  <Product Id="*" Name="Cinecred" Version="@VERSION@" Language="!(loc.LanguageCode)" Manufacturer="@VENDOR@" UpgradeCode="$(var.UpgradeCode)">
-    <Package Platform="@ARCH_WIX@" Description="!(loc.Slogan)" Languages="!(loc.LanguageCode)" Manufacturer="@VENDOR@" InstallerVersion="200" Compressed="yes" InstallScope="perMachine"/>
+  <Package Name="Cinecred" Version="@VERSION@" Manufacturer="@VENDOR@" UpgradeCode="$(var.UpgradeCode)" Scope="perMachineOrUser">
+    <SummaryInformation Description="!(loc.Slogan)"/>
     <MediaTemplate EmbedCab="yes"/>
 
-    <!-- Installed files -->
-    <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="Cinecred"/>
-      </Directory>
-    </Directory>
-    <Feature Id="DefaultFeature" Title="Cinecred" Level="1">
-      <ComponentGroupRef Id="Shortcuts"/>
-      <ComponentGroupRef Id="Files"/>
-    </Feature>
+    <!-- Installation directory; automatically switches to %LocalAppData% for per-user installations. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="Cinecred"/>
+    </StandardDirectory>
+
+    <!-- Program files -->
+    <Files Include="!(bindpath.image)**" Directory="INSTALLDIR"/>
+    <!-- Desktop shortcut -->
+    <Property Id="DESKTOP_SHORTCUT" Value="1"/>
+    <Component Condition="DESKTOP_SHORTCUT">
+      <RegistryValue Root="HKMU" Key="Software\Cinecred" Name="DesktopShortcut" Type="integer" Value="1" KeyPath="yes"/>
+      <Shortcut Name="Cinecred" Directory="DesktopFolder" Description="!(loc.Slogan)" WorkingDirectory="INSTALLDIR" Target="[INSTALLDIR]cinecred.exe"/>
+    </Component>
+    <!-- Start menu shortcut -->
+    <Property Id="STARTMENU_SHORTCUT" Value="1"/>
+    <Component Condition="STARTMENU_SHORTCUT">
+      <RegistryValue Root="HKMU" Key="Software\Cinecred" Name="StartMenuShortcut" Type="integer" Value="1" KeyPath="yes"/>
+      <Shortcut Name="Cinecred" Directory="ProgramMenuFolder" Description="!(loc.Slogan)" WorkingDirectory="INSTALLDIR" Target="[INSTALLDIR]cinecred.exe"/>
+    </Component>
 
     <!-- Upgrade/Downgrade -->
     <!--
@@ -33,30 +41,19 @@
     </InstallExecuteSequence>
 
     <!-- Add/Remove Programs screen -->
+    <Property Id="ARPNOMODIFY" Value="1"/>
     <Property Id="ARPCOMMENTS" Value="!(loc.Slogan)"/>
     <Property Id="ARPCONTACT" Value="@VENDOR@"/>
     <Property Id="ARPHELPLINK" Value="@URL@"/>
     <Property Id="ARPURLINFOABOUT" Value="@URL@"/>
     <Property Id="ARPURLUPDATEINFO" Value="@URL@"/>
-    <Icon Id="CinecredIcon" SourceFile="images\icon.ico"/>
+    <Icon Id="CinecredIcon" SourceFile="$(var.Icon)"/>
     <Property Id="ARPPRODUCTICON" Value="CinecredIcon"/>
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLDIR]" After="CostFinalize"/>
 
     <!-- UI -->
-    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR"/>
-    <Property Id="DESKTOP_SHORTCUT" Value="1"/>
-    <Property Id="STARTMENU_SHORTCUT" Value="1"/>
-    <WixVariable Id="WixUIBannerBmp" Value="images\banner.bmp"/>
-    <WixVariable Id="WixUIDialogBmp" Value="images\sidebar.bmp"/>
-    <UI>
-      <UIRef Id="WixUI_InstallDir"/>
-      <UIRef Id="WixUI_ErrorProgressText"/>
-      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="5">NOT Installed</Publish>
-      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="5">1</Publish>
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutDlg" Order="5">1</Publish>
-      <Publish Dialog="ShortcutDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg"/>
-      <Publish Dialog="ShortcutDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg"/>
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutDlg" Order="5">NOT Installed</Publish>
-    </UI>
-  </Product>
+    <UIRef Id="WixUI_Common"/>
+    <UIRef Id="WixUI_ErrorProgressText"/>
+    <UIRef Id="UI"/>
+  </Package>
 </Wix>

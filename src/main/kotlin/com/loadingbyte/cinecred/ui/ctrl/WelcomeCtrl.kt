@@ -8,18 +8,16 @@ import com.loadingbyte.cinecred.projectio.service.*
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.comms.*
 import com.loadingbyte.cinecred.ui.helper.FileExtAssortment
+import com.loadingbyte.cinecred.ui.helper.Form
+import com.loadingbyte.cinecred.ui.helper.useAppleScriptFileChooser
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.AttributeProvider
 import org.commonmark.renderer.html.HtmlRenderer
-import java.awt.event.InputEvent.CTRL_DOWN_MASK
 import java.awt.event.KeyEvent
-import java.awt.event.KeyEvent.*
 import java.io.IOException
 import java.io.StringReader
 import java.net.URI
 import java.net.URISyntaxException
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
@@ -59,12 +57,26 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     private val projectHintTrackPendingListener = { pending: Boolean ->
         welcomeView.preferences_start_setProjectHintTrackPending(pending)
     }
+    private val appleScriptFileChooserListener = { use: Boolean ->
+        welcomeView.preferences_start_setAppleScriptFileChooser(use)
+        useAppleScriptFileChooser = use
+    }
+    private val tapePreviewResolutionListener = { resolution: Int ->
+        welcomeView.preferences_start_setTapePreviewResolution(resolution)
+        Tape.previewResolution = resolution
+    }
     private val accountListListener = {
         SwingUtilities.invokeLater {
             val accounts = SERVICES.flatMap(Service::accounts)
             welcomeView.projects_createConfigure_setAccounts(accounts)
             welcomeView.preferences_start_setAccounts(accounts)
         }
+    }
+    private val windowLayoutsListener = { layouts: List<ConfigurableWindowLayout> ->
+        val allLayouts = PresetWindowLayout.ALL + layouts
+        val defaultName = DEFAULT_WINDOW_LAYOUT_PREFERENCE.get()
+        val defaultLayout = allLayouts.find { it.name == defaultName } ?: allLayouts[0]
+        welcomeView.preferences_start_setWindowLayouts(allLayouts, defaultLayout)
     }
     private val overlaysListener = { overlays: List<ConfigurableOverlay> ->
         welcomeView.preferences_start_setOverlays(overlays)
@@ -92,7 +104,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     private var currentlyEditedDeliveryDestTemplate: DeliveryDestTemplate? = null
 
     private val createProjectThread = AtomicReference<Thread?>()
-    private val addAccountThread = AtomicReference<Thread?>()
+    @Volatile private var addAccountThread: Thread? = null
 
     private var withheldPrefChanges: MutableMap<Preference<*>, () -> Unit>? = null
 
@@ -100,17 +112,21 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         check(!::welcomeView.isInitialized)
         this.welcomeView = welcomeView
 
-        // Register the accounts, overlays, and delivery location templates listeners.
+        // Register the accounts, window layouts, overlays, and delivery location templates listeners.
         addAccountListListener(accountListListener)
+        WINDOW_LAYOUTS_PREFERENCE.addListener(windowLayoutsListener)
         OVERLAYS_PREFERENCE.addListener(overlaysListener)
         DELIVERY_DEST_TEMPLATES_PREFERENCE.addListener(deliveryDestTemplatesListener)
 
-        // Retrieve the current preferences, accounts, overlays, and delivery location templates.
+        // Retrieve the current preferences, window layouts, accounts, overlays, and delivery location templates.
         welcomeView.preferences_start_setUILocaleWish(UI_LOCALE_PREFERENCE.get())
         welcomeView.preferences_start_setCheckForUpdates(CHECK_FOR_UPDATES_PREFERENCE.get())
         welcomeView.preferences_start_setWelcomeHintTrackPending(WELCOME_HINT_TRACK_PENDING_PREFERENCE.get())
         welcomeView.preferences_start_setProjectHintTrackPending(PROJECT_HINT_TRACK_PENDING_PREFERENCE.get())
+        appleScriptFileChooserListener(APPLE_SCRIPT_FILE_CHOOSER.get())
+        tapePreviewResolutionListener(TAPE_PREVIEW_RESOLUTION.get())
         accountListListener()
+        windowLayoutsListener(WINDOW_LAYOUTS_PREFERENCE.get())
         overlaysListener(OVERLAYS_PREFERENCE.get())
         deliveryDestTemplatesListener(DELIVERY_DEST_TEMPLATES_PREFERENCE.get())
 
@@ -138,6 +154,9 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     private fun tryOpenProject(projectDir: Path): Boolean {
         if (blockOpening || !projectDir.isAbsolute)
             return false
+
+        // Normalize mainly to prevent duplicate entries in the recent project dirs list, but it's a good idea anyway.
+        val projectDir = projectDir.normalize()
 
         if (!projectDir.isDirectory()) {
             welcomeView.display()
@@ -225,10 +244,8 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         if (latestStableVersion.get() != null)
             afterFetch()
         else if (CHECK_FOR_UPDATES_PREFERENCE.get()) {
-            val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build()
-            val req = HttpRequest.newBuilder(URI.create("https://cinecred.com/dl/api/v1/components"))
-                .setHeader("User-Agent", USER_AGENT).build()
-            client.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenAccept { resp ->
+            val req = httpRequest(URI.create("https://cinecred.com/dl/api/v1/components"))
+            GLOBAL_HTTP_CLIENT.sendAsync(req, HttpResponse.BodyHandlers.ofString()).thenAccept { resp ->
                 if (resp.statusCode() != 200)
                     return@thenAccept
 
@@ -254,18 +271,22 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     override fun onGlobalKeyEvent(event: KeyEvent): Boolean {
         if (!welcomeView.isFromWelcomeWindow(event))
             return false
-        if (event.modifiersEx == 0 && event.keyCode == VK_ESCAPE) {
+        if (Shortcut.ESCAPE.matches(event)) {
             val tab = welcomeView.getTab()
             if (tab == WelcomeTab.PROJECTS) {
                 projects_createWait_onClickCancel()
                 return true
             } else if (tab == WelcomeTab.PREFERENCES) {
-                preferences_establishAccount_onClickCancel()
-                preferences_configureOverlay_onClickCancel()
+                when (welcomeView.preferences_getCard()) {
+                    PreferencesCard.START -> {}
+                    PreferencesCard.CONFIGURE_ACCOUNT -> preferences_configureAccount_onClickCancel()
+                    PreferencesCard.CONFIGURE_OVERLAY -> preferences_configureOverlay_onClickCancel()
+                    PreferencesCard.CONFIGURE_DELIVERY_LOC_TEMPLATE ->
+                        preferences_configureDeliveryDestTemplate_onClickCancel()
+                }
                 return true
             }
-        }
-        if (event.modifiersEx == CTRL_DOWN_MASK && (event.keyCode.let { it == VK_Q || it == VK_W })) {
+        } else if (Shortcut.CLOSE_WINDOW.matches(event) || Shortcut.QUIT.matches(event)) {
             close()
             return true
         }
@@ -298,6 +319,8 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
             CHECK_FOR_UPDATES_PREFERENCE.addListener(checkForUpdatesListener)
             WELCOME_HINT_TRACK_PENDING_PREFERENCE.addListener(welcomeHintTrackPendingListener)
             PROJECT_HINT_TRACK_PENDING_PREFERENCE.addListener(projectHintTrackPendingListener)
+            APPLE_SCRIPT_FILE_CHOOSER.addListener(appleScriptFileChooserListener)
+            TAPE_PREVIEW_RESOLUTION.addListener(tapePreviewResolutionListener)
             // If enabled, check for updates and run the welcome hint track.
             tryCheckForUpdates()
             if (WELCOME_HINT_TRACK_PENDING_PREFERENCE.get())
@@ -333,12 +356,15 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         CHECK_FOR_UPDATES_PREFERENCE.removeListener(checkForUpdatesListener)
         WELCOME_HINT_TRACK_PENDING_PREFERENCE.removeListener(welcomeHintTrackPendingListener)
         PROJECT_HINT_TRACK_PENDING_PREFERENCE.removeListener(projectHintTrackPendingListener)
+        APPLE_SCRIPT_FILE_CHOOSER.removeListener(appleScriptFileChooserListener)
+        TAPE_PREVIEW_RESOLUTION.removeListener(tapePreviewResolutionListener)
         removeAccountListListener(accountListListener)
+        WINDOW_LAYOUTS_PREFERENCE.removeListener(windowLayoutsListener)
         OVERLAYS_PREFERENCE.removeListener(overlaysListener)
         DELIVERY_DEST_TEMPLATES_PREFERENCE.removeListener(deliveryDestTemplatesListener)
 
         createProjectThread.getAndSet(null)?.interrupt()
-        addAccountThread.getAndSet(null)?.interrupt()
+        addAccountThread?.interrupt()
         welcomeView.close()
         masterCtrl.onCloseWelcomeFrame()
     }
@@ -385,8 +411,9 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
                 return
         }
         newBrowseSelection = projectDir
+        val creditsFilename = "${projectDir.name} ${l10n("project.template.spreadsheetName")}"
         welcomeView.projects_createConfigure_setProjectDir(projectDir)
-        welcomeView.projects_createConfigure_setCreditsFilename("${projectDir.name} Credits")
+        welcomeView.projects_createConfigure_setCreditsFilename(creditsFilename)
         welcomeView.projects_setCard(ProjectsCard.CREATE_CONFIGURE)
     }
 
@@ -403,12 +430,12 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         timecodeFormat: TimecodeFormat,
         sample: Boolean,
         creditsLocation: CreditsLocation,
-        creditsFormat: SpreadsheetFormat,
         creditsAccount: Account?,
-        creditsFilename: String
+        creditsFilename: String,
+        creditsFormat: SpreadsheetFormat
     ) {
         val projectDir = newBrowseSelection ?: return
-        val effSample = if (creditsLocation == CreditsLocation.SKIP) false else sample
+        val effSample = creditsLocation != CreditsLocation.SKIP && sample
         val template = Template(locale, resolution, fps, timecodeFormat, effSample)
         welcomeView.projects_createWait_setError(null)
         welcomeView.projects_setCard(ProjectsCard.CREATE_WAIT)
@@ -418,15 +445,16 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
                     CreditsLocation.LOCAL ->
                         tryCopyTemplate(projectDir, template, creditsFormat)
                     CreditsLocation.SERVICE ->
-                        tryCopyTemplate(projectDir, template, creditsAccount!!, creditsFilename)
+                        tryCopyTemplate(projectDir, template, creditsAccount!!, creditsFilename, creditsFormat)
                     CreditsLocation.SKIP ->
                         tryCopyTemplate(projectDir, template)
                 }
                 SwingUtilities.invokeLater { tryOpenProject(projectDir) }
-            } catch (e: IOException) {
-                SwingUtilities.invokeLater { welcomeView.projects_createWait_setError(e.message ?: e.toString()) }
             } catch (_: InterruptedException) {
                 // Let the thread come to a stop.
+            } catch (e: Exception) {
+                LOGGER.error("Could not create a new project in '{}'.", projectDir, e)
+                SwingUtilities.invokeLater { welcomeView.projects_createWait_setError(e.userNotification) }
             }
             createProjectThread.set(null)
         }, "CreateProject").apply { isDaemon = true; start() })
@@ -442,6 +470,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     override fun preferences_start_onClickAddAccount() {
         welcomeView.preferences_configureAccount_resetForm()
+        welcomeView.preferences_configureAccount_clearStatus()
         welcomeView.preferences_setCard(PreferencesCard.CONFIGURE_ACCOUNT)
     }
 
@@ -449,59 +478,92 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         welcomeView.preferences_start_setAccountRemovalLocked(account, true)
         val service = SERVICES.first { account in it.accounts }
         Thread({
+            var err: String? = null
             try {
-                service.removeAccount(account)
-            } catch (e: IOException) {
+                val error = service.removeAccount(account)
+                if (error != null)
+                    err = error.message
+            } catch (e: Exception) {
+                // In case there's a programmer error and an exception escapes, handle it instead of crashing.
+                LOGGER.error("Could not remove a {} account.", account.service.product, e)
+                err = e.userNotification
+            }
+            if (err != null)
                 SwingUtilities.invokeLater {
-                    welcomeView.showCannotRemoveAccountMessage(account, e.message ?: e.toString())
+                    welcomeView.showCannotRemoveAccountMessage(account, err)
                     welcomeView.preferences_start_setAccountRemovalLocked(account, false)
                 }
-            }
         }, "RemoveAccount").apply { isDaemon = true; start() }
     }
 
     override fun preferences_configureAccount_verifyLabel(label: String) = when {
         label.isBlank() ->
-            l10n("blank")
+            l10n("required")
         SERVICES.any { service -> service.accounts.any { account -> account.id == label } } ->
             l10n("ui.preferences.accounts.configure.labelAlreadyInUse")
         else -> null
     }
 
     override fun preferences_configureAccount_verifyServer(service: Service?, server: String): String? {
-        val server = try {
+        if (service == null || !service.accountNeedsServer)
+            return null
+        val uri = try {
             URI(server)
         } catch (_: URISyntaxException) {
             null
         }
-        return if (server == null ||
-            service != null && service.accountNeedsServer && service.isServerPlausible(server)
-        ) l10n("ui.preferences.accounts.configure.invalidURL") else null
+        return if (server.isBlank() || uri == null || !service.isServerPlausible(uri))
+            l10n("ui.preferences.accounts.configure.invalidURL") else null
     }
 
-    override fun preferences_configureAccount_onClickCancel() = welcomeView.preferences_setCard(PreferencesCard.START)
+    override fun preferences_configureAccount_verifyCredential(service: Service?, credential: String): Form.Notice? =
+        when (service?.credentialsRequirement) {
+            Service.CredentialsRequirement.REQUIRED ->
+                if (credential.isBlank()) Form.Notice(Severity.ERROR, l10n("required")) else null
+            Service.CredentialsRequirement.OPTIONAL -> Form.Notice(Severity.INFO, l10n("optional"))
+            Service.CredentialsRequirement.UNUSED, null -> null
+        }
 
-    override fun preferences_configureAccount_onClickEstablish(label: String, service: Service, server: String) {
-        welcomeView.preferences_establishAccount_setAction(authorize = service.authorizer != null)
-        welcomeView.preferences_establishAccount_setError(null)
-        welcomeView.preferences_setCard(PreferencesCard.ESTABLISH_ACCOUNT)
-        addAccountThread.set(Thread({
+    override fun preferences_configureAccount_onClickCancel() {
+        if (addAccountThread?.also(Thread::interrupt) == null)
+            welcomeView.preferences_setCard(PreferencesCard.START)
+    }
+
+    override fun preferences_configureAccount_onClickEstablish(
+        label: String, service: Service, server: String, username: String, password: String
+    ) {
+        val authorize = service.authorizer != null
+        welcomeView.preferences_configureAccount_setFormLocked(true)
+        welcomeView.preferences_configureAccount_setStatusEstablishing(authorize)
+        addAccountThread = Thread({
+            var err: String? = null
             try {
-                service.addAccount(label, if (service.accountNeedsServer) URI(server) else null)
-                SwingUtilities.invokeLater { welcomeView.preferences_setCard(PreferencesCard.START) }
-            } catch (e: IOException) {
-                val error = e.message ?: e.toString()
-                SwingUtilities.invokeLater { welcomeView.preferences_establishAccount_setError(error) }
+                val cred = if (username.isBlank() && password.isBlank()) null else Credentials(username, password)
+                val error = service.addAccount(label, if (service.accountNeedsServer) URI(server) else null, cred)
+                if (error == null)
+                    SwingUtilities.invokeLater { welcomeView.preferences_setCard(PreferencesCard.START) }
+                else
+                    err = error.message
             } catch (_: InterruptedException) {
-                // Let the thread come to a stop.
+                SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_clearStatus() }
+            } catch (e: Exception) {
+                // In case there's a programmer error and an exception escapes, handle it instead of crashing.
+                LOGGER.error("Could not establish a {} account.", service.product, e)
+                err = e.userNotification
             }
-            addAccountThread.set(null)
-        }, "AddAccount").apply { isDaemon = true; start() })
+            if (err != null)
+                SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setStatusFailed(authorize, err) }
+            SwingUtilities.invokeLater { welcomeView.preferences_configureAccount_setFormLocked(false) }
+            addAccountThread = null
+        }, "AddAccount").apply { isDaemon = true; start() }
     }
 
-    override fun preferences_establishAccount_onClickCancel() {
-        addAccountThread.getAndSet(null)?.interrupt()
-        welcomeView.preferences_setCard(PreferencesCard.START)
+    override fun preferences_start_onClickSetWindowLayoutAsDefault(layout: WindowLayout) {
+        DEFAULT_WINDOW_LAYOUT_PREFERENCE.set(layout.name)
+    }
+
+    override fun preferences_start_onClickRemoveWindowLayout(layout: WindowLayout) {
+        WINDOW_LAYOUTS_PREFERENCE.set(WINDOW_LAYOUTS_PREFERENCE.get().filter { it != layout })
     }
 
     override fun preferences_start_onClickAddOverlay() {
@@ -535,7 +597,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
             linesH = if (overlay is LinesOverlay) overlay.hLines else emptyList(),
             linesV = if (overlay is LinesOverlay) overlay.vLines else emptyList(),
             imageFile = Path(""),
-            imageUnderlay = if (overlay is ImageOverlay) overlay.underlay else false
+            imageUnderlay = overlay is ImageOverlay && overlay.underlay
         )
         welcomeView.preferences_setCard(PreferencesCard.CONFIGURE_OVERLAY)
     }
@@ -545,9 +607,9 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     }
 
     override fun preferences_configureOverlay_verifyName(name: String) = when {
-        name.isBlank() -> l10n("blank")
+        name.isBlank() -> l10n("required")
         OVERLAYS_PREFERENCE.get().any { overlay ->
-            overlay.uuid != currentlyEditedOverlay?.uuid && overlay.label == name
+            overlay.identity != currentlyEditedOverlay?.identity && overlay.label == name
         } ->
             l10n("ui.preferences.accounts.configure.labelAlreadyInUse")
         else -> null
@@ -570,13 +632,13 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         imageUnderlay: Boolean
     ) {
         val edited = currentlyEditedOverlay
-        val uuid = edited?.uuid ?: UUID.randomUUID()
+        val identity = edited?.identity ?: UUID.randomUUID()
         val newOverlay = when (type) {
-            AspectRatioOverlay::class.java -> AspectRatioOverlay(uuid, aspectRatioH, aspectRatioV)
-            LinesOverlay::class.java -> LinesOverlay(uuid, name, linesColor, linesH, linesV)
+            AspectRatioOverlay::class.java -> AspectRatioOverlay(identity, aspectRatioH, aspectRatioV)
+            LinesOverlay::class.java -> LinesOverlay(identity, name, linesColor, linesH, linesV)
             ImageOverlay::class.java ->
                 if (edited is ImageOverlay && imageFile == Path(""))
-                    ImageOverlay(uuid, name, edited.raster, edited.rasterPersisted, imageUnderlay)
+                    ImageOverlay(identity, name, edited.raster, edited.rasterPersisted, imageUnderlay)
                 else try {
                     val raster =
                         when (val pic = Picture.load(imageFile)) {
@@ -589,12 +651,13 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
                                 val rep = Canvas.compatibleRepresentation(ColorSpace.SRGB)
                                 val bitmap = Bitmap.allocate(Bitmap.Spec(res, rep))
                                 Canvas.forBitmap(bitmap.zero()).use(pic::drawTo)
-                                Picture.Raster(bitmap)
+                                Picture.Raster.convert(bitmap)
                             }
                         }
-                    ImageOverlay(uuid, name, raster, rasterPersisted = false, imageUnderlay)
+                    ImageOverlay(identity, name, raster, rasterPersisted = false, imageUnderlay)
                 } catch (e: Exception) {
-                    welcomeView.showCannotReadOverlayImageMessage(imageFile, e.message ?: e.toString())
+                    LOGGER.error("Could not read the overlay image file '{}'.", imageFile, e)
+                    welcomeView.showCannotReadOverlayImageMessage(imageFile, e.userNotification)
                     welcomeView.preferences_setCard(PreferencesCard.START)
                     return
                 }
@@ -632,9 +695,9 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
     }
 
     override fun preferences_configureDeliveryDestTemplate_verifyName(name: String) = when {
-        name.isBlank() -> l10n("blank")
+        name.isBlank() -> l10n("required")
         DELIVERY_DEST_TEMPLATES_PREFERENCE.get().any { template ->
-            template.uuid != currentlyEditedDeliveryDestTemplate?.uuid && template.name == name
+            template.identity != currentlyEditedDeliveryDestTemplate?.identity && template.name == name
         } ->
             l10n("ui.preferences.accounts.configure.labelAlreadyInUse")
         else -> null
@@ -642,7 +705,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     override fun preferences_configureDeliveryDestTemplate_verifyTemplateStr(templateStr: String): String? {
         if (templateStr.isBlank())
-            return l10n("blank")
+            return l10n("required")
         try {
             DeliveryDestTemplate(UUID.randomUUID(), "", templateStr)
             return null
@@ -660,7 +723,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         done: Boolean, name: String, templateStr: String
     ) {
         val edited = currentlyEditedDeliveryDestTemplate
-        val newTemplate = DeliveryDestTemplate(edited?.uuid ?: UUID.randomUUID(), name, templateStr)
+        val newTemplate = DeliveryDestTemplate(edited?.identity ?: UUID.randomUUID(), name, templateStr)
         currentlyEditedDeliveryDestTemplate = newTemplate
         val newTemplates = DELIVERY_DEST_TEMPLATES_PREFERENCE.get().toMutableList()
         edited?.let(newTemplates::remove)
@@ -674,7 +737,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
 
     companion object {
 
-        private val CHANGELOG_HTML = useResourceStream("/CHANGELOG.md") { it.bufferedReader().readText() }.let { src ->
+        private val CHANGELOG_HTML = useResourceStream("/CHANGELOG.md") { it.reader().readAllAsString() }.let { src ->
             val doc = Parser.builder().build().parse(src)
             // Remove the first heading which just says "Changelog".
             doc.firstChild.unlink()
@@ -701,6 +764,7 @@ class WelcomeCtrl(private val masterCtrl: MasterCtrlComms) : WelcomeCtrlComms {
         private fun aboutHtml(): String {
             val translators = useResourceStream("/translators.properties") { Properties().apply { load(it.reader()) } }
                 .entries
+                .filter { (_, people) -> (people as String).isNotBlank() }
                 .map { (tag, people) -> Locale.forLanguageTag(tag as String).displayName to people }
                 .sortedWithCollator(caseInsensitiveCollator()) { (lang, _) -> lang }
                 .joinToString("  \u2022  ") { (lang, people) ->

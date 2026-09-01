@@ -41,7 +41,8 @@ abstract class BuildDeckLinkCAPI : DefaultTask() {
             val midlCmd = listOf("cmd", "/C", "$vcvars && midl /notlb /h DeckLinkAPI.h ${idlFile.absolutePath}")
             execOps.exec { commandLine(midlCmd).workingDir(temporaryDir) }.rethrowFailure().assertNormalExitValue()
             val sub = mutableListOf<String>()
-            sub += listOf(vcvars, "&&", "cl", "/LD", "/std:c++17", "/O2", "/GL", "/GR-", "/DCAPI=__declspec(dllexport)")
+            sub += listOf(vcvars, "&&", "cl", "/LD", "/MD", "/std:c++17", "/O2", "/GL", "/GR-")
+            sub += "/DCAPI=__declspec(dllexport)"
             sub += listOf("\"/Fe:${outFile.absolutePath}\"", "/I", "\"${temporaryDir.absolutePath}\"")
             sub += srcPaths.map { "\"$it\"" }
             sub += listOf("/link", "/NOIMPLIB", "/NOEXP", "ole32.lib", "comsuppw.lib")
@@ -51,7 +52,7 @@ abstract class BuildDeckLinkCAPI : DefaultTask() {
                 cmd += listOf("clang++", "-dynamiclib", "-target", "${forPlatform.arch.slug}-apple-macos12")
                 cmd += listOf("-Wl,-install_name,@rpath/${outFile.name}", "-framework", "CoreFoundation")
             } else if (forPlatform.os == LINUX)
-                cmd += listOf("g++", "-shared", "-s", "-Wl,-rpath,\$ORIGIN")
+                cmd += listOf("g++", "-shared", "-s")
             cmd += listOf("-std=c++17", "-O3", "-fPIC", "-flto", "-fno-rtti", "-fno-exceptions")
             cmd += listOf("-o", outFile.absolutePath)
             cmd += srcPaths

@@ -41,7 +41,7 @@ object GuideContentStyleNameDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::name.st())
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += PRESET_CONTENT_STYLE.copy(name = l10n("project.template.contentStyleGutter"))
+        this += presetContentStyle().copy(name = l10n("project.template.contentStyleGutter"))
     }
 }
 
@@ -109,7 +109,7 @@ object GuideContentStyleBodyLetterStyleDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::bodyLetterStyleName.st()), pageGuides = true
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += PRESET_CONTENT_STYLE.copy(name = "Demo", bodyLetterStyleName = "Name")
+        this += presetContentStyle().copy(name = "Demo", bodyLetterStyleName = "Name")
         this += last().copy(bodyLetterStyleName = "Small")
     }
 
@@ -126,7 +126,7 @@ object GuideContentStyleBodyLayoutDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::bodyLayout.st())
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += PRESET_CONTENT_STYLE.copy(name = "Demo", bodyLayout = GRID)
+        this += presetContentStyle().copy(name = "Demo", bodyLayout = GRID)
         this += last().copy(bodyLayout = FLOW)
         this += last().copy(bodyLayout = PARAGRAPHS)
     }
@@ -154,8 +154,8 @@ object GuideContentStyleHeadLetterStyleDemo : StyleSettingsDemo<ContentStyle>(
     listOf(ContentStyle::headLetterStyleName.st()), pageGuides = true
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += gutterCS.copy(name = "Demo")
-        this += last().copy(headLetterStyleName = "Normal")
+        this += gutterCS.copy(name = "Demo", headLetterStyleName = Override(null))
+        this += last().copy(headLetterStyleName = Override("Small"))
     }
 
     override fun credits(style: ContentStyle) = """
@@ -212,7 +212,7 @@ Best Boy,Francesco Foreman,
         style,
         gutterCS.copy(
             name = altStyleName, bodyLetterStyleName = "Song Title", gridHarmonizeColWidths = HarmonizeExtent.OFF,
-            headLetterStyleName = "Normal"
+            headLetterStyleName = Override("Normal")
         )
     )
 }
@@ -237,15 +237,26 @@ Gaffer,Gustav Gluehbirne,
 
 
 object GuideContentStyleHeadVJustifyDemo : StyleSettingsDemo<ContentStyle>(
-    ContentStyle::class.java, "$DIR/head-vjustify", Format.STEP_GIF,
-    listOf(ContentStyle::headVJustify.st()), pageGuides = true
+    ContentStyle::class.java, "$DIR/head-vjustify", Format.SLOW_STEP_GIF,
+    listOf(
+        ContentStyle::headVJustifyBodyFragment.st(), ContentStyle::headVJustifyHeadFragment.st(),
+        ContentStyle::headVJustify.st()
+    ), pageGuides = true
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += gutterCS.copy(name = "Demo")
-        this += last().copy(headVShelve = AppendageVShelve.OVERALL_MIDDLE)
-        this += last().copy(headVShelve = AppendageVShelve.LAST)
-        this += last().copy(headVJustify = AppendageVJustify.BASELINE)
-        this += last().copy(headVJustify = AppendageVJustify.BOTTOM)
+        this += gutterCS.copy(
+            name = "Demo", vMarginBottomPx = 16.0, gridRowGapPx = 4.0,
+            headVJustifyBodyFragment = VBodyFragment.ALL_ROWS, headVJustifyHeadFragment = VTextFragment.ALL_LINES
+        )
+        this += last().copy(headVJustifyBodyFragment = VBodyFragment.FIRST_ROW)
+        this += last().copy(headVJustifyBodyFragment = VBodyFragment.LAST_ROW)
+        this += last().copy(headVJustifyBodyFragment = VBodyFragment.FIRST_ROW_FIRST_LINE)
+        this += last().copy(headVJustifyHeadFragment = VTextFragment.FIRST_LINE)
+        this += last().copy(headVJustifyBodyFragment = VBodyFragment.FIRST_ROW_LAST_LINE)
+        this += last().copy(headVJustifyBodyFragment = VBodyFragment.LAST_ROW_FIRST_LINE)
+        this += last().copy(headVJustifyBodyFragment = VBodyFragment.LAST_ROW_LAST_LINE)
+        this += last().copy(headVJustify = VJustifyText.BASELINE)
+        this += last().copy(headVJustify = VJustifyText.BOTTOM)
     }
 
     override fun credits(style: ContentStyle) = """
@@ -253,6 +264,11 @@ object GuideContentStyleHeadVJustifyDemo : StyleSettingsDemo<ContentStyle>(
 1st Assistant Camera,Paul Puller,Demo
 2nd Assistant Camera,Charly Clapper,
 ,Luke Loader,
+"Digital Imaging Technician &
+Data Wrangler","Anna-Alicia
+“Alissa” Archiver",
+,"Denis-Del-Dias
+Demi-Duplicator",
         """.parseCreditsCS(style)
 }
 
@@ -303,7 +319,7 @@ object GuideContentStyleHeadLeaderLetterStyleDemo : StyleSettingsDemo<ContentSty
 
     override fun styles() = buildList<ContentStyle> {
         this += leaderCS.copy(name = "Demo")
-        this += last().copy(headLeaderLetterStyleName = Opt(true, coloredStyleName))
+        this += last().copy(headLeaderLetterStyleName = Override(coloredStyleName))
     }
 
     override fun credits(style: ContentStyle) = """
@@ -314,7 +330,7 @@ object GuideContentStyleHeadLeaderLetterStyleDemo : StyleSettingsDemo<ContentSty
     override fun augmentStyling(styling: Styling): Styling {
         val color = Color4f.fromSRGBHexString("#42BEEF")
         var ls = styling.letterStyles.first { it.name == "Small" }
-        ls = ls.copy(name = coloredStyleName, layers = persistentListOf(ls.layers.single().copy(color1 = color)))
+        ls = ls.copy(name = coloredStyleName, layers = persistentListOf(ls.layers.single().copy(plainColor = color)))
         return styling.copy(letterStyles = styling.letterStyles.add(ls))
     }
 }
@@ -327,11 +343,11 @@ object GuideContentStyleHeadLeaderHJustifyDemo : StyleSettingsDemo<ContentStyle>
     override fun styles() = buildList<ContentStyle> {
         this += leaderCS.copy(
             name = "Demo", headHJustify = HJustify.LEFT,
-            headLeader = "_", headLeaderHJustify = SingleLineHJustify.LEFT, headLeaderSpacingPx = 12.5
+            headLeader = "_", headLeaderHJustify = HJustifyCrumbs.LEFT, headLeaderSpacingPx = 12.5
         )
-        this += last().copy(headLeaderHJustify = SingleLineHJustify.CENTER)
-        this += last().copy(headLeaderHJustify = SingleLineHJustify.RIGHT)
-        this += last().copy(headLeaderHJustify = SingleLineHJustify.FULL)
+        this += last().copy(headLeaderHJustify = HJustifyCrumbs.CENTER)
+        this += last().copy(headLeaderHJustify = HJustifyCrumbs.RIGHT)
+        this += last().copy(headLeaderHJustify = HJustifyCrumbs.FULL)
     }
 
     override fun credits(style: ContentStyle) = """
@@ -347,10 +363,10 @@ object GuideContentStyleHeadLeaderVJustifyDemo : StyleSettingsDemo<ContentStyle>
     listOf(ContentStyle::headLeaderHJustify.st(), ContentStyle::headLeaderVJustify.st())
 ) {
     override fun styles() = buildList<ContentStyle> {
-        this += leaderCS.copy(name = "Demo", headLeaderVJustify = AppendageVJustify.TOP)
-        this += last().copy(headLeaderVJustify = AppendageVJustify.MIDDLE)
-        this += last().copy(headLeaderVJustify = AppendageVJustify.BASELINE)
-        this += last().copy(headLeaderVJustify = AppendageVJustify.BOTTOM)
+        this += leaderCS.copy(name = "Demo", headLeaderVJustify = VJustifyText.TOP)
+        this += last().copy(headLeaderVJustify = VJustifyText.MIDDLE)
+        this += last().copy(headLeaderVJustify = VJustifyText.BASELINE)
+        this += last().copy(headLeaderVJustify = VJustifyText.BOTTOM)
     }
 
     override fun credits(style: ContentStyle) = """
@@ -381,11 +397,11 @@ object GuideContentStyleHeadLeaderMarginAndSpacingDemo : StyleSettingsDemo<Conte
 }
 
 
-private val headBodyTailCS = PRESET_CONTENT_STYLE.copy(
+private val headBodyTailCS = presetContentStyle().copy(
     blockOrientation = BlockOrientation.HORIZONTAL, bodyLetterStyleName = "Name",
-    hasHead = true, headLetterStyleName = "Small",
-    hasTail = true, tailLetterStyleName = "Small",
+    hasHead = true, headLetterStyleName = Override("Small"),
+    hasTail = true, tailLetterStyleName = Override("Small"),
 )
 
 private val gutterCS = TEMPLATE_PROJECT.styling.contentStyles.first { it.name == "Gutter" }
-private val leaderCS = gutterCS.copy(headVJustify = AppendageVJustify.BASELINE, headGapPx = 150.0, headLeader = ".")
+private val leaderCS = gutterCS.copy(headVJustify = VJustifyText.BASELINE, headGapPx = 150.0, headLeader = ".")

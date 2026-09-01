@@ -9,23 +9,24 @@ import java.util.*
 
 
 plugins {
-    kotlin("jvm") version "2.2.0"
+    kotlin("jvm") version "2.3.20"
 }
 
 group = "com.loadingbyte"
-version = "1.8.1"
+version = "1.9.1"
 
-val jdkVersion = 21
-val slf4jVersion = "2.0.17"
-val twelveMonkeysVersion = "3.12.0"
-val javacppVersion = "1.5.12"
-val ffmpegVersion = "7.1.1-$javacppVersion"
-val flatlafVersion = "3.6.1"
+val jdkVersion = 25
+val slf4jVersion = "2.0.18"
+val twelveMonkeysVersion = "3.14.0"
+val javacppVersion = "1.5.13"
+val ffmpegVersion = "8.0.1-$javacppVersion"
+val flatlafVersion = "3.7.2"
 
 // Versions of custom-built native libraries; upon updating, rebuild them following MAINTENANCE.md:
 val skiaVersion = "e2ea2eb" // head of branch chrome/m124
-val harfBuzzVersion = "7.1.0"
-val zimgVersion = "bde53c0"
+val harfBuzzVersion = "14.2.0"
+val clipperVersion = "Clipper2_2.0.1"
+val zimgVersion = "f6cc75a"
 val nfdVersion = "17b6e8c"
 
 val javaProperties = Properties().apply { file("java.properties").reader().use(::load) }
@@ -35,7 +36,8 @@ val addOpens = javaProperties.getProperty("addOpens").split(' ')
 val splashScreen = javaProperties.getProperty("splashScreen")!!
 val javaOptions = javaProperties.getProperty("javaOptions")!!
 
-val locales = listOf("cs", "de", "en", "es", "fr", "zh-CN").map(Locale::forLanguageTag)
+val locales = Properties().apply { srcMainResources.file("translators.properties").asFile.reader().use(::load) }
+    .keys.sortedBy { it as String }.map { Locale.forLanguageTag(it as String) }
 val url = "https://cinecred.com"
 val vendor = "Felix Mujkanovic"
 val email = "felix@cinecred.com"
@@ -55,7 +57,7 @@ java {
     toolchain.languageVersion = JavaLanguageVersion.of(jdkVersion)
 }
 
-val natives = Platform.values().associateWith { platform ->
+val natives = Platform.entries.associateWith { platform ->
     configurations.create("${platform.label}Natives") { isTransitive = false }
 }
 
@@ -67,55 +69,58 @@ repositories {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx", "kotlinx-collections-immutable", "0.4.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0")
 
     // Log to java.util.logging
-    implementation("org.slf4j", "slf4j-jdk14", slf4jVersion)
+    implementation(dependencyFactory.create("org.slf4j", "slf4j-jdk14", slf4jVersion))
     // Redirect other logging frameworks to slf4j.
     // JExcelAPI uses log4j. PDFBox uses Jakarta Commons Logging.
-    implementation("org.slf4j", "log4j-over-slf4j", slf4jVersion)
-    implementation("org.slf4j", "jcl-over-slf4j", slf4jVersion)
+    implementation(dependencyFactory.create("org.slf4j", "log4j-over-slf4j", slf4jVersion))
+    implementation(dependencyFactory.create("org.slf4j", "jcl-over-slf4j", slf4jVersion))
 
     // Spreadsheet IO
-    implementation("ch.rabanti", "nanoxlsx4j", "2.5.3")
-    implementation("net.sourceforge.jexcelapi", "jxl", "2.6.12")
-    implementation("com.github.miachm.sods", "SODS", "1.6.8")
-    implementation("de.siegmar", "fastcsv", "3.6.0")
+    implementation("ch.rabanti:nanoxlsx4j:2.5.7")
+    implementation("net.sourceforge.jexcelapi:jxl:2.6.12")
+    implementation("com.github.miachm.sods:SODS:1.10.1")
+    implementation("de.siegmar:fastcsv:4.4.0")
 
     // Spreadsheet Services
-    implementation("com.googlecode.plist", "dd-plist", "1.28")
-    implementation("com.google.oauth-client", "google-oauth-client-jetty", "1.39.0")
-    implementation("com.google.apis", "google-api-services-sheets", "v4-rev20250415-2.0.0")
+    implementation("com.googlecode.plist:dd-plist:1.29")
+    implementation("com.google.oauth-client:google-oauth-client-jetty:1.39.0")
+    implementation("com.google.apis:google-api-services-sheets:v4-rev20260610-2.0.0")
 
     // Raster Image IO
-    implementation("com.twelvemonkeys.imageio", "imageio-psd", twelveMonkeysVersion)
-    implementation("com.twelvemonkeys.imageio", "imageio-tga", twelveMonkeysVersion)
+    implementation(dependencyFactory.create("com.twelvemonkeys.imageio", "imageio-psd", twelveMonkeysVersion))
+    implementation(dependencyFactory.create("com.twelvemonkeys.imageio", "imageio-tga", twelveMonkeysVersion))
     // JBIG2 and JPEG2000 are commonly found in PDF files.
-    implementation("org.apache.pdfbox", "jbig2-imageio", "3.0.4")
-    implementation("com.github.jai-imageio", "jai-imageio-jpeg2000", "1.4.0")
+    implementation("org.apache.pdfbox:jbig2-imageio:3.0.5")
+    implementation("com.github.jai-imageio:jai-imageio-jpeg2000:1.4.0")
 
     // PDF IO
-    implementation("org.apache.pdfbox", "pdfbox", "3.0.5")
+    implementation("org.apache.pdfbox:pdfbox:3.0.6")
 
     // Video IO
-    implementation("org.bytedeco", "javacpp", javacppVersion)
-    implementation("org.bytedeco", "ffmpeg", ffmpegVersion)
-    for (platform in Platform.values()) {
-        natives.getValue(platform)("org.bytedeco", "javacpp", javacppVersion, classifier = platform.slugJavacpp)
-        natives.getValue(platform)("org.bytedeco", "ffmpeg", ffmpegVersion, classifier = "${platform.slugJavacpp}-gpl")
+    implementation(dependencyFactory.create("org.bytedeco", "javacpp", javacppVersion))
+    implementation(dependencyFactory.create("org.bytedeco", "ffmpeg", ffmpegVersion))
+    for (platform in Platform.entries) {
+        val nat = natives.getValue(platform)
+        nat(dependencyFactory.create("org.bytedeco", "javacpp", javacppVersion, platform.slugJavacpp, null))
+        nat(dependencyFactory.create("org.bytedeco", "ffmpeg", ffmpegVersion, "${platform.slugJavacpp}-gpl", null))
     }
 
     // UI
-    implementation("com.miglayout", "miglayout-swing", "11.4.2")
-    implementation("com.formdev", "flatlaf", flatlafVersion, classifier = "no-natives")
-    for (p in Platform.values())
-        natives.getValue(p)("com.formdev", "flatlaf", flatlafVersion, classifier = p.slugFlatLaf, ext = p.os.codeLibExt)
-    implementation("com.github.weisj", "jsvg", "2.0.0")
-    implementation("org.commonmark", "commonmark", "0.25.0")
+    implementation("com.miglayout:miglayout-swing:11.4.3")
+    implementation(dependencyFactory.create("com.formdev", "flatlaf", flatlafVersion, "no-natives", null))
+    for (p in Platform.entries) {
+        val nat = natives.getValue(p)
+        nat(dependencyFactory.create("com.formdev", "flatlaf", flatlafVersion, p.slugFlatLaf, p.os.codeLibExt))
+    }
+    implementation("com.github.weisj:jsvg:2.1.0")
+    implementation("org.commonmark:commonmark:0.29.0")
 
     // Testing
-    testImplementation("org.junit.jupiter", "junit-jupiter", "5.13.3")
-    testRuntimeOnly("org.junit.platform", "junit-platform-launcher", "1.13.3")
+    testImplementation("org.junit.jupiter:junit-jupiter:6.1.1")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 configurations.configureEach {
@@ -133,16 +138,11 @@ configurations.configureEach {
 
 tasks.withType<JavaCompile>().configureEach {
     options.release = jdkVersion
-    options.compilerArgs = listOf("--enable-preview", "--add-modules", addModules.joinToString(","))
+    options.compilerArgs = listOf("--add-modules", addModules.joinToString(","))
 }
 
 tasks.withType<KotlinCompile>().configureEach {
     compilerOptions.jvmTarget = JvmTarget.fromTarget(jdkVersion.toString())
-}
-
-tasks.test {
-    useJUnitPlatform()
-    jvmArgs("--enable-preview", "--add-modules", addModules.joinToString(","))
 }
 
 
@@ -173,11 +173,6 @@ val writeBuildIdFile by tasks.registering(WriteFile::class) {
     outputFile = layout.buildDirectory.file("generated/build-id/build-id")
 }
 
-val writeLocalesFile by tasks.registering(WriteFile::class) {
-    text = locales.joinToString("\n", transform = Locale::toLanguageTag)
-    outputFile = layout.buildDirectory.file("generated/locales/locales")
-}
-
 val writeCopyrightFile by tasks.registering(WriteFile::class) {
     text = copyright
     outputFile = layout.buildDirectory.file("generated/copyright/copyright")
@@ -185,22 +180,22 @@ val writeCopyrightFile by tasks.registering(WriteFile::class) {
 
 val drawSplash by tasks.registering(DrawSplash::class) {
     version = project.version.toString()
-    logoFile = srcMainResources.file("logo.svg")
+    logoFile = srcMainResources.file("branding/logo.svg")
     reguFontFile = srcMainResources.file("fonts/Titillium-RegularUpright.otf")
     semiFontFile = srcMainResources.file("fonts/Titillium-SemiboldUpright.otf")
     outputFile = layout.buildDirectory.file("generated/splash/splash.png")
 }
 
 val collectPOMLicenses by tasks.registering(CollectPOMLicenses::class) {
-    artifactIds =
-        configurations.runtimeClasspath.flatMap { it.incoming.artifacts.resolvedArtifacts }.map { it.map { a -> a.id } }
+    moduleComponentIds = configurations.runtimeClasspath
+        .flatMap { it.incoming.artifacts.resolvedArtifacts }
+        .map { it.mapNotNull { artifact -> artifact.id.componentIdentifier as? ModuleComponentIdentifier } }
     outputDir = layout.buildDirectory.dir("generated/licenses")
 }
 
 tasks.processResources {
     from(writeVersionFile)
     from(writeBuildIdFile)
-    from(writeLocalesFile)
     from(writeCopyrightFile)
     from(drawSplash)
     from("CHANGELOG.md")
@@ -225,7 +220,7 @@ tasks.processResources {
 }
 
 
-val platformNativesTasks = Platform.values().associateWith { platform ->
+val platformNativesTasks = Platform.entries.associateWith { platform ->
     tasks.register<Sync>("${platform.label}Natives") {
         // Collect all natives for the platform in a single directory.
         from(srcMainNatives(platform)) {
@@ -247,6 +242,7 @@ val platformNativesTasks = Platform.values().associateWith { platform ->
     }
 }
 
+// The platform this build is running on; used to pick the right add-opens for the fat jar.
 val testPlatform = when {
     System.getProperty("os.name").lowercase().contains("win") -> Platform.WINDOWS
     System.getProperty("os.name").lowercase().contains("mac") ->
@@ -254,16 +250,15 @@ val testPlatform = when {
     else -> Platform.LINUX
 }
 
-tasks.test {
-    dependsOn(platformNativesTasks.getValue(testPlatform))
-    jvmArgs(
-        "-Djava.library.path=${platformNativesTasks.getValue(testPlatform).get().destinationDir}",
-        "--enable-native-access=ALL-UNNAMED"
-    )
-}
 
-
-for (platform in Platform.values()) {
+run {
+    val os = System.getProperty("os.name").lowercase()
+    val platform = when {
+        os.startsWith("windows") -> Platform.WINDOWS
+        os.startsWith("mac") -> if (System.getProperty("os.arch") == "aarch64") Platform.MAC_ARM else Platform.MAC_X86
+        os.startsWith("linux") -> Platform.LINUX
+        else -> return@run
+    }
     val platformNatives = platformNativesTasks.getValue(platform)
     val mainClass_ = mainClass
     val platformAddOpens = addOpensFor(platform.os)
@@ -273,32 +268,41 @@ for (platform in Platform.values()) {
     val jvmArgs_ = listOf(
         "-Djava.library.path=${platformNatives.get().destinationDir}",
         "--add-modules", addModules.joinToString(",")
-    ) + splashJvmArgs + platformAddOpens.flatMap { listOf("--add-opens", "$it=ALL-UNNAMED") } + javaOptions.split(" ")
-    tasks.register<JavaExec>("runOn${platform.label.capitalized()}") {
+    ) + platformAddOpens.flatMap { listOf("--add-opens", "$it=ALL-UNNAMED") } + javaOptions.split(" ")
+
+    tasks.register<JavaExec>("run") {
         group = "Execution"
-        description = "Runs the program on ${platform.label.capitalized()}."
+        description = "Runs the program."
         dependsOn(platformNatives)
         classpath(sourceSets.main.map { it.runtimeClasspath })
         mainClass = mainClass_
-        jvmArgs = jvmArgs_
+        // The splash screen must stay off for headless command line renders, which have no display to show it on.
+        jvmArgs = jvmArgs_ + splashJvmArgs
     }
-    tasks.register<JavaExec>("runDemoOn${platform.label.capitalized()}") {
+
+    tasks.register<JavaExec>("runDemo") {
         group = "Execution"
-        description = "Runs the demo on ${platform.label.capitalized()}."
+        description = "Runs the demo."
         dependsOn(platformNatives)
         classpath(sourceSets.named("demo").map { it.runtimeClasspath })
         mainClass = "com.loadingbyte.cinecred.DemoMain"
         jvmArgs = jvmArgs_ + listOf("--add-opens", "java.desktop/javax.swing=ALL-UNNAMED")
     }
+
+    tasks.test {
+        useJUnitPlatform()
+        dependsOn(platformNatives)
+        jvmArgs = jvmArgs_
+    }
 }
 
 
-val drawOSImagesTasks = Platform.OS.values().associateWith { os ->
+val drawOSImagesTasks = Platform.OS.entries.associateWith { os ->
     // Draw the images that are needed for the OS.
     tasks.register<DrawImages>("draw${os.slug.capitalized()}Images") {
         version = project.version.toString()
         forOS = os
-        logoFile = srcMainResources.file("logo.svg")
+        emblemFile = srcMainResources.file("branding/emblem.svg")
         semiFontFile = srcMainResources.file("fonts/Titillium-SemiboldUpright.otf")
         boldFontFile = srcMainResources.file("fonts/Titillium-BoldUpright.otf")
         outputDir = layout.buildDirectory.dir("generated/packaging/${os.slug}")
@@ -307,11 +311,11 @@ val drawOSImagesTasks = Platform.OS.values().associateWith { os ->
 
 val writeAppStreamFile by tasks.registering(WriteAppStreamFile::class) {
     version = project.version.toString()
-    slogans = mainBundles.mapValues { it.getString("slogan") }
-    teasers = mainBundles.mapValues { it.getString("teaser") }
-    url = this@Build_gradle.url
-    vendor = this@Build_gradle.vendor
-    email = this@Build_gradle.email
+    summaries = mainBundles.mapValues { it.getString("slogan") }
+    descriptions = mainBundles.mapValues { it.getString("teaser") }
+    homepage = url
+    developer = vendor
+    updateContact = email
     categories = linuxCategories
     outputFile = layout.buildDirectory.file("generated/appStreamFile/cinecred.metainfo.xml")
 }
@@ -321,7 +325,7 @@ fun addOpensFor(os: Platform.OS): List<String> = addOpens.filterNot {
             it == "java.desktop/sun.awt.X11" && os != Platform.OS.LINUX
 }
 
-val preparePlatformPackagingTasks = Platform.values().map { platform ->
+val preparePlatformPackagingTasks = Platform.entries.map { platform ->
     // Collect all files needed for packaging in a folder.
     tasks.register<Sync>("prepare${platform.label.capitalized()}Packaging") {
         doFirst {
@@ -436,6 +440,12 @@ val checkoutHarfBuzz by tasks.registering(CheckoutGitRef::class) {
     repositoryDir = layout.buildDirectory.dir("repositories/harfbuzz")
 }
 
+val checkoutClipper by tasks.registering(CheckoutGitRef::class) {
+    uri = "https://github.com/AngusJohnson/Clipper2.git"
+    ref = clipperVersion
+    repositoryDir = layout.buildDirectory.dir("repositories/clipper")
+}
+
 val checkoutZimg by tasks.registering(CheckoutGitRef::class) {
     uri = "https://github.com/sekrit-twc/zimg.git"
     ref = zimgVersion
@@ -447,11 +457,18 @@ val checkoutZimg by tasks.registering(CheckoutGitRef::class) {
 val checkoutNFD by tasks.registering(CheckoutGitRef::class) {
     uri = "https://github.com/btzy/nativefiledialog-extended.git"
     ref = nfdVersion
-    patch = "/nfd.patch"
     repositoryDir = layout.buildDirectory.dir("repositories/nfd")
 }
 
-for (platform in Platform.values()) {
+for (platform in Platform.entries) {
+    tasks.register<BuildCLib>("buildCLibFor${platform.label.capitalized()}") {
+        group = "Native"
+        description = "Builds the CLib native library for ${platform.label.capitalized()}."
+        forPlatform = platform
+        clibDir = srcClibC
+        outputFile = srcMainNatives(platform).file(platform.os.codeLib("clib"))
+    }
+
     tasks.register<BuildSkia>("buildSkiaFor${platform.label.capitalized()}") {
         group = "Native"
         description = "Builds the Skia native library for ${platform.label.capitalized()}."
@@ -478,6 +495,15 @@ for (platform in Platform.values()) {
         outputFile = srcMainNatives(platform).file(platform.os.codeLib("harfbuzz"))
     }
 
+    tasks.register<BuildClipper>("buildClipperFor${platform.label.capitalized()}") {
+        group = "Native"
+        description = "Builds the Clipper native library for ${platform.label.capitalized()}."
+        forPlatform = platform
+        capiDir = srcClippercapiCpp
+        repositoryDir = checkoutClipper.flatMap { it.repositoryDir }
+        outputFile = srcMainNatives(platform).file(platform.os.codeLib("clipper"))
+    }
+
     tasks.register<BuildZimg>("buildZimgFor${platform.label.capitalized()}") {
         group = "Native"
         description = "Builds the zimg native library for ${platform.label.capitalized()}."
@@ -486,13 +512,13 @@ for (platform in Platform.values()) {
         outputFile = srcMainNatives(platform).file(platform.os.codeLib("zimg"))
     }
 
-    tasks.register<BuildNFD>("buildNFDFor${platform.label.capitalized()}") {
-        group = "Native"
-        description = "Builds the NFD native library for ${platform.label.capitalized()}."
-        forPlatform = platform
-        repositoryDir = checkoutNFD.flatMap { it.repositoryDir }
-        outputFile = srcMainNatives(platform).file(platform.os.codeLib("nfd"))
-    }
+    if (platform == Platform.LINUX)
+        tasks.register<BuildNFD>("buildNFDFor${platform.label.capitalized()}") {
+            group = "Native"
+            description = "Builds the NFD native library for ${platform.label.capitalized()}."
+            repositoryDir = checkoutNFD.flatMap { it.repositoryDir }
+            outputFile = srcMainNatives(platform).file(platform.os.codeLib("nfd"))
+        }
 
     tasks.register<BuildDeckLinkCAPI>("buildDeckLinkCAPIFor${platform.label.capitalized()}") {
         group = "Native"
@@ -501,6 +527,14 @@ for (platform in Platform.values()) {
         capiDir = srcDecklinkcapiCpp
         outputFile = srcMainNatives(platform).file(platform.os.codeLib("decklinkcapi"))
     }
+}
+
+tasks.register<Jextract>("jextractCLib") {
+    group = "Native"
+    description = "Extracts Java bindings for the CLib native library."
+    targetPackage = "com.loadingbyte.cinecred.natives.clib"
+    headerFile = srcClibC.file("clib.h")
+    outputDir = srcMainJava
 }
 
 tasks.register<Jextract>("jextractSkiaCAPI") {
@@ -515,6 +549,7 @@ tasks.register<Jextract>("jextractSkcms") {
     group = "Native"
     description = "Extracts Java bindings for skcms, which is part of the Skia native library."
     targetPackage = "com.loadingbyte.cinecred.natives.skcms"
+    addSkcmsIncludes()
     headerFile = checkoutSkia.flatMap { it.repositoryDir.file("modules/skcms/skcms.h") }
     outputDir = srcMainJava
 }
@@ -523,9 +558,18 @@ tasks.register<Jextract>("jextractHarfBuzz") {
     group = "Native"
     description = "Extracts Java bindings for the HarfBuzz native library."
     targetPackage = "com.loadingbyte.cinecred.natives.harfbuzz"
+    headerClassName = "hb_h"
     addHarfBuzzIncludes()
     includeDir = checkoutHarfBuzz.flatMap { it.repositoryDir.dir("src") }
-    headerFile = includeDir.map { it.file("hb.h") }
+    headerFile = includeDir.map { it.file("hb-subset.h") }
+    outputDir = srcMainJava
+}
+
+tasks.register<Jextract>("jextractClipperCAPI") {
+    group = "Native"
+    description = "Extracts Java bindings for the Clipper CAPI native library."
+    targetPackage = "com.loadingbyte.cinecred.natives.clippercapi"
+    headerFile = srcClippercapiCpp.file("clippercapi.h")
     outputDir = srcMainJava
 }
 
@@ -533,6 +577,7 @@ tasks.register<Jextract>("jextractZimg") {
     group = "Native"
     description = "Extracts Java bindings for the zimg native library."
     targetPackage = "com.loadingbyte.cinecred.natives.zimg"
+    addZimgIncludes()
     headerFile = checkoutZimg.flatMap { it.repositoryDir.file("src/zimg/api/zimg.h") }
     outputDir = srcMainJava
 }
@@ -541,6 +586,7 @@ tasks.register<Jextract>("jextractNFD") {
     group = "Native"
     description = "Extracts Java bindings for the NFD native library."
     targetPackage = "com.loadingbyte.cinecred.natives.nfd"
+    addNFDIncludes()
     headerFile = checkoutNFD.flatMap { it.repositoryDir.file("src/include/nfd.h") }
     outputDir = srcMainJava
 }
@@ -560,7 +606,9 @@ val srcMainResources get() = layout.projectDirectory.dir("src/main/resources")
 val srcMainNatives get() = layout.projectDirectory.dir("src/main/natives")
 fun srcMainNatives(platform: Platform) = srcMainNatives.dir(platform.slug)
 
+val srcClibC get() = layout.projectDirectory.dir("src/clib/c")
 val srcSkiacapiCpp get() = layout.projectDirectory.dir("src/skiacapi/cpp")
+val srcClippercapiCpp get() = layout.projectDirectory.dir("src/clippercapi/cpp")
 val srcDecklinkcapiCpp get() = layout.projectDirectory.dir("src/decklinkcapi/cpp")
 
 val mainBundles: Provider<Map<Locale, ResourceBundle>> = provider {

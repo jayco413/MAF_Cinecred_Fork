@@ -1,13 +1,13 @@
 package com.loadingbyte.cinecred.projectio
 
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.common.Severity.MIGRATE
-import com.loadingbyte.cinecred.common.Severity.WARN
+import com.loadingbyte.cinecred.common.Severity.*
 import com.loadingbyte.cinecred.project.Style
 import com.loadingbyte.cinecred.project.StyleSetting
 
 
 data class ParserMsg(
+    val fileName: String?,
     val spreadsheetName: String?,
     val recordNo: Int?,
     val colHeader: String?,
@@ -25,8 +25,8 @@ data class MigrationDataSource<S : Style>(
 
 
 class Table(
+    val fileName: String,
     val spreadsheet: Spreadsheet,
-    private val l10nPrefix: String,
     l10nColNames: List<String>,
     legacyColNames: Map<String, List<String>>
 ) {
@@ -48,7 +48,7 @@ class Table(
             headerRecord = emptyList()
             bodyRecords = emptyList()
             colMap = emptyMap()
-            log += ParserMsg(spreadsheet.name, null, null, null, WARN, l10n("projectIO.table.noHeader"))
+            log += ParserMsg(fileName, spreadsheet.name, null, null, null, ERROR, l10n("projectIO.table.noHeader"))
         } else {
             headerRecord = spreadsheet[headerRecordNo].cells.map { it.trim() }
 
@@ -65,8 +65,7 @@ class Table(
             colMap = HashMap()
             outer@
             for (l10nColName in l10nColNames) {
-                val key = "$l10nPrefix$l10nColName"
-                val possibleColNames = TRANSLATED_LOCALES.map { "@${l10n(key, it)}" }
+                val possibleColNames = TRANSLATED_LOCALES.map { "@${l10nKeyword(l10nColName, it)}" }
                 for (colName in possibleColNames) {
                     val col = headerRecord.indexOfFirst { ROOT_CASE_INSENSITIVE_COLLATOR.equals(it, colName) }
                     if (col != -1) {
@@ -75,7 +74,7 @@ class Table(
                     }
                 }
                 // Prepare the column name which will be shown in a warning message.
-                val colName = "@${l10n(key)}"
+                val colName = "@${l10nKeyword(l10nColName)}"
                 // The column might be missing, but first look for a legacy column name. Emit a warning if we find one.
                 val possibleLegacyColNames = legacyColNames.getOrDefault(l10nColName, emptyList())
                     .filterNot(possibleColNames::contains).map { "@$it" }
@@ -84,36 +83,36 @@ class Table(
                     if (col != -1) {
                         colMap[l10nColName] = col
                         val msg = l10n("projectIO.table.migration.renameColumn", "<i>$colName</i>")
-                        log += ParserMsg(spreadsheet.name, headerRecordNo, legacyColName, null, MIGRATE, msg)
+                        log += ParserMsg(fileName, spreadsheet.name, headerRecordNo, legacyColName, null, MIGRATE, msg)
                         continue@outer
                     }
                 }
                 // The column is missing. Emit a warning.
                 val msg = l10n("projectIO.table.migration.addColumn")
-                log += ParserMsg(spreadsheet.name, headerRecordNo, colName, null, MIGRATE, msg)
+                log += ParserMsg(fileName, spreadsheet.name, headerRecordNo, colName, null, MIGRATE, msg)
             }
 
             // 2. Emit a warning for each unexpected column name.
             for ((col, colName) in headerRecord.withIndex())
                 if (colName.isNotEmpty() && col !in colMap.values) {
                     val msg = l10n("projectIO.table.unexpectedColumn")
-                    log += ParserMsg(spreadsheet.name, headerRecordNo, colName, null, WARN, msg)
+                    log += ParserMsg(fileName, spreadsheet.name, headerRecordNo, colName, null, WARN, msg)
                 }
         }
     }
 
     fun log(row: Int?, l10nColName: String?, severity: Severity, msg: String, mds: MigrationDataSource<*>? = null) {
-        val colName = l10nColName?.let { getColHeader(it) ?: ("@" + l10n(l10nPrefix + l10nColName)) }
+        val colName = l10nColName?.let { getColHeader(it) ?: ("@" + l10nKeyword(l10nColName)) }
         val cellValue = if (row != null && l10nColName != null) getString(row, l10nColName) else null
-        log += ParserMsg(spreadsheet.name, row?.let(::getRecordNo), colName, cellValue, severity, msg, mds)
+        log += ParserMsg(fileName, spreadsheet.name, row?.let(::getRecordNo), colName, cellValue, severity, msg, mds)
     }
 
     fun logMigrationPut(row: Int?, l10nColName: String?, value: String, mds: MigrationDataSource<*>? = null) {
         log(row, l10nColName, MIGRATE, l10n("projectIO.table.migration.put", l10nQuoted(value)), mds)
     }
 
-    private fun getRecordNo(row: Int): Int = bodyRecords[row].recordNo
-    private fun getColHeader(l10ColName: String): String? = colMap[l10ColName]?.let(headerRecord::get)
+    fun getRecordNo(row: Int): Int = bodyRecords[row].recordNo
+    fun getColHeader(l10ColName: String): String? = colMap[l10ColName]?.let(headerRecord::get)
 
     fun isEmpty(row: Int, l10nColName: String): Boolean =
         colMap[l10nColName]?.let { col -> bodyRecords[row].cells.getOrNull(col).isNullOrBlank() } != false
@@ -129,13 +128,6 @@ class Table(
         }
         // If the column is present but the cell is empty, or if the column is missing in the table, return null.
         return null
-    }
-
-    fun <T> getLookup(row: Int, l10nColName: String, map: Map<String, T>, l10Warning: String, fallback: T? = null): T? {
-        val str = getString(row, l10nColName) ?: return null
-        map[str]?.let { return it }
-        log(row, l10nColName, WARN, l10n(l10Warning, "<i>${l10nEnum(map.keys)}</i>"))
-        return fallback
     }
 
 }

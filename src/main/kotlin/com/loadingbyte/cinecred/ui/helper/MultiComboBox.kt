@@ -37,7 +37,7 @@ class MultiComboBox<E : Any>(
 
     private val selectionLabel = JLabel(this.placeholder)
     private val arrowButton = CustomArrowButton()
-    private val popup = DropdownPopupMenu(this)
+    private val popup = DropdownPopupMenu()
     private val overflowSeparator = JSeparator()
 
     private var hover = false
@@ -76,7 +76,7 @@ class MultiComboBox<E : Any>(
                 if (isEnabled && SwingUtilities.isLeftMouseButton(e)) {
                     if (isRequestFocusEnabled)
                         requestFocusInWindow()
-                    popup.toggle()
+                    popup.toggle(this@MultiComboBox)
                 }
             }
         }

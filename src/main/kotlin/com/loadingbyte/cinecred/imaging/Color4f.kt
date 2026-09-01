@@ -9,6 +9,7 @@ data class Color4f(val r: Float, val g: Float, val b: Float, val a: Float, val c
 
     init {
         require(a in 0f..1f) { "Alpha must be between 0 and 1, so $a is out of bounds." }
+        requireNotNull(colorSpace.primaries) { "Color space must have primaries." }
     }
 
     constructor(r: Float, g: Float, b: Float, colorSpace: ColorSpace) : this(r, g, b, 1f, colorSpace)
@@ -70,12 +71,16 @@ data class Color4f(val r: Float, val g: Float, val b: Float, val a: Float, val c
     companion object {
 
         val BLACK = fromSRGBHexString("#000000")
-        val WHITE = fromSRGBHexString("#FFFFFF")
         val GRAY = fromSRGBHexString("#808080")
+        val LIGHT_GRAY = fromSRGBHexString("#C0C0C0")
+        val WHITE = fromSRGBHexString("#FFFFFF")
+        val RED = fromSRGBHexString("#FF0000")
+        val GREEN = fromSRGBHexString("#00FF00")
         val ORANGE = fromSRGBHexString("#FFC800")
 
         val MISSING_MEDIA_TOP = fromSRGBHexString("#E44244")
         val MISSING_MEDIA_BOT = fromSRGBHexString("#5B171F")
+        val TAPE_PREVIEW = Color4f(1f, 1f, 1f, 0.3f, ColorSpace.SRGB)
 
         fun fromHSB(h: Float, s: Float, b: Float, colorSpace: ColorSpace): Color4f =
             if (s == 0f)

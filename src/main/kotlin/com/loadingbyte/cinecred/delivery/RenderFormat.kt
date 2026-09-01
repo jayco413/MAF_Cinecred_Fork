@@ -1,7 +1,6 @@
 package com.loadingbyte.cinecred.delivery
 
 import com.loadingbyte.cinecred.common.Resolution
-import com.loadingbyte.cinecred.imaging.Bitmap
 import com.loadingbyte.cinecred.imaging.Bitmap.YUVCoefficients.Companion.BT2020_CL
 import com.loadingbyte.cinecred.imaging.Bitmap.YUVCoefficients.Companion.BT2020_NCL
 import com.loadingbyte.cinecred.imaging.Bitmap.YUVCoefficients.Companion.BT709_NCL
@@ -11,6 +10,7 @@ import com.loadingbyte.cinecred.imaging.BitmapWriter.*
 import com.loadingbyte.cinecred.imaging.ColorSpace
 import com.loadingbyte.cinecred.imaging.DeferredImage
 import com.loadingbyte.cinecred.imaging.DeferredVideo
+import com.loadingbyte.cinecred.project.Scan
 import com.loadingbyte.cinecred.project.Styling
 import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.persistentHashMapOf
@@ -25,6 +25,7 @@ abstract class RenderFormat(
     val fileExts: Set<String>,
     val defaultFileExt: String,
     configAssortment: Config.Assortment,
+    val isRaster: Boolean = false,
     val widthMod: Int = 1,
     val heightMod: Int = 1,
     val minWidth: Int? = null,
@@ -35,7 +36,9 @@ abstract class RenderFormat(
     val defaultConfig: Config = configAssortment.defaultConfig
 
     init {
-        require(defaultFileExt in fileExts)
+        require(defaultFileExt in fileExts) {
+            "Render format $label: default file ext $defaultFileExt not in available file exts $fileExts."
+        }
     }
 
     fun <T> options(property: Property<T>, baseConfig: Config, baseDiscard: Collection<Property<*>>): SequencedSet<T> {
@@ -81,7 +84,7 @@ abstract class RenderFormat(
             val YUV = Property(BT709_NCL, SRGB_NCL, BT2020_NCL, BT2020_CL, ICTCP, default = BT709_NCL)
             val HDR = Property(false, true, default = false)
             val DEPTH = Property(8, default = 8)
-            val SCAN = Property(*Bitmap.Scan.values(), default = Bitmap.Scan.PROGRESSIVE)
+            val SCAN = Property(*Scan.values(), default = Scan.PROGRESSIVE)
             val TIFF_COMPRESSION = Property(*TIFF.Compression.values(), default = TIFF.Compression.DEFLATE)
             val DPX_COMPRESSION = Property(*DPX.Compression.values(), default = DPX.Compression.NONE)
             val EXR_COMPRESSION = Property(*EXR.Compression.values(), default = EXR.Compression.ZIP)
@@ -183,6 +186,7 @@ abstract class RenderFormat(
     }
 
 
-    class Sliders(val resolution: Resolution?)
+    class Sliders(val resolution: Resolution?, val slate: Slate?)
+    class Slate(val title: String)
 
 }

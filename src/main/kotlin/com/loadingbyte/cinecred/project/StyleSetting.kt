@@ -4,21 +4,27 @@ import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.toPersistentList
 import java.lang.reflect.Constructor
 import java.lang.reflect.ParameterizedType
+import java.util.*
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
 
 
-private val settingsCache = HashMap<Class<*>, List<StyleSetting<*, *>>>()
-private val constructorCache = HashMap<Class<*>, Constructor<*>>()
+private val settingsCache = ConcurrentHashMap<Class<*>, List<StyleSetting<*, *>>>()
+private val constructorCache = ConcurrentHashMap<Class<*>, Constructor<*>>()
 
 fun <S : Style> getStyleSettings(styleClass: Class<S>): List<StyleSetting<S, *>> {
     val cached = settingsCache[styleClass]
     return if (cached == null)
         styleClass.declaredFields
-            .map { field ->
+            .mapNotNull { field ->
                 when {
+                    Style::identity.name == field.name ->
+                        null
                     Opt::class.java == field.type ->
                         ReflectedOptStyleSetting(styleClass, field.name)
+                    Override::class.java == field.type ->
+                        ReflectedOverrideStyleSetting(styleClass, field.name)
                     PersistentList::class.java.isAssignableFrom(field.type) ->
                         ReflectedListStyleSetting(styleClass, field.name)
                     else ->
@@ -38,6 +44,9 @@ fun <S : Style, SUBJ : Any> KProperty1<S, SUBJ>.st(): DirectStyleSetting<S, SUBJ
 fun <S : Style, SUBJ : Any> KProperty1<S, Opt<SUBJ>>.st(): OptStyleSetting<S, SUBJ> =
     KProperty1OptStyleSetting(this)
 
+fun <S : Style, SUBJ : Any> KProperty1<S, Override<SUBJ>>.st(): OverrideStyleSetting<S, SUBJ> =
+    KProperty1OverrideStyleSetting(this)
+
 fun <S : Style, SUBJ : Any> KProperty1<S, PersistentList<SUBJ>>.st(): ListStyleSetting<S, SUBJ> =
     KProperty1ListStyleSetting(this)
 
@@ -55,18 +64,25 @@ fun <S : Style> S.copy(notarizedSettingValues: List<NotarizedStyleSettingValue<i
         val notarized = notarizedSettingValues.find { (it as NotarSetImpl).setting == setting }
         if (notarized != null) (notarized as NotarSetImpl).settingValue else setting.get(this)
     }
-    return javaClass.cast(getStyleConstructor(javaClass, settings.size).newInstance(*constructorArgs))
+    return javaClass.cast(getStyleConstructor(javaClass, settings.size).newInstance(identity, *constructorArgs))
 }
 
-fun <S : Style> newStyleUnsafe(styleClass: Class<S>, settingValues: List<*>): S =
-    styleClass.cast(getStyleConstructor(styleClass, settingValues.size).newInstance(*settingValues.toTypedArray()))
+fun <S : Style> newStyleUnsafe(styleClass: Class<S>, identity: UUID, settingValues: List<*>): S =
+    styleClass.cast(
+        getStyleConstructor(styleClass, settingValues.size).newInstance(identity, *settingValues.toTypedArray())
+    )
 
 
+/**
+ * Resolves the canonical constructor of a style class. We cannot just use `constructors[0]` because style classes
+ * with default parameter values (e.g., [Layer]'s flashing text settings) additionally expose a synthetic constructor,
+ * and the JVM does not guarantee any particular ordering. The canonical one takes the identity plus all settings.
+ */
 private fun <S : Style> getStyleConstructor(styleClass: Class<S>, settingCount: Int): Constructor<*> =
     constructorCache.getOrPut(styleClass) {
-        styleClass.declaredConstructors.singleOrNull { !it.isSynthetic && it.parameterCount == settingCount }
+        styleClass.declaredConstructors.singleOrNull { !it.isSynthetic && it.parameterCount == settingCount + 1 }
             ?: throw IllegalStateException(
-                "No non-synthetic constructor with $settingCount parameters found for ${styleClass.name}."
+                "No non-synthetic constructor with ${settingCount + 1} parameters found for ${styleClass.name}."
             )
     }
 
@@ -84,6 +100,7 @@ sealed class StyleSetting<S : Style, SUBJ : Any>(styleClass: Class<S>, val name:
     val type: Class<SUBJ>
 
     init {
+        require(name != Style::identity.name)
         var baseType = declaringClass.getGetter(name).genericReturnType
         if (isNested)
             baseType = (baseType as ParameterizedType).actualTypeArguments[0]
@@ -109,11 +126,8 @@ sealed class StyleSetting<S : Style, SUBJ : Any>(styleClass: Class<S>, val name:
     override fun equals(other: Any?) =
         this === other || other is StyleSetting<*, *> && declaringClass == other.declaringClass && name == other.name
 
-    override fun hashCode(): Int {
-        var result = declaringClass.hashCode()
-        result = 31 * result + name.hashCode()
-        return result
-    }
+    override fun hashCode() =
+        31 * declaringClass.hashCode() + name.hashCode()
 
     override fun toString() =
         "StyleSetting(${declaringClass.simpleName}.$name: ${type.simpleName})"
@@ -137,6 +151,16 @@ abstract class OptStyleSetting<S : Style, SUBJ : Any>(styleClass: Class<S>, name
     override fun extractSubjects(style: S): List<SUBJ> = get(style).run { if (isActive) listOf(value) else emptyList() }
     override fun repackSubjects(subjects: List<SUBJ>): NotarizedStyleSettingValue<S> =
         notarize(Opt(isActive = true, subjects.single()))
+}
+
+
+abstract class OverrideStyleSetting<S : Style, SUBJ : Any>(styleClass: Class<S>, name: String) :
+    StyleSetting<S, SUBJ>(styleClass, name, isNested = true) {
+    abstract override fun get(style: S): Override<SUBJ>
+    fun notarize(settingValue: Override<SUBJ>): NotarizedStyleSettingValue<S> = NotarSetImpl(this, settingValue)
+    override fun extractSubjects(style: S): List<SUBJ> = get(style).run { value?.let(::listOf) ?: emptyList() }
+    override fun repackSubjects(subjects: List<SUBJ>): NotarizedStyleSettingValue<S> =
+        notarize(Override(subjects.single()))
 }
 
 
@@ -164,6 +188,13 @@ private class ReflectedOptStyleSetting<S : Style>(styleClass: Class<S>, name: St
 }
 
 
+private class ReflectedOverrideStyleSetting<S : Style>(styleClass: Class<S>, name: String) :
+    OverrideStyleSetting<S, Any>(styleClass, name) {
+    private val getter = styleClass.getGetter(name)
+    override fun get(style: S): Override<Any> = getter.invoke(style) as Override<Any>
+}
+
+
 private class ReflectedListStyleSetting<S : Style>(styleClass: Class<S>, name: String) :
     ListStyleSetting<S, Any>(styleClass, name) {
     private val getter = styleClass.getGetter(name)
@@ -181,6 +212,12 @@ private class KProperty1DirectStyleSetting<S : Style, SUBJ : Any>(private val kP
 private class KProperty1OptStyleSetting<S : Style, SUBJ : Any>(private val kProp: KProperty1<S, Opt<SUBJ>>) :
     OptStyleSetting<S, SUBJ>(kProp.getOwnerClass(), kProp.name) {
     override fun get(style: S): Opt<SUBJ> = kProp.get(style)
+}
+
+
+private class KProperty1OverrideStyleSetting<S : Style, SUBJ : Any>(private val kProp: KProperty1<S, Override<SUBJ>>) :
+    OverrideStyleSetting<S, SUBJ>(kProp.getOwnerClass(), kProp.name) {
+    override fun get(style: S): Override<SUBJ> = kProp.get(style)
 }
 
 

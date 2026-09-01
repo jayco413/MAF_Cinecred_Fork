@@ -7,6 +7,14 @@ package com.loadingbyte.cinecred.common
  */
 
 
+fun String.removeAnySuffix(suffixes: Iterable<String>, ignoreCase: Boolean = false): String {
+    for (suffix in suffixes)
+        if (endsWith(suffix, ignoreCase))
+            return dropLast(suffix.length)
+    return this
+}
+
+
 inline fun FloatArray.allBetween(startIdx: Int, endIdx: Int, predicate: (Float) -> Boolean): Boolean {
     for (idx in startIdx..<endIdx)
         if (!predicate(this[idx]))
@@ -37,16 +45,19 @@ fun IntArray.sumBetween(startIdx: Int, endIdx: Int): Int {
 }
 
 
-inline fun List<Int>.mapToIntArray(transform: (Int) -> Int): IntArray =
+inline fun <T> List<T>.mapToIntArray(transform: (T) -> Int): IntArray =
     IntArray(size) { i -> transform(this[i]) }
 
-inline fun List<Double>.mapToDoubleArray(transform: (Double) -> Double): DoubleArray =
+inline fun <T> List<T>.mapToDoubleArray(transform: (T) -> Double): DoubleArray =
     DoubleArray(size) { i -> transform(this[i]) }
 
 
 inline fun <R> IntArray.flatMapToSequence(crossinline transform: (Int) -> Iterable<R>): Sequence<R> =
     sequence { for (e in this@flatMapToSequence) yieldAll(transform(e)) }
 
+
+inline fun DoubleArray.mapToFloatArray(transform: (Double) -> Float): FloatArray =
+    FloatArray(size) { i -> transform(this[i]) }
 
 inline fun DoubleArray.mapToArray(transform: (Double) -> Double): DoubleArray =
     DoubleArray(size) { i -> transform(this[i]) }

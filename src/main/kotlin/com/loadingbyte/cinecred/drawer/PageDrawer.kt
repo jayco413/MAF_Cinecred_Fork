@@ -4,6 +4,7 @@ import com.loadingbyte.cinecred.common.Resolution
 import com.loadingbyte.cinecred.common.formatTimecode
 import com.loadingbyte.cinecred.imaging.DeferredImage
 import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.GUIDES
+import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.imaging.FormattedString
 import com.loadingbyte.cinecred.imaging.Y
 import com.loadingbyte.cinecred.imaging.Y.Companion.toY
@@ -11,7 +12,6 @@ import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.project.PageBehavior.CARD
 import com.loadingbyte.cinecred.project.PageBehavior.SCROLL
 import kotlinx.collections.immutable.toPersistentList
-import java.awt.Font
 import java.awt.geom.Path2D
 import java.util.*
 import javax.swing.UIManager
@@ -21,11 +21,9 @@ import kotlin.math.*
 private class StageLayout(val y: Y, val info: DrawnStageInfo)
 
 
-fun drawPages(project: Project, credits: Credits): List<DrawnPage> {
-    val styling = project.styling
+fun drawPages(styling: Styling, credits: Credits): Pair<List<DrawnPage>, List<RuntimeGroup?>> {
     val global = styling.global
 
-    require(credits in project.credits)
     val pages = credits.pages
     val runtimeGroups = credits.runtimeGroups
 
@@ -51,22 +49,26 @@ fun drawPages(project: Project, credits: Credits): List<DrawnPage> {
         }
 
     // If requested, adjust some vertical gaps to best match a specified runtime.
-    if (runtimeGroups.isNotEmpty() || global.runtimeFrames.isActive) {
+    var crushedRuntimeGroups: List<RuntimeGroup?> = emptyList()
+    if (runtimeGroups.isNotEmpty() || global.runtimeFrames.value != null) {
         // Run a first layout pass to determine how many frames each scrolling stage will scroll for.
         val prelimStageLayouts = HashMap<Stage, StageLayout>()
         for (page in pages)
             prelimStageLayouts.putAll(layoutStages(global.resolution, drawnStages, page, shrinkRamps = false).second)
         // Use that information to scale the vertical gaps.
-        drawnStages = matchRuntime(global, pages, drawnStages, prelimStageLayouts, runtimeGroups)
+        matchRuntime(global, pages, drawnStages, prelimStageLayouts, runtimeGroups)
+            .let { (ds, cg) -> drawnStages = ds; crushedRuntimeGroups = cg }
     }
 
     // Finally, do the real layout pass with potentially changed stage images and combine the stage images
     // to page images.
-    return pages.map { page ->
+    val drawnPages = pages.map { page ->
         val (pageImageHeight, stageLayouts) = layoutStages(global.resolution, drawnStages, page, shrinkRamps = true)
         val pageImage = drawPage(global, drawnStages, stageLayouts, page, pageImageHeight)
         DrawnPage(page, pageImage, stageLayouts.values.map(StageLayout::info).toPersistentList())
     }
+
+    return Pair(drawnPages, crushedRuntimeGroups)
 }
 
 
@@ -110,7 +112,7 @@ private fun layoutStages(
     //   - If it's a scroll stage:
     //       - The y coordinates in the overall page image that are at the center of the screen when the scrolling of
     //         this stage starts respectively stops, and if necessary the points where the speed ramps start and stop.
-    //       - Recall that scroll stages can scroll into melted card stages. As such, these coordinates can lie inside
+    //       - Recall that scroll stages can scroll into fused card stages. As such, these coordinates can lie inside
     //         of card stages. For some purposes however, we need the portion of the scrolled height which is truly
     //         occupied by the scroll stage.
     //       - The number of frames that make up the scroll, split into the steady and ramp components.
@@ -128,12 +130,12 @@ private fun layoutStages(
                 val scrollStartY = when (prevStageBehavior) {
                     CARD -> stageRanges[stageIdx - 1].top + drawnStages.getValue(prevStage).middleYInImage!!
                     null -> topY - resolution.heightPx / 2.0
-                    SCROLL -> throw IllegalStateException("Scroll stages can't be melted back to back.")
+                    SCROLL -> throw IllegalStateException("Scroll stages can't be fused back to back.")
                 }
                 val scrollStopY = when (nextStageBehavior) {
                     CARD -> stageRanges[stageIdx + 1].top + drawnStages.getValue(nextStage).middleYInImage!!
                     null -> botY + resolution.heightPx / 2.0
-                    SCROLL -> throw IllegalStateException("Scroll stages can't be melted back to back.")
+                    SCROLL -> throw IllegalStateException("Scroll stages can't be fused back to back.")
                 }
                 // Find the height of the start/stop speed ramps if those are configured.
                 var startRampHeight = 0.0
@@ -157,7 +159,7 @@ private fun layoutStages(
                     stopRampHeight -= stopRampHeight / rampHeights * fix
                 }
                 // Find the portion of the scrolled height which really belongs to the scroll stage itself. If you are
-                // confused, recall that scroll stages can scroll into melted card stages.
+                // confused, recall that scroll stages can scroll into fused card stages.
                 val ownedScrollStartY = if (prevStageBehavior == CARD) topY else scrollStartY
                 val ownedScrollStopY = if (nextStageBehavior == CARD) botY else scrollStopY
                 val ownedScrollHeight = ownedScrollStopY - ownedScrollStartY
@@ -203,7 +205,7 @@ private fun matchRuntime(
     drawnStages: Map<Stage, DrawnStage>,
     stageLayouts: Map<Stage, StageLayout>,
     runtimeGroups: List<RuntimeGroup>
-): MutableMap<Stage, DrawnStage> {
+): Pair<MutableMap<Stage, DrawnStage>, List<RuntimeGroup?>> {
     // Prepare two maps which enable simple access to the two stages before and after any scroll stage.
     val prevStages = HashMap<Stage, Stage>()
     val nextStages = HashMap<Stage, Stage>()
@@ -244,15 +246,16 @@ private fun matchRuntime(
     }
 
     // Preprocess all user-defined runtime groups accordingly.
+    val userGroupLookup = HashMap<RuntimeGroup, RuntimeGroup?>()
     for (group in runtimeGroups)
-        addGroup(group.stages, group.runtimeFrames)
+        addGroup(group.stages, group.runtimeFrames)?.also { userGroupLookup[it] = group }
 
     // If the global desired runtime is activated, add a runtime group with all remaining stages not covered by
     // user-defined runtime groups.
     var globalGroup: RuntimeGroup? = null
     var globalGroupFrames = 0
     val remStages = buildList { for (p in pages) for (s in p.stages) if (runtimeGroups.none { s in it.stages }) add(s) }
-    if (global.runtimeFrames.isActive) {
+    if (global.runtimeFrames.value != null) {
         // Subtract the blank first and last frames, the desired runtime of the user-defined runtime groups, and the
         // runtime in between pages from the desired global runtime to obtain the desired runtime of the new group.
         globalGroupFrames = global.runtimeFrames.value -
@@ -260,16 +263,16 @@ private fun matchRuntime(
                 (if (global.blankLastFrame) 1 else 0) -
                 runtimeGroups.sumOf(RuntimeGroup::runtimeFrames) -
                 pages.subList(0, pages.size - 1).sumOf(Page::gapAfterFrames)
-        globalGroup = addGroup(remStages, globalGroupFrames)
+        globalGroup = addGroup(remStages, globalGroupFrames)?.also { userGroupLookup[it] = null }
     }
 
     // Run the runtime matching.
-    val (adjustedDrawnStages, shortfall) =
+    val (adjustedDrawnStages1, crushedGroups1, shortfall) =
         matchRuntime(pages, drawnStages, stageLayouts, prevStages, nextStages, shrinkGroups, expandGroups)
     // If there is no global runtime adjustment happening (either because it is deactivated or because there are no
     // scroll stages remaining), or if all runtimes were matched perfectly, return the result
     if (globalGroup == null || shortfall == 0)
-        return adjustedDrawnStages
+        return Pair(adjustedDrawnStages1, crushedGroups1.apply { replaceAll(userGroupLookup::get) })
 
     // If we are here, shortfall is non-zero, which means that some stages did not exactly attain their desired runtime.
     // Apart from some very rare situations where an exact match is impossible, this means that some runtime groups have
@@ -279,7 +282,9 @@ private fun matchRuntime(
     shrinkGroups.remove(globalGroup)
     expandGroups.remove(globalGroup)
     addGroup(remStages, globalGroupFrames + shortfall)
-    return matchRuntime(pages, drawnStages, stageLayouts, prevStages, nextStages, shrinkGroups, expandGroups).first
+    val (adjustedDrawnStages2, crushedGroups2) =
+        matchRuntime(pages, drawnStages, stageLayouts, prevStages, nextStages, shrinkGroups, expandGroups)
+    return Pair(adjustedDrawnStages2, crushedGroups2.apply { replaceAll(userGroupLookup::get) })
 }
 
 
@@ -291,8 +296,8 @@ private fun matchRuntime(
     nextStages: Map<Stage, Stage>,
     shrinkGroups: Set<RuntimeGroup>,
     expandGroups: Set<RuntimeGroup>
-): Pair<MutableMap<Stage, DrawnStage>, Int> {
-    // Naturally, we do not modify the vertical gaps of standalone cards. Further, we only adjust the gaps of a melted
+): Triple<MutableMap<Stage, DrawnStage>, MutableList<RuntimeGroup?>, Int> {
+    // Naturally, we do not modify the vertical gaps of standalone cards. Further, we only adjust the gaps of a fused
     // card if it either borders exactly one scroll stage (in which case it is basically treated exactly the same as the
     // scroll stage) or if it borders two scroll stages which both need to shrink or both need to expand (in which case
     // the card will shrink/expand as far as the more modest of the two scroll stages).
@@ -305,9 +310,9 @@ private fun matchRuntime(
                 operator fun Iterable<RuntimeGroup>.contains(stage: Stage) = any { stage in it.stages }
                 val prevStage = page.stages.getOrNull(cardIdx - 1)
                 val nextStage = page.stages.getOrNull(cardIdx + 1)
-                if (// Case 1: The card is standalone and not melted with any scroll stage.
+                if (// Case 1: The card is standalone and not fused with any scroll stage.
                     prevStage == null && nextStage == null ||
-                    // Case 2: The card is melted on both sides, and the scrolls on both sides must neither both shrink
+                    // Case 2: The card is fused on both sides, and the scrolls on both sides must neither both shrink
                     //         nor both expand.
                     prevStage != null && nextStage != null &&
                     (prevStage !in shrinkGroups || nextStage !in shrinkGroups) &&
@@ -322,10 +327,11 @@ private fun matchRuntime(
     // Now comes the real deal: for the groups which shrink and for those who expand separately, we collectively match
     // the desired runtime.
     val img = HashMap(drawnStages)
+    val cg = mutableListOf<RuntimeGroup?>()
     var shortfall = 0
-    shortfall += matchRuntimeInOneDir(stageLayouts, prevStages, nextStages, img, HashSet(shrinkGroups), frozenCards)
-    shortfall += matchRuntimeInOneDir(stageLayouts, prevStages, nextStages, img, HashSet(expandGroups), frozenCards)
-    return Pair(img, shortfall)
+    shortfall += matchRuntimeInOneDir(stageLayouts, prevStages, nextStages, img, HashSet(shrinkGroups), frozenCards, cg)
+    shortfall += matchRuntimeInOneDir(stageLayouts, prevStages, nextStages, img, HashSet(expandGroups), frozenCards, cg)
+    return Triple(img, cg, shortfall)
 }
 
 // Note: "direction" refers to either shrinking or expanding.
@@ -336,7 +342,8 @@ private fun matchRuntimeInOneDir(
     // Manipulated collections:
     drawnStages: MutableMap<Stage, DrawnStage>,
     groups: MutableSet<RuntimeGroup>,
-    frozenCards: MutableSet<Stage>
+    frozenCards: MutableSet<Stage>,
+    crushedGroups: MutableList<RuntimeGroup?>
 ): Int {
     // If the given card has not been frozen yet, this function first scales its vertical gaps and then freezes it
     // similar to before, i.e., makes the height of the card's image rigid.
@@ -449,6 +456,11 @@ private fun matchRuntimeInOneDir(
             nextStages[scroll]?.let { nextCard -> tryFreezeCard(nextCard, modestElasticScaling) }
         }
 
+        // If the group's desired runtime is so low that vertical gaps vanish completely, record the group to later
+        // inform the user.
+        if (modestElasticScaling == 0.0)
+            crushedGroups.add(modestGroup)
+
         // Record by how many frames the actually attained runtime diverges from the group's desired one. If there is a
         // divergence, it either stems from the very rare impossibilities outline above, or more likely from a group
         // which does not have enough vertical gaps to expend in order to fully attain a very low desired runtime.
@@ -472,10 +484,9 @@ private fun drawPage(
     val framesMargin = resolution.widthPx / 100.0
     fun drawFrames(frames: Int, y: Y) {
         val str = formatTimecode(global.fps, global.timecodeFormat, frames)
-        // Note: Obtaining a Font object for the bold monospaced font is a bit convoluted because the final object must
-        // not contain a font weight attribute, or else the FormattedString would complain.
-        val fontName = UIManager.getFont("monospaced.font").deriveFont(Font.BOLD).getFontName(Locale.ROOT)
-        val font = FormattedString.Font(Font(fontName, Font.PLAIN, 1), resolution.widthPx / 80.0)
+        val fontName = UIManager.getFont("monospaced.font").deriveFont(java.awt.Font.BOLD).getFontName(Locale.ROOT)
+        val fontObj = Font.system(fontName) ?: Font.bundled("Source Sans Pro Bold")!!
+        val font = FormattedString.Font(fontObj.case(), resolution.widthPx / 80.0)
         val coloring = FormattedString.Layer.Coloring.Plain(STAGE_GUIDE_COLOR)
         val layer = FormattedString.Layer(coloring, FormattedString.Layer.Shape.Text)
         val fmtStr = FormattedString.Builder(Locale.ROOT).apply {
@@ -500,9 +511,9 @@ private fun drawPage(
             )
             // If the card is an intermediate stage, also draw arrows that indicate that the card is intermediate.
             if (stageIdx != 0)
-                pageImage.drawMeltedCardArrowGuide(resolution, cardTopY)
+                pageImage.drawFusedCardArrowGuide(resolution, cardTopY)
             if (stageIdx != page.stages.lastIndex)
-                pageImage.drawMeltedCardArrowGuide(resolution, cardBotY)
+                pageImage.drawFusedCardArrowGuide(resolution, cardBotY)
             drawFrames(stage.cardRuntimeFrames, y = cardTopY + framesMargin)
         } else if (stageLayout.info is DrawnStageInfo.Scroll) {
             val y = when (val prevStageInfo = page.stages.getOrNull(stageIdx - 1)?.let(stageLayouts::getValue)?.info) {
@@ -520,7 +531,7 @@ private fun drawPage(
 }
 
 
-private fun DeferredImage.drawMeltedCardArrowGuide(resolution: Resolution, y: Y) {
+private fun DeferredImage.drawFusedCardArrowGuide(resolution: Resolution, y: Y) {
     val s = resolution.widthPx / 100.0
     val triangle = Path2D.Double().apply {
         moveTo(-0.5 * s, -0.45 * s)

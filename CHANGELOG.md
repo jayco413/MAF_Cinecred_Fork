@@ -2,6 +2,145 @@ Cinecred Changelog
 ==================
 
 
+1.9.1
+-----
+
+### Additions
+
+- The resampling filter for embedded pictures and videos is now configurable,
+  which is especially important for avoiding extreme ringing in HDR imagery.
+- Grayscale pictures and videos can now be embedded.
+- Added an optional 1-frame informational slate to exported videos.
+- Zooming the preview with the scroll wheel now zooms towards the mouse pointer.
+- Bug reports can now be submitted via a new button in the welcome window.
+
+### Fixes
+
+- CSV files where some rows have fewer columns than others are accepted again.
+- Spreadsheet files in subfolders are now reliably detected.
+- Lock files created by Excel are now properly ignored.
+- In newly created projects, gutter heads are now vertically centered again.
+- Fixed flashing of embedded videos which both loop and fade.
+- Fixed small vertical shifts when mixing interlaced and progressive video.
+- Fixed color shifts when exporting as SDR YUV while embedding HDR videos.
+- Fixed video export failing when an embedded video has odd height.
+- Fixed the occasional "exceeds source height" error during video export.
+- Fixed the "CFF" error during PDF export.
+
+### UI Fixes
+
+- The preview indicator for embedded videos now also works for Chinese.
+- Entering an illegal frame rate no longer causes a crash.
+- The letter style references in a content style are now overridable, defaulting
+  to the body letter style.
+- On Windows 10, dropdown menus no longer ignore the chosen item, and the native
+  file chooser and dark window header are once again displayed.
+
+
+1.9.0
+-----
+
+### Additions
+
+- The GUI is now made up of freely (un)dockable and rearrangeable panels.
+    - The new default layout packs all panels in a single big window, but the
+      old floating window layout is still available and can be again set as
+      default to restore the old behavior.
+    - Custom window layouts can be saved and later restored, or set as default.
+- Replaced spinners with the scrubby sliders known from other video software.
+- Any spreadsheet file in the project folder is now considered a credits file.
+  All of them are read in simultaneously and have their sheets presented as
+  isolated credits sequences.
+- The spreadsheet may now be hosted on Nextcloud or any other WebDAV server.
+- The column headers in the default spreadsheet now remain fixed when scrolling,
+  and the column descriptions have been moved into tooltips.
+- Manual newlines are now also supported in grid and flow body cells, as well as
+  in horizontal heads and tails. As such, they are now supported everywhere.
+    - When employing manual newlines, one can control in detail which body lines
+      should be aligned with each other, and which head or tail line should be
+      aligned with which body line.
+- When different fonts are used within the same grid or flow row, the text may
+  now be vertically justified in an arbitrary way, while previously it was just
+  being baseline-aligned.
+- Added buttons in the project settings to scale the resolution or frame rate,
+  and all relevant settings in all styles alongside them. This permits to, e.g.,
+  convert a 2K project to 4K or a 30fps project to 60fps after the fact.
+- Added support for variable fonts.
+- Added more natural Oklab interpolation of gradients, which is the new default.
+- Gradients can now have intermediate color stops.
+- Letter style dilation may now be negative.
+- Embedded pictures and videos may now be cropped, flipped, and rotated.
+- Embedded raster pictures may now have their blank space automatically cropped.
+- Embedded videos can now loop.
+- The levels, color space, alpha type, and interlacing of embedded videos may
+  now be overridden in case the metadata is wrong.
+- The preview resolution of embedded videos is now configurable.
+- After a short wait, the still preview now shows full-resolution thumbnails of
+  embedded videos.
+- The still preview may now be zoomed out further than the point of filling the
+  available width, which allows to view a large chunk of the credits at once.
+- The credits runtime can now be copied to the clipboard by clicking on it.
+- Overridable quantities like total runtime or picture width now continuously
+  update in the UI while they are not overridden.
+- If vertical gaps are fully crushed due to a runtime fine adjustment in the
+  styling or spreadsheet, a warning is now emitted.
+- Whole page exports now feature full-resolution thumbnails of embedded videos.
+- PDF exports now subset their embedded fonts, drastically reducing file size.
+- On Windows, installation is now also possible for individual non-admin users.
+- Added translations to Norwegian, European and Brazilian Portuguese, Russian,
+  and Ukrainian.
+
+### Fixes
+
+- Credits files with ungodly many rows or columns no longer cause a crash.
+- Duplicate spreadsheet names in credits files are now suffixed with, e.g., (2).
+- Upon swapping tabs in an XLSX file, they now also show up swapped in the UI.
+- Multi-line paragraphs whose letter styles have tracking now have line breaks
+  in the correct places.
+- Multi-line paragraphs with mixed left-to-right and right-to-left text now have
+  proper text order across all lines.
+- Text that is transformed to outside the original text box is no longer culled.
+- Enhanced the performance and robustness of the shape-manipulating letter style
+  settings, namely dilation, contour, clearing, and dashing.
+- Transparent layers that clone multiple other layers no longer have inflated
+  opacity where the cloned layers overlap.
+- Per-user fonts and Adobe Fonts are now detected.
+- JPEG pictures with an EXIF orientation tag are now properly rotated.
+- PNG image sequences with 8-bit palettes can now be ingested.
+- Embedded videos with chroma subsampling no longer prevent interlaced export.
+- Fixed SVG export alignment issues with text gradients and transformed text.
+- Exported PDFs no longer duplicate pictures, thereby reducing file size.
+- PDF export no longer inverts vertical shearing.
+- Video export no longer sometimes misplaces vertical chroma subsamples.
+- Timeline export no longer fails upon encountering an image sequence.
+- Adding an EtherCalc account no longer fails URL verification.
+
+### UI Fixes
+
+- The preview indicator for embedded videos is now high-res and less obnoxious.
+- The color picker now allows dragging the brightness even when in HDR mode.
+- Font features now show their human-readable name if available.
+- The video preview now updates the duration when switching between sheets.
+- The video preview no longer retains an afterimage upon exiting full screen.
+- In the video preview, fades and transparent embedded videos now play smoothly.
+- Repeatedly playing and pausing the video preview no longer causes a crash.
+- On Windows, maximizing a dialog or opening the full screen video preview no
+  longer leaves an area around it blank.
+- If Windows shuts down or the user logs off while there are unsaved changes or
+  running render jobs, the user is offered to cancel the shutdown. macOS already
+  had this feature.
+- On macOS, keyboard shortcuts now use the command key, and zooming supports it.
+- If the macOS file chooser freezes the entire program, another way of opening
+  the chooser, which hopefully doesn't, can now be selected in the preferences.
+
+### Compatibility Notes
+
+- The text layout engine has been replaced. While this should not lead to
+  noticeable differences in rendering, it might do in some edge cases.
+- Dropped support for dot leaders when the head or tail is vertically justified
+  with the "Overall Middle" of the body.
+
+
 1.8.1
 -----
 

@@ -1,10 +1,10 @@
 package com.loadingbyte.cinecred.project
 
-import com.loadingbyte.cinecred.common.CAPITAL_SPACING_FONT_FEAT
-import com.loadingbyte.cinecred.common.KERNING_FONT_FEAT
-import com.loadingbyte.cinecred.common.LIGATURES_FONT_FEATS
-import com.loadingbyte.cinecred.common.getSupportedFeatures
-import com.loadingbyte.cinecred.project.AppendageVShelve.OVERALL_MIDDLE
+import com.loadingbyte.cinecred.imaging.Bitmap
+import com.loadingbyte.cinecred.imaging.Font.Companion.CAPITAL_SPACING_FEATURE
+import com.loadingbyte.cinecred.imaging.Font.Companion.KERNING_FEATURE
+import com.loadingbyte.cinecred.imaging.Font.Companion.LIGATURES_FEATURES
+import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.project.BlockOrientation.HORIZONTAL
 import com.loadingbyte.cinecred.project.BlockOrientation.VERTICAL
 import com.loadingbyte.cinecred.project.BodyLayout.*
@@ -19,7 +19,7 @@ import com.loadingbyte.cinecred.project.PageBehavior.SCROLL
 
 @Suppress("UNCHECKED_CAST")
 fun <S : Style> getStyleEffectivitySpecs(styleClass: Class<S>): List<StyleEffectivitySpec<S>> = when (styleClass) {
-    Global::class.java -> GLOBAL_EFFECTIVITY_SPECS
+    Global::class.java -> emptyList()
     PageStyle::class.java -> PAGE_STYLE_EFFECTIVITY_SPECS
     ContentStyle::class.java -> CONTENT_STYLE_EFFECTIVITY_SPECS
     LetterStyle::class.java -> LETTER_STYLE_EFFECTIVITY_SPECS
@@ -29,9 +29,6 @@ fun <S : Style> getStyleEffectivitySpecs(styleClass: Class<S>): List<StyleEffect
     TapeStyle::class.java -> TAPE_STYLE_EFFECTIVITY_SPECS
     else -> throw IllegalArgumentException("${styleClass.name} is not a style class.")
 } as List<StyleEffectivitySpec<S>>
-
-
-private val GLOBAL_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Global>> = emptyList()
 
 
 private val PAGE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<PageStyle>> = listOf(
@@ -83,16 +80,19 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         ContentStyle::gridForceRowHeightPx.st(), ContentStyle::gridHarmonizeRowHeight.st(),
         ContentStyle::gridHarmonizeColWidthsAcrossStyles.st(), ContentStyle::gridHarmonizeColUnderoccupancy.st(),
         ContentStyle::gridHarmonizeRowHeightAcrossStyles.st(), ContentStyle::gridCellHJustifyPerCol.st(),
-        ContentStyle::gridCellVJustify.st(), ContentStyle::gridRowGapPx.st(), ContentStyle::gridColGapPx.st(),
+        ContentStyle::gridCellVJustify.st(), ContentStyle::gridTextVJustifyFragments.st(),
+        ContentStyle::gridTextVJustify.st(), ContentStyle::gridRowGapPx.st(), ContentStyle::gridColGapPx.st(),
         isTotallyIneffective = { _, style -> style.bodyLayout != GRID }
     ),
     StyleEffectivitySpec(
-        ContentStyle::flowDirection.st(), ContentStyle::flowLineHJustify.st(), ContentStyle::flowSquareCells.st(),
+        ContentStyle::flowDirection.st(), ContentStyle::flowRowHJustify.st(), ContentStyle::flowSquareCells.st(),
         ContentStyle::flowForceCellWidthPx.st(), ContentStyle::flowForceCellHeightPx.st(),
         ContentStyle::flowHarmonizeCellWidth.st(), ContentStyle::flowHarmonizeCellWidthAcrossStyles.st(),
         ContentStyle::flowHarmonizeCellHeight.st(), ContentStyle::flowHarmonizeCellHeightAcrossStyles.st(),
-        ContentStyle::flowCellHJustify.st(), ContentStyle::flowCellVJustify.st(), ContentStyle::flowLineWidthPx.st(),
-        ContentStyle::flowLineGapPx.st(), ContentStyle::flowHGapPx.st(), ContentStyle::flowSeparator.st(),
+        ContentStyle::flowCellHJustify.st(), ContentStyle::flowCellVJustify.st(),
+        ContentStyle::flowTextVJustifyFragments.st(), ContentStyle::flowTextVJustify.st(),
+        ContentStyle::flowRowWidthPx.st(), ContentStyle::flowRowGapPx.st(), ContentStyle::flowCellHGapPx.st(),
+        ContentStyle::flowSeparator.st(),
         ContentStyle::flowSeparatorLetterStyleName.st(), ContentStyle::flowSeparatorVJustify.st(),
         isTotallyIneffective = { _, style -> style.bodyLayout != FLOW }
     ),
@@ -104,7 +104,8 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
     StyleEffectivitySpec(
         ContentStyle::headLetterStyleName.st(), ContentStyle::headForceWidthPx.st(),
         ContentStyle::headHarmonizeWidth.st(), ContentStyle::headHarmonizeWidthAcrossStyles.st(),
-        ContentStyle::headHJustify.st(), ContentStyle::headVShelve.st(), ContentStyle::headVJustify.st(),
+        ContentStyle::headHJustify.st(), ContentStyle::headVJustifyBodyFragment.st(),
+        ContentStyle::headVJustifyHeadFragment.st(), ContentStyle::headVJustify.st(),
         ContentStyle::headGapPx.st(), ContentStyle::headLeader.st(),
         isTotallyIneffective = { _, style -> !style.hasHead }
     ),
@@ -113,13 +114,15 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         ContentStyle::headLeaderVJustify.st(), ContentStyle::headLeaderMarginLeftPx.st(),
         ContentStyle::headLeaderMarginRightPx.st(), ContentStyle::headLeaderSpacingPx.st(),
         isTotallyIneffective = { _, style ->
-            style.blockOrientation != HORIZONTAL || !style.hasHead || style.headLeader.isBlank()
+            style.blockOrientation != HORIZONTAL || !style.hasHead || !style.headVJustifyBodyFragment.isLine ||
+                    style.headVJustifyHeadFragment == VTextFragment.ALL_LINES || style.headLeader.isBlank()
         }
     ),
     StyleEffectivitySpec(
         ContentStyle::tailLetterStyleName.st(), ContentStyle::tailForceWidthPx.st(),
         ContentStyle::tailHarmonizeWidth.st(), ContentStyle::tailHarmonizeWidthAcrossStyles.st(),
-        ContentStyle::tailHJustify.st(), ContentStyle::tailVShelve.st(), ContentStyle::tailVJustify.st(),
+        ContentStyle::tailHJustify.st(), ContentStyle::tailVJustifyBodyFragment.st(),
+        ContentStyle::tailVJustifyTailFragment.st(), ContentStyle::tailVJustify.st(),
         ContentStyle::tailGapPx.st(), ContentStyle::tailLeader.st(),
         isTotallyIneffective = { _, style -> !style.hasTail }
     ),
@@ -128,7 +131,8 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         ContentStyle::tailLeaderVJustify.st(), ContentStyle::tailLeaderMarginLeftPx.st(),
         ContentStyle::tailLeaderMarginRightPx.st(), ContentStyle::tailLeaderSpacingPx.st(),
         isTotallyIneffective = { _, style ->
-            style.blockOrientation != HORIZONTAL || !style.hasTail || style.tailLeader.isBlank()
+            style.blockOrientation != HORIZONTAL || !style.hasTail || !style.tailVJustifyBodyFragment.isLine ||
+                    style.tailVJustifyTailFragment == VTextFragment.ALL_LINES || style.tailLeader.isBlank()
         }
     ),
     StyleEffectivitySpec(
@@ -195,6 +199,7 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         }
     ),
     StyleEffectivitySpec(
+        ContentStyle::gridTextVJustifyFragments.st(), ContentStyle::gridTextVJustify.st(),
         ContentStyle::gridColGapPx.st(),
         isAlmostEffective = { _, style -> style.gridCols < 2 }
     ),
@@ -221,7 +226,8 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         isAlmostEffective = { _, style -> style.flowSeparator.isBlank() }
     ),
     StyleEffectivitySpec(
-        ContentStyle::headForceWidthPx.st(), ContentStyle::headVShelve.st(), ContentStyle::headLeader.st(),
+        ContentStyle::headForceWidthPx.st(), ContentStyle::headVJustifyBodyFragment.st(),
+        ContentStyle::headVJustifyHeadFragment.st(), ContentStyle::headVJustify.st(),
         isAlmostEffective = { _, style -> style.blockOrientation != HORIZONTAL }
     ),
     StyleEffectivitySpec(
@@ -236,11 +242,15 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         }
     ),
     StyleEffectivitySpec(
-        ContentStyle::headVJustify.st(), ContentStyle::headLeaderVJustify.st(),
-        isAlmostEffective = { _, style -> style.blockOrientation != HORIZONTAL || style.headVShelve == OVERALL_MIDDLE }
+        ContentStyle::headLeader.st(),
+        isAlmostEffective = { _, style ->
+            style.blockOrientation != HORIZONTAL || !style.hasHead || !style.headVJustifyBodyFragment.isLine ||
+                    style.headVJustifyHeadFragment == VTextFragment.ALL_LINES
+        }
     ),
     StyleEffectivitySpec(
-        ContentStyle::tailForceWidthPx.st(), ContentStyle::tailVShelve.st(), ContentStyle::tailLeader.st(),
+        ContentStyle::tailForceWidthPx.st(), ContentStyle::tailVJustifyBodyFragment.st(),
+        ContentStyle::tailVJustifyTailFragment.st(), ContentStyle::tailVJustify.st(),
         isAlmostEffective = { _, style -> style.blockOrientation != HORIZONTAL }
     ),
     StyleEffectivitySpec(
@@ -255,8 +265,11 @@ private val CONTENT_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<ContentSt
         }
     ),
     StyleEffectivitySpec(
-        ContentStyle::tailVJustify.st(), ContentStyle::tailLeaderVJustify.st(),
-        isAlmostEffective = { _, style -> style.blockOrientation != HORIZONTAL || style.tailVShelve == OVERALL_MIDDLE }
+        ContentStyle::tailLeader.st(),
+        isAlmostEffective = { _, style ->
+            style.blockOrientation != HORIZONTAL || !style.hasTail || !style.tailVJustifyBodyFragment.isLine ||
+                    style.tailVJustifyTailFragment == VTextFragment.ALL_LINES
+        }
     )
 )
 
@@ -268,15 +281,15 @@ private val LETTER_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<LetterStyl
     ),
     StyleEffectivitySpec(
         LetterStyle::kerning.st(),
-        isAlmostEffective = { _, style -> supportsNot(style, KERNING_FONT_FEAT) }
+        isAlmostEffective = { _, style -> supportsNot(style, KERNING_FEATURE) }
     ),
     StyleEffectivitySpec(
         LetterStyle::ligatures.st(),
-        isAlmostEffective = { _, style -> LIGATURES_FONT_FEATS.all { supportsNot(style, it) } }
+        isAlmostEffective = { _, style -> LIGATURES_FEATURES.all { supportsNot(style, it) } }
     ),
     StyleEffectivitySpec(
         LetterStyle::useUppercaseSpacing.st(),
-        isAlmostEffective = { _, style -> supportsNot(style, CAPITAL_SPACING_FONT_FEAT) }
+        isAlmostEffective = { _, style -> supportsNot(style, CAPITAL_SPACING_FEATURE) }
     ),
     StyleEffectivitySpec(
         LetterStyle::useUppercaseExceptions.st(), LetterStyle::useUppercaseSpacing.st(),
@@ -289,16 +302,14 @@ private val LETTER_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<LetterStyl
     )
 )
 
-private fun supportsNot(style: LetterStyle, feat: String): Boolean {
-    val font = style.font.font
-    return if (font == null) true else feat !in font.getSupportedFeatures()
-}
+private fun supportsNot(style: LetterStyle, feat: String): Boolean =
+    style.font.font?.facets?.none { it.tag == feat } ?: false
 
 
 private val LAYER_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Layer>> = listOf(
     StyleEffectivitySpec(
-        Layer::color1.st(),
-        isTotallyIneffective = { _, style -> style.coloring == LayerColoring.OFF }
+        Layer::plainColor.st(),
+        isTotallyIneffective = { _, style -> style.coloring != LayerColoring.PLAIN }
     ),
     StyleEffectivitySpec(
         Layer::flashColors.st(), Layer::flashIntervalFrames.st(),
@@ -307,7 +318,8 @@ private val LAYER_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Layer>> = listOf(
         }
     ),
     StyleEffectivitySpec(
-        Layer::color2.st(), Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
+        Layer::gradientAngleDeg.st(), Layer::gradientExtentRfh.st(), Layer::gradientShiftRfh.st(),
+        Layer::gradientInterpolation.st(), Layer::gradientStops.st(),
         isTotallyIneffective = { _, style -> style.coloring != LayerColoring.GRADIENT }
     ),
     StyleEffectivitySpec(
@@ -378,7 +390,24 @@ private val LAYER_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<Layer>> = listOf(
 private val PICTURE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<PictureStyle>> = listOf(
     StyleEffectivitySpec(
         PictureStyle::cropBlankSpace.st(),
-        isAlmostEffective = { _, style -> style.picture.loader.let { it == null || it.isRaster } }
+        isAlmostEffective = { _, style ->
+            try {
+                val pic = style.picture.loader?.picture
+                pic is Picture.Raster && !pic.bitmap.spec.representation.pixelFormat.hasAlpha
+            } catch (_: IllegalStateException) {
+                false
+            }
+        }
+    ),
+    StyleEffectivitySpec(
+        PictureStyle::resamplingFilter.st(),
+        isAlmostEffective = { _, style ->
+            try {
+                style.picture.loader?.picture !is Picture.Raster
+            } catch (_: IllegalStateException) {
+                false
+            }
+        }
     )
 )
 
@@ -391,8 +420,43 @@ private val TAPE_STYLE_EFFECTIVITY_SPECS: List<StyleEffectivitySpec<TapeStyle>> 
     StyleEffectivitySpec(
         TapeStyle::fadeOutTransitionStyleName.st(),
         isAlmostEffective = { _, style -> style.fadeOutFrames == 0 }
+    ),
+    StyleEffectivitySpec(
+        TapeStyle::range.st(),
+        isTotallyIneffective = { _, style ->
+            val spec = tapeSpec(style)
+            spec != null && spec.representation.pixelFormat.isFloat
+        }
+    ),
+    StyleEffectivitySpec(
+        TapeStyle::primaries.st(),
+        isTotallyIneffective = { _, style ->
+            val spec = tapeSpec(style)
+            spec != null && spec.representation.pixelFormat.family == Bitmap.PixelFormat.Family.GRAY
+        }
+    ),
+    StyleEffectivitySpec(
+        TapeStyle::yuvCoefficients.st(),
+        isTotallyIneffective = { _, style ->
+            val spec = tapeSpec(style)
+            spec != null && spec.representation.pixelFormat.family != Bitmap.PixelFormat.Family.YUV
+        }
+    ),
+    StyleEffectivitySpec(
+        TapeStyle::alpha.st(),
+        isTotallyIneffective = { _, style ->
+            val spec = tapeSpec(style)
+            spec != null && !spec.representation.pixelFormat.hasAlpha
+        }
     )
 )
+
+private fun tapeSpec(style: TapeStyle) =
+    try {
+        style.tape.tape?.spec
+    } catch (_: IllegalStateException) {
+        null
+    }
 
 
 class StyleEffectivitySpec<S : Style>(

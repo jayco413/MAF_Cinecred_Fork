@@ -7,11 +7,9 @@ import com.loadingbyte.cinecred.imaging.Color4f
 import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.service.Account
 import com.loadingbyte.cinecred.projectio.service.Service
-import com.loadingbyte.cinecred.ui.ConfigurableOverlay
-import com.loadingbyte.cinecred.ui.DeliveryDestTemplate
-import com.loadingbyte.cinecred.ui.LocaleWish
-import com.loadingbyte.cinecred.ui.Preference
+import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.helper.FileExtAssortment
+import com.loadingbyte.cinecred.ui.helper.Form
 import java.awt.GraphicsConfiguration
 import java.awt.event.KeyEvent
 import java.nio.file.Path
@@ -49,9 +47,9 @@ interface WelcomeCtrlComms {
         timecodeFormat: TimecodeFormat,
         sample: Boolean,
         creditsLocation: CreditsLocation,
-        creditsFormat: SpreadsheetFormat,
         creditsAccount: Account?,
-        creditsFilename: String
+        creditsFilename: String,
+        creditsFormat: SpreadsheetFormat
     )
 
     fun projects_createWait_onClickCancel()
@@ -59,6 +57,8 @@ interface WelcomeCtrlComms {
     fun <P : Any> preferences_start_onChangeTopPreference(preference: Preference<P>, value: P)
     fun preferences_start_onClickAddAccount()
     fun preferences_start_onClickRemoveAccount(account: Account)
+    fun preferences_start_onClickSetWindowLayoutAsDefault(layout: WindowLayout)
+    fun preferences_start_onClickRemoveWindowLayout(layout: WindowLayout)
     fun preferences_start_onClickAddOverlay()
     fun preferences_start_onClickEditOverlay(overlay: ConfigurableOverlay)
     fun preferences_start_onClickRemoveOverlay(overlay: ConfigurableOverlay)
@@ -68,10 +68,11 @@ interface WelcomeCtrlComms {
 
     fun preferences_configureAccount_verifyLabel(label: String): String? // Returns an error.
     fun preferences_configureAccount_verifyServer(service: Service?, server: String): String? // Returns an error.
+    fun preferences_configureAccount_verifyCredential(service: Service?, credential: String): Form.Notice?
     fun preferences_configureAccount_onClickCancel()
-    fun preferences_configureAccount_onClickEstablish(label: String, service: Service, server: String)
-
-    fun preferences_establishAccount_onClickCancel()
+    fun preferences_configureAccount_onClickEstablish(
+        label: String, service: Service, server: String, username: String, password: String
+    )
 
     fun preferences_configureOverlay_verifyName(name: String): String? // Returns an error.
     fun preferences_configureOverlay_onClickCancel()
@@ -120,6 +121,7 @@ interface WelcomeViewComms {
 
     fun projects_createWait_setError(error: String?)
 
+    fun preferences_getCard(): PreferencesCard
     fun preferences_setCard(card: PreferencesCard)
 
     fun preferences_start_setInitialSetup(initialSetup: Boolean, doneListener: (() -> Unit)?)
@@ -127,15 +129,19 @@ interface WelcomeViewComms {
     fun preferences_start_setCheckForUpdates(check: Boolean)
     fun preferences_start_setWelcomeHintTrackPending(pending: Boolean)
     fun preferences_start_setProjectHintTrackPending(pending: Boolean)
+    fun preferences_start_setAppleScriptFileChooser(use: Boolean)
+    fun preferences_start_setTapePreviewResolution(resolution: Int)
     fun preferences_start_setAccounts(accounts: List<Account>)
     fun preferences_start_setAccountRemovalLocked(account: Account, locked: Boolean)
+    fun preferences_start_setWindowLayouts(layouts: List<WindowLayout>, defaultLayout: WindowLayout)
     fun preferences_start_setOverlays(overlays: List<ConfigurableOverlay>)
     fun preferences_start_setDeliveryDestTemplates(templates: List<DeliveryDestTemplate>)
 
     fun preferences_configureAccount_resetForm()
-
-    fun preferences_establishAccount_setAction(authorize: Boolean)
-    fun preferences_establishAccount_setError(error: String?)
+    fun preferences_configureAccount_setFormLocked(locked: Boolean)
+    fun preferences_configureAccount_clearStatus()
+    fun preferences_configureAccount_setStatusEstablishing(authorize: Boolean)
+    fun preferences_configureAccount_setStatusFailed(authorize: Boolean, error: String)
 
     fun preferences_configureOverlay_setForm(
         type: Class<out ConfigurableOverlay>,
@@ -175,14 +181,7 @@ interface WelcomeViewComms {
 enum class WelcomeTab { PROJECTS, PREFERENCES, CHANGELOG, ABOUT, UPDATE }
 enum class ProjectsCard { START, CREATE_CONFIGURE, CREATE_WAIT }
 enum class CreditsLocation { LOCAL, SERVICE, SKIP }
-
-enum class PreferencesCard {
-    START,
-    CONFIGURE_ACCOUNT,
-    ESTABLISH_ACCOUNT,
-    CONFIGURE_OVERLAY,
-    CONFIGURE_DELIVERY_LOC_TEMPLATE
-}
+enum class PreferencesCard { START, CONFIGURE_ACCOUNT, CONFIGURE_OVERLAY, CONFIGURE_DELIVERY_LOC_TEMPLATE }
 
 
 class License(val name: String, val body: String)

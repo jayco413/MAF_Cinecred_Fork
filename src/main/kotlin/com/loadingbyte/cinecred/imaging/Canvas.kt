@@ -2,8 +2,11 @@ package com.loadingbyte.cinecred.imaging
 
 import com.github.ooxi.jdatauri.DataUri
 import com.loadingbyte.cinecred.common.*
+import com.loadingbyte.cinecred.imaging.BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
+import com.loadingbyte.cinecred.imaging.Canvas.CacheImpl.Companion.get
 import com.loadingbyte.cinecred.imaging.pdf.PDFDrawer
 import com.loadingbyte.cinecred.natives.skiacapi.Path
+import com.loadingbyte.cinecred.natives.skiacapi.freeImage_t
 import com.loadingbyte.cinecred.natives.skiacapi.loadImage_t
 import com.loadingbyte.cinecred.natives.skiacapi.skiacapi_h.*
 import org.apache.pdfbox.pdmodel.PDDocument
@@ -21,12 +24,14 @@ import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.MemorySegment.NULL
 import java.lang.foreign.ValueLayout.*
-import java.lang.ref.SoftReference
+import java.lang.ref.WeakReference
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.jvm.optionals.getOrNull
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.round
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 
@@ -131,25 +136,29 @@ class Canvas private constructor(
         return arr
     }
 
-    fun compositeLayer(bounds: Rectangle2D? = null, alpha: Double = 1.0, block: () -> Unit) {
+    fun compositeLayer(
+        alpha: Double = 1.0,
+        clip: List<Shape> = emptyList(),
+        block: () -> Unit
+    ) {
         if (alpha <= 0.0) return
+        applyTransformAndClip(null, clip)
         // Due to an apparent a bug in the Skia SVG backend, calling saveLayer() causes nothing to be rendered. So when
         // this is an SVG canvas, just forget about the alpha + the layer semantics and instead directly run the block.
         if (bitmap == null && docHandle == null) {
             block()
             return
         }
-        effectualTransform.setToIdentity()
-        effectualClip = emptyList()
-        SkCanvas_restore(canvasHandle)
         val paint = if (alpha >= 1.0) NULL else SkPaint_New().also { SkPaint_setAlpha(it, alpha.toFloat()) }
-        if (bounds == null)
+        if (clip.isEmpty())
             SkCanvas_saveLayer(canvasHandle, false, 0f, 0f, 0f, 0f, paint)
-        else
+        else {
+            val bounds = clip.map(Shape::getBounds2D).reduce(Rectangle2D::createIntersection)
             SkCanvas_saveLayer(
                 canvasHandle, true, bounds.x.toFloat(), bounds.y.toFloat(), bounds.width.toFloat(),
                 bounds.height.toFloat(), paint
             )
+        }
         if (paint != NULL) SkPaint_delete(paint)
         // This save state is for applyTransformAndClip() to immediately restore to.
         SkCanvas_save(canvasHandle)
@@ -159,27 +168,26 @@ class Canvas private constructor(
             SkCanvas_restore(canvasHandle)
             // This restore() mirrors the saveLayer() call.
             SkCanvas_restore(canvasHandle)
-            SkCanvas_save(canvasHandle)
         }
     }
 
     fun compositeLayer(
-        bounds: Rectangle2D,
         alpha: Double = 1.0,
-        transform: AffineTransform? = null,
         colorSpace: ColorSpace = this.colorSpace,
+        transform: AffineTransform? = null,
+        clip: List<Shape> = emptyList(),
         block: (Canvas, AffineTransform) -> Unit
     ) {
         if (alpha <= 0.0) return
-        // First find the pixel box of the transformed bounds on the canvas.
-        val pxBox = (if (transform == null) bounds else bounds.transformedBy(transform))
-            .bounds.intersection(Rectangle(ceil(width).toInt(), ceil(height).toInt()))
-        if (!pxBox.isEmpty) {
+        if (colorSpace == this.colorSpace) {
             // If the primaries and transfer characteristics match, draw directly onto this canvas.
-            if (colorSpace == this.colorSpace)
-                compositeLayer(pxBox as Rectangle2D?, alpha) { block(this, transform ?: AffineTransform()) }
-            else {
-                // Otherwise, we need to allocate a completely new canvas, let the client draw onto that,
+            compositeLayer(alpha, clip) { block(this, transform ?: AffineTransform()) }
+        } else {
+            // First find the pixel box of the clip on this canvas.
+            val pxBox =
+                clip.fold(Rectangle(ceil(width).toInt(), ceil(height).toInt())) { r, s -> r.intersection(s.bounds) }
+            if (!pxBox.isEmpty) {
+                // We need to allocate a completely new canvas, let the client draw onto that,
                 // and finally composite the result back onto this canvas.
                 // Then allocate the sub-bitmap and sub-canvas and let the client draw to it.
                 val subRep = compatibleRepresentation(colorSpace)
@@ -195,7 +203,7 @@ class Canvas private constructor(
                     }
                     // And finally composite the drawn sub-bitmap onto this canvas.
                     val offsetTransform = AffineTransform.getTranslateInstance(pxBox.minX, pxBox.minY)
-                    drawImage(subBitmap, alpha = alpha, transform = offsetTransform)
+                    drawImage(subBitmap, alpha = alpha, transform = offsetTransform, clip = clip)
                 }
             }
         }
@@ -210,7 +218,7 @@ class Canvas private constructor(
             val bmpSeg = bitmap.memorySegment(0)
             val ls = bitmap.linesize(0)
             Arena.ofConfined().use { arena ->
-                val rowSeg = arena.allocateArray(JAVA_FLOAT, w * 4L)
+                val rowSeg = arena.allocate(JAVA_FLOAT, w * 4L)
                 for (x in 0..<w)
                     MemorySegment.copy(color, 0, rowSeg, JAVA_FLOAT, x * 16L, 4)
                 for (y in 0..<h)
@@ -249,18 +257,19 @@ class Canvas private constructor(
     fun fillStencil(
         stencil: Bitmap,
         shader: Shader,
-        nearestNeighbor: Boolean = false,
         alpha: Double = 1.0,
         matte: Matte? = null,
         blurSigma: Double = 0.0,
         blendMode: BlendMode = BlendMode.SRC_OVER,
         transform: AffineTransform? = null,
-        clip: List<Shape> = emptyList()
+        resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
+        clip: List<Shape> = emptyList(),
+        cache: Cache? = null
     ) {
         require(isAlphaRep(stencil.spec.representation))
         fillStencilOrDrawImage(
             stencil, false, false,
-            nearestNeighbor, shader, alpha, matte, blurSigma, blendMode, transform, clip
+            shader, alpha, matte, blurSigma, blendMode, transform, resamplingFilter, clip, cache
         )
     }
 
@@ -268,18 +277,19 @@ class Canvas private constructor(
         image: Bitmap,
         promiseOpaque: Boolean = false,
         promiseClamped: Boolean = false,
-        nearestNeighbor: Boolean = false,
         alpha: Double = 1.0,
         matte: Matte? = null,
         blurSigma: Double = 0.0,
         blendMode: BlendMode = BlendMode.SRC_OVER,
         transform: AffineTransform? = null,
-        clip: List<Shape> = emptyList()
+        resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
+        clip: List<Shape> = emptyList(),
+        cache: Cache? = null
     ) {
         require(isColorRep(image.spec.representation))
         fillStencilOrDrawImage(
             image, promiseOpaque, promiseClamped,
-            nearestNeighbor, null, alpha, matte, blurSigma, blendMode, transform, clip
+            null, alpha, matte, blurSigma, blendMode, transform, resamplingFilter, clip, cache
         )
     }
 
@@ -313,65 +323,49 @@ class Canvas private constructor(
         }
     }
 
-    fun drawSVG(svg: SourceSVG, transform: AffineTransform? = null) {
+    fun drawSVG(
+        svg: SourceSVG,
+        transform: AffineTransform? = null,
+        clip: List<Shape> = emptyList(),
+        cache: Cache? = null
+    ) {
+        if (cache != null && bitmap != null) {
+            val prepared = prepareVectorGraphicAsBitmap(
+                svg.width, svg.height, { canvas, tr -> canvas.drawSVG(svg, tr) },
+                transform ?: IDENTITY, clip, colorSpace, ceiling, cache, WeakKey(svg)
+            )
+            if (prepared.bitmap != null)
+                drawImage(prepared.bitmap, prepared.promiseOpaque, true, transform = prepared.transform, clip = clip)
+            return
+        }
         // Make sure to composite the SVG in the sRGB color space as mandated by the specification.
-        val bounds = Rectangle2D.Double(0.0, 0.0, svg.width, svg.height)
         compositeLayer(
-            bounds, transform = transform, colorSpace = ColorSpace.SRGB
+            colorSpace = ColorSpace.SRGB,
+            transform = transform,
+            clip = clip + Rectangle2D.Double(0.0, 0.0, svg.width, svg.height).transformedBy(transform)
         ) { effCanvas, effTransform ->
-            effCanvas.applyTransformAndClip(effTransform, listOf(bounds.transformedBy(effTransform)))
+            effCanvas.applyTransformAndClip(effTransform, emptyList())
             SkSVGDOM_render(svg.handle, effCanvas.canvasHandle)
         }
     }
 
-    fun drawPDF(pdf: PDDocument, transform: AffineTransform? = null) {
-        PDFDrawer(pdf, pdf.getPage(0), RenderDestination.EXPORT).drawTo(this, transform)
-    }
-
-    /**
-     * Runs all expensive preprocessing steps that are required before a bitmap can be drawn, and then returns a new
-     * bitmap object (which might share storage with the old one) that can be drawn very quickly by an *endpoint* like
-     * [drawImage]. Preparation is compatible with all canvas/shader/matte endpoints that accept a bitmap.
-     *
-     * When calling an endpoint with a prepared bitmap, the following arguments shall be passed:
-     *
-     *     bitmap         = prepared.bitmap
-     *     promiseOpaque  = prepared.promiseOpaque
-     *     promiseClamped = true
-     *     transform      = prepared.transform
-     *
-     * To use this method with nearest-neighbor interpolation, just don't pass a transform to it, and instead pass the
-     * original transform to the endpoint.
-     *
-     * @param cached A previous preparation of the same bitmap on any canvas; if compatible, avoids the expensive steps.
-     */
-    fun prepareBitmap(
-        bitmap: Bitmap,
-        promiseOpaque: Boolean = false,
-        promiseClamped: Boolean = false,
-        transform: AffineTransform? = null,
-        cached: PreparedBitmap? = null
-    ): PreparedBitmap =
-        prepareBitmap(bitmap, promiseOpaque, promiseClamped, transform ?: IDENTITY, colorSpace, ceiling, cached)
-
-    fun prepareSVGAsBitmap(
-        svg: SourceSVG,
-        transform: AffineTransform? = null,
-        cached: PreparedBitmap? = null
-    ): PreparedBitmap =
-        prepareVectorGraphicAsBitmap(
-            svg.width, svg.height, { c, t -> c.drawSVG(svg, t) }, transform ?: IDENTITY, colorSpace, ceiling, cached
-        )
-
-    fun preparePDFAsBitmap(
+    fun drawPDF(
         pdf: PDDocument,
         transform: AffineTransform? = null,
-        cached: PreparedBitmap? = null
-    ): PreparedBitmap {
-        val size = PDFDrawer.sizeOfRotatedCropBox(pdf.getPage(0))
-        return prepareVectorGraphicAsBitmap(
-            size.width, size.height, { c, t -> c.drawPDF(pdf, t) }, transform ?: IDENTITY, colorSpace, ceiling, cached
-        )
+        clip: List<Shape> = emptyList(),
+        cache: Cache? = null
+    ) {
+        if (cache != null && bitmap != null) {
+            val size = PDFDrawer.sizeOfRotatedCropBox(pdf.getPage(0))
+            val prepared = prepareVectorGraphicAsBitmap(
+                size.width, size.height, { canvas, tr -> canvas.drawPDF(pdf, tr) },
+                transform ?: IDENTITY, clip, colorSpace, ceiling, cache, WeakKey(pdf)
+            )
+            if (prepared.bitmap != null)
+                drawImage(prepared.bitmap, prepared.promiseOpaque, true, transform = prepared.transform, clip = clip)
+            return
+        }
+        PDFDrawer(pdf, pdf.getPage(0), RenderDestination.EXPORT).drawTo(this, transform, clip)
     }
 
     private fun fillOrStrokeShape(
@@ -403,7 +397,7 @@ class Canvas private constructor(
                     // Repeat the array twice if it has odd length, because Skia only supports even-length patterns.
                     val size = dashPattern.size
                     val dup = size % 2 == 1
-                    val intervals = arena.allocateArray(JAVA_FLOAT, size * if (dup) 2L else 1L)
+                    val intervals = arena.allocate(JAVA_FLOAT, size * if (dup) 2L else 1L)
                     MemorySegment.copy(dashPattern, 0, intervals, JAVA_FLOAT, 0L, size)
                     if (dup)
                         MemorySegment.copy(dashPattern, 0, intervals, JAVA_FLOAT, size * 4L, size)
@@ -422,24 +416,29 @@ class Canvas private constructor(
         bitmap: Bitmap,
         promiseOpaque: Boolean,
         promiseClamped: Boolean,
-        nearestNeighbor: Boolean,
         shader: Shader?,
         alpha: Double,
         matte: Matte?,
         blurSigma: Double,
         blendMode: BlendMode,
         transform: AffineTransform?,
-        clip: List<Shape>
+        resamplingFilter: BitmapConverter.ResamplingFilter,
+        clip: List<Shape>,
+        cache: Cache?
     ) {
         if (alpha <= 0.0) return
         val prepared: PreparedBitmap
         var canvasTransform = transform
         var filterMode = SkFilterMode_Nearest()
-        if (nearestNeighbor)
-            prepared = prepareBitmap(bitmap, promiseOpaque, promiseClamped, IDENTITY, colorSpace, ceiling, null)
+        if (resamplingFilter == NEAREST_NEIGHBOR)
+            prepared = prepareBitmap(
+                bitmap, promiseOpaque, promiseClamped, IDENTITY, resamplingFilter, colorSpace, ceiling,
+                cache
+            )
         else {
             prepared = prepareBitmap(
-                bitmap, promiseOpaque, promiseClamped, transform ?: IDENTITY, colorSpace, ceiling, null
+                bitmap, promiseOpaque, promiseClamped, transform ?: IDENTITY, resamplingFilter, colorSpace, ceiling,
+                cache
             )
             canvasTransform = prepared.transform
             // If the preparation failed to apply the transform, fall back to Skia's linear interpolation.
@@ -470,7 +469,7 @@ class Canvas private constructor(
         val (colorType, alphaType) = colorAndAlphaTypeFor(rep.pixelFormat, rep.alpha, promiseOpaque)
         SkCanvas_drawImage(
             canvasHandle, w, h, colorType, alphaType,
-            if (isAlphaRep(rep)) NULL else rep.colorSpace!!.skiaHandle,
+            if (isAlphaRep(rep)) NULL else rep.colorSpace.skiaHandle,
             bitmap.memorySegment(0),
             bitmap.linesize(0).toLong(),
             0f, 0f, filterMode, paint
@@ -514,7 +513,6 @@ class Canvas private constructor(
             val rep = bitmap.spec.representation
             require(rep.pixelFormat.code == AV_PIX_FMT_RGBAF32)
             require(rep.range == Bitmap.Range.FULL)
-            requireNotNull(rep.colorSpace)
             require(rep.alpha == Bitmap.Alpha.PREMULTIPLIED)
             val (w, h) = bitmap.spec.resolution
             val canvasHandle = SkCanvas_MakeRasterDirect(
@@ -537,6 +535,7 @@ class Canvas private constructor(
 
         fun forPDF(width: Double, height: Double, colorSpace: ColorSpace): Canvas {
             require(width > 0.0 && height > 0.0)
+            requireNotNull(colorSpace.primaries)
             val streamHandle = SkDynamicMemoryWStream_New()
             val docHandle = SkPDF_MakeDocument(streamHandle)
             val canvasHandle = SkDocument_beginPage(docHandle, width.toFloat(), height.toFloat())
@@ -595,17 +594,22 @@ class Canvas private constructor(
                 if (pointCountX2 + verbCoordCount > points.size)
                     points = points.copyOf(points.size * 2)
                 verbs[verbCount++] = verb
-                for (i in 0..<verbCoordCount)
-                    points[pointCountX2++] = coords[i]
+                System.arraycopy(coords, 0, points, pointCountX2, verbCoordCount)
+                pointCountX2 += verbCoordCount
                 pi.next()
             }
 
+            val verbsSeg = arena.allocate(JAVA_BYTE, verbCount.toLong())
+            val pointsSeg = arena.allocate(JAVA_FLOAT, pointCountX2.toLong())
+            MemorySegment.copy(verbs, 0, verbsSeg, JAVA_BYTE, 0L, verbCount)
+            MemorySegment.copy(points, 0, pointsSeg, JAVA_FLOAT, 0L, pointCountX2)
+
             val path = Path.allocate(arena)
-            Path.`verbs$set`(path, arena.allocateArray(verbs))
-            Path.`verbCount$set`(path, verbCount)
-            Path.`points$set`(path, arena.allocateArray(points))
-            Path.`pointCount$set`(path, pointCountX2 / 2)
-            Path.`isEvenOdd$set`(path, pi.windingRule == PathIterator.WIND_EVEN_ODD)
+            Path.verbs(path, verbsSeg)
+            Path.verbCount(path, verbCount)
+            Path.points(path, pointsSeg)
+            Path.pointCount(path, pointCountX2 / 2)
+            Path.isEvenOdd(path, pi.windingRule == PathIterator.WIND_EVEN_ODD)
             return path
         }
 
@@ -650,7 +654,8 @@ class Canvas private constructor(
                     allocateLinearGradientShader(shader, userTransform, canvasTransform, canvasCS, ceiling)
                 is Shader.Image ->
                     allocateBitmapShader(
-                        shader.bitmap, shader.promiseOpaque, shader.promiseClamped, shader.transform, shader.tileMode,
+                        shader.bitmap, shader.promiseOpaque, shader.promiseClamped,
+                        shader.resamplingFilter, shader.transform, shader.tileMode,
                         shader.disregardUserTransform, userTransform, canvasTransform, canvasCS, ceiling, needsClosing
                     )
             }
@@ -667,8 +672,9 @@ class Canvas private constructor(
         ) {
             if (matte != null) {
                 val shaderHandle = allocateBitmapShader(
-                    matte.bitmap, false, false, matte.transform, matte.tileMode, matte.disregardUserTransform,
-                    userTransform, canvasTransform, null, null, needsClosing
+                    matte.bitmap, promiseOpaque = false, promiseClamped = false,
+                    matte.resamplingFilter, matte.transform, matte.tileMode,
+                    matte.disregardUserTransform, userTransform, canvasTransform, null, null, needsClosing
                 )
                 SkPaint_setShaderMaskFilter(paint, shaderHandle)
                 SkRefCnt_unref(shaderHandle)
@@ -692,24 +698,29 @@ class Canvas private constructor(
                 val colors = FloatArray(shader.colors.size * 4)
                 var i = 0
                 for (color in shader.colors) {
+                    // We deliberately clamp colors to the canvas color space prior to defining the gradient. This is to
+                    // avoid that portions of the gradient are just constant due to clamping when rendering in a color
+                    // space smaller than that of the gradient's stop colors.
                     val c = color.convert(canvasCS, clamp = true, ceiling)
                     colors[i++] = c.r
                     colors[i++] = c.g
                     colors[i++] = c.b
                     colors[i++] = c.a
                 }
-                val colorsSeg = arena.allocateArray(colors)
-                val posSeg = if (shader.pos == null) NULL else arena.allocateArray(shader.pos)
+                val colorsSeg = arena.allocateFrom(colors)
+                val posSeg =
+                    if (shader.pos == null) NULL else arena.allocateFrom(shader.pos.mapToFloatArray(Double::toFloat))
                 return SkGradientShader_MakeLinear(
                     p[0].toFloat(), p[1].toFloat(), p[2].toFloat(), p[3].toFloat(),
-                    colorsSeg, canvasCS.skiaHandle, posSeg, colors.size / 4,
-                    TileMode.CLAMP.code, SkGradientShaderInterpolationColorSpace_SRGB()
+                    colorsSeg, canvasCS.skiaHandle, posSeg, shader.colors.size,
+                    TileMode.CLAMP.code, shader.interpolation.code
                 )
             }
         }
 
         private fun allocateBitmapShader(
             bitmap: Bitmap, promiseOpaque: Boolean, promiseClamped: Boolean,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
             shaderTransform: AffineTransform?, tileMode: TileMode, disregardUserTransform: Boolean,
             userTransform: AffineTransform?, canvasTransform: AffineTransform?, canvasCS: ColorSpace?, ceiling: Float?,
             needsClosing: MutableList<Bitmap>
@@ -719,26 +730,27 @@ class Canvas private constructor(
                     userTransform?.let(::concatenate)
                 shaderTransform?.let(::concatenate)
             }
-            val prepared =
-                prepareBitmap(bitmap, promiseOpaque, promiseClamped, physicalTransform, canvasCS, ceiling, null)
+            val prepared = prepareBitmap(
+                bitmap, promiseOpaque, promiseClamped, physicalTransform, resamplingFilter, canvasCS, ceiling, null
+            )
             val shaderBitmap = prepared.bitmap ?: run {
                 // It's difficult to predict the effect of a vanishingly small shader image,
                 // so if that happens, just pass in a transparent 1x1 bitmap.
                 Bitmap.allocate(Bitmap.Spec(Resolution(1, 1), compatibleRepresentation(ColorSpace.XYZD50))).zero()
             }
             needsClosing += shaderBitmap
-            val tr = prepared.transform
+            var tr = prepared.transform
             // If the preparation failed to apply the transform, fall back to Skia's linear interpolation.
             val filterMode = if (tr == physicalTransform) SkFilterMode_Linear() else SkFilterMode_Nearest()
             if (canvasTransform != null)
-                tr.preConcatenate(canvasTransform.createInverse())
+                tr = canvasTransform.createInverse().apply { concatenate(tr) }
 
             val (w, h) = shaderBitmap.spec.resolution
             val rep = shaderBitmap.spec.representation
             val (colorType, alphaType) = colorAndAlphaTypeFor(rep.pixelFormat, rep.alpha, prepared.promiseOpaque)
             return SkImage_makeShader(
                 w, h, colorType, alphaType,
-                if (isAlphaRep(rep)) NULL else rep.colorSpace!!.skiaHandle,
+                if (isAlphaRep(rep)) NULL else rep.colorSpace.skiaHandle,
                 shaderBitmap.memorySegment(0),
                 shaderBitmap.linesize(0).toLong(),
                 tileMode.code, tileMode.code, filterMode, tr.m00, tr.m10, tr.m01, tr.m11, tr.m02, tr.m12
@@ -746,8 +758,14 @@ class Canvas private constructor(
         }
 
         private fun prepareBitmap(
-            bitmap: Bitmap, promiseOpaque: Boolean, promiseClamped: Boolean,
-            transform: AffineTransform, canvasCS: ColorSpace?, canvasCeiling: Float?, cached: PreparedBitmap?
+            bitmap: Bitmap,
+            promiseOpaque: Boolean,
+            promiseClamped: Boolean,
+            transform: AffineTransform,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
+            canvasCS: ColorSpace?,
+            canvasCeiling: Float?,
+            cache: Cache?
         ): PreparedBitmap {
             // Find whether the representation of the passed bitmap is directly supported by Skia.
             val (res, inRep) = bitmap.spec
@@ -762,44 +780,63 @@ class Canvas private constructor(
 
             // If there is no transform and Skia understands the bitmap, just return it.
             if (transform.isIdentity && isInRepCompatible)
-                return PreparedBitmap(bitmap.view(), promiseOpaque, AffineTransform(), AffineTransform())
+                return PreparedBitmap(bitmap.view(), promiseOpaque, IDENTITY)
 
             // Create a representation that is supported by Skia and that requires the least possible work by Skia to
             // convert to another color space. We'll convert the bitmap to this representation.
             val outRep = Bitmap.Representation(
                 compatiblePixelFormat,
-                if (isMask) null else canvasCS,
+                if (isMask) ColorSpace.of(ColorSpace.Transfer.LINEAR) else canvasCS!!,
                 if (compatiblePixelFormat.hasAlpha) Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
             )
 
-            val scaleX = transform.scaleX
-            val scaleY = transform.scaleY
-            val shearX = transform.shearX
-            val shearY = transform.shearY
-            val copiedTransform = AffineTransform(transform)
+            val generalMask = AffineTransform.TYPE_GENERAL_ROTATION or AffineTransform.TYPE_GENERAL_TRANSFORM
 
             val transformedBitmap: Bitmap?
             val transformedPromiseOpaque: Boolean
             val drawAtX: Int
             val drawAtY: Int
-            if (scaleX >= 0.0 && scaleY >= 0.0 && shearX == 0.0 && shearY == 0.0) {
+            if (transform.type and generalMask == 0) {
+                // This case handles all transformations that yield an axis-aligned rectangular image,
+                // namely scaling, 90° rotation, and flipping.
+                data class Reorder(val flipH: Boolean, val flipV: Boolean, val transpose: Boolean) {
+                    constructor(t: AffineTransform) :
+                            this(t.scaleX < 0.0 || t.shearX < 0.0, t.scaleY < 0.0 || t.shearY < 0.0, t.scaleX == 0.0)
+                }
+
                 transformedPromiseOpaque = promiseOpaque || inRep.alpha == Bitmap.Alpha.OPAQUE
-                drawAtX = transform.translateX.roundToInt()
-                drawAtY = transform.translateY.roundToInt()
-                val scaledRes = Resolution((res.widthPx * scaleX).roundToInt(), (res.heightPx * scaleY).roundToInt())
+                val reorder = Reorder(transform)
+                drawAtX = (transform.translateX + if (!reorder.flipH) 0.0 else if (!reorder.transpose)
+                    res.widthPx * transform.scaleX else res.heightPx * transform.shearX).roundToInt()
+                drawAtY = (transform.translateY + if (!reorder.flipV) 0.0 else if (!reorder.transpose)
+                    res.heightPx * transform.scaleY else res.widthPx * transform.shearY).roundToInt()
+                val scaledRes = Resolution(
+                    (res.widthPx * abs(if (reorder.transpose) transform.shearY else transform.scaleX)).roundToInt(),
+                    (res.heightPx * abs(if (reorder.transpose) transform.shearX else transform.scaleY)).roundToInt()
+                )
+                val transformedRes = if (!reorder.transpose) scaledRes else
+                    Resolution(scaledRes.heightPx, scaledRes.widthPx)
                 if (scaledRes.widthPx == 0 || scaledRes.heightPx == 0)
                     transformedBitmap = null
-                else if (scaledRes == res && isInRepCompatible)
-                    transformedBitmap = bitmap.view()
-                else if (cached?.bitmap != null && cached.bitmap.spec.representation.colorSpace == canvasCS &&
-                    cached.originalTransform.let {
-                        it.scaleX >= 0.0 && it.scaleY >= 0.0 && it.shearX == 0.0 && it.shearY == 0.0
-                    } && cached.bitmap.spec.resolution == scaledRes
-                )
-                    transformedBitmap = cached.bitmap.view()
-                else {
-                    transformedBitmap = Bitmap.allocate(Bitmap.Spec(scaledRes, outRep))
-                    BitmapConverter.convert(bitmap, transformedBitmap, promiseOpaque = promiseOpaque)
+                else transformedBitmap = cache.get(bitmap.key(), canvasCS, reorder, transformedRes, resamplingFilter) {
+                    val scaledBitmap: Bitmap
+                    if (scaledRes == res && isInRepCompatible)
+                        scaledBitmap = bitmap.view()
+                    else {
+                        scaledBitmap = Bitmap.allocate(Bitmap.Spec(scaledRes, outRep))
+                        BitmapConverter.convert(
+                            bitmap, scaledBitmap, promiseOpaque = promiseOpaque, resamplingFilter = resamplingFilter
+                        )
+                    }
+                    val transformedBitmap: Bitmap
+                    if (!reorder.flipH && !reorder.flipV && !reorder.transpose)
+                        transformedBitmap = scaledBitmap
+                    else {
+                        transformedBitmap = Bitmap.allocate(Bitmap.Spec(transformedRes, outRep))
+                        transformedBitmap.blitReordered(scaledBitmap, reorder.flipH, reorder.flipV, reorder.transpose)
+                        scaledBitmap.close()
+                    }
+                    transformedBitmap
                 }
             } else {
                 // For the case of general transformations, we follow the strategy outlined here:
@@ -812,35 +849,33 @@ class Canvas private constructor(
                     // correct grayscale format and let Skia's bilinear interpolation take care of the transform.
                     if (isInRepCompatible)
                         transformedBitmap = bitmap.view()
-                    else if (cached?.bitmap != null && cached.transform == cached.originalTransform)
-                        transformedBitmap = cached.bitmap.view()
-                    else {
-                        transformedBitmap = Bitmap.allocate(Bitmap.Spec(res, outRep))
-                        BitmapConverter.convert(bitmap, transformedBitmap, promiseOpaque = promiseOpaque)
-                    }
-                    return PreparedBitmap(transformedBitmap, false, copiedTransform, copiedTransform)
+                    else
+                        transformedBitmap = cache.get(bitmap.key()) {
+                            val transformedBitmap = Bitmap.allocate(Bitmap.Spec(res, outRep))
+                            BitmapConverter.convert(bitmap, transformedBitmap, promiseOpaque = promiseOpaque)
+                            transformedBitmap
+                        }
+                    return PreparedBitmap(transformedBitmap, promiseOpaque = false, transform)
                 }
                 transformedPromiseOpaque = false
                 val boundsOnCanvas = Rectangle(0, 0, res.widthPx, res.heightPx).transformedBy(transform).bounds
                 drawAtX = boundsOnCanvas.x
                 drawAtY = boundsOnCanvas.y
-                if (cached?.bitmap != null && cached.bitmap.spec.representation.colorSpace == canvasCS &&
-                    differOnlyByIntegerTranslation(cached.originalTransform, transform)
-                )
-                    transformedBitmap = cached.bitmap.view()
-                else {
-                    val sx = transform.scalingFactorX
-                    val sy = transform.scalingFactorY
-                    val res1 = Resolution((res.widthPx * 4 * sx).roundToInt(), (res.heightPx * 4 * sy).roundToInt())
-                    val res3 = Resolution(boundsOnCanvas.width, boundsOnCanvas.height)
-                    if (res1.widthPx <= 0 || res1.heightPx <= 0 || res3.widthPx <= 0 || res3.heightPx <= 0)
-                        transformedBitmap = null
-                    else {
+                val sx = transform.scalingFactorX
+                val sy = transform.scalingFactorY
+                val res1 = Resolution((res.widthPx * 4 * sx).roundToInt(), (res.heightPx * 4 * sy).roundToInt())
+                val res3 = Resolution(boundsOnCanvas.width, boundsOnCanvas.height)
+                if (res1.widthPx <= 0 || res1.heightPx <= 0 || res3.widthPx <= 0 || res3.heightPx <= 0)
+                    transformedBitmap = null
+                else
+                    transformedBitmap = cache.get(bitmap.key(), canvasCS, TransformKey(transform), resamplingFilter) {
                         val res2 = Resolution(res3.widthPx * 4, res3.heightPx * 4)
                         val bitmap1 = Bitmap.allocate(Bitmap.Spec(res1, outRep))
                         val bitmap2 = Bitmap.allocate(Bitmap.Spec(res2, outRep))
-                        transformedBitmap = Bitmap.allocate(Bitmap.Spec(res3, outRep))
-                        BitmapConverter.convert(bitmap, bitmap1, promiseOpaque = promiseOpaque)
+                        val bitmap3 = Bitmap.allocate(Bitmap.Spec(res3, outRep))
+                        BitmapConverter.convert(
+                            bitmap, bitmap1, promiseOpaque = promiseOpaque, resamplingFilter = resamplingFilter
+                        )
                         forBitmap(bitmap2.zero(), canvasCeiling).use { canvas ->
                             canvas.applyTransformAndClip(AffineTransform().apply {
                                 scale(res2.widthPx / res3.widthPx.toDouble(), res2.heightPx / res3.heightPx.toDouble())
@@ -853,11 +888,11 @@ class Canvas private constructor(
                             canvas.callSkDrawImage(bitmap1, promiseOpaque, SkFilterMode_Linear(), paint)
                             SkPaint_delete(paint)
                         }
-                        BitmapConverter.convert(bitmap2, transformedBitmap)
+                        BitmapConverter.convert(bitmap2, bitmap3, resamplingFilter = resamplingFilter)
                         bitmap1.close()
                         bitmap2.close()
+                        bitmap3
                     }
-                }
             }
 
             // If a new float bitmap has been created, clamp it. See the class's comment for details on why.
@@ -865,34 +900,29 @@ class Canvas private constructor(
                 transformedBitmap.clampFloatColors(canvasCeiling, transformedPromiseOpaque)
 
             val intTransl = AffineTransform.getTranslateInstance(drawAtX.toDouble(), drawAtY.toDouble())
-            return PreparedBitmap(transformedBitmap, transformedPromiseOpaque, intTransl, copiedTransform)
+            return PreparedBitmap(transformedBitmap, transformedPromiseOpaque, intTransl)
         }
 
         private fun prepareVectorGraphicAsBitmap(
             width: Double, height: Double, drawTo: (Canvas, AffineTransform) -> Unit,
-            transform: AffineTransform, canvasCS: ColorSpace, canvasCeiling: Float?, cached: PreparedBitmap?
+            transform: AffineTransform, clip: List<Shape>, canvasCS: ColorSpace, canvasCeiling: Float?,
+            cache: Cache?, srcKey: WeakKey
         ): PreparedBitmap {
-            val bitmap: Bitmap
-            val b = Rectangle2D.Double(0.0, 0.0, width, height).transformedBy(transform).bounds
-            if (cached?.bitmap != null && cached.bitmap.spec.representation.colorSpace == canvasCS &&
-                differOnlyByIntegerTranslation(cached.originalTransform, transform)
-            )
-                bitmap = cached.bitmap.view()
-            else {
-                bitmap = Bitmap.allocate(Bitmap.Spec(Resolution(b.width, b.height), compatibleRepresentation(canvasCS)))
+            val naturalBounds = Rectangle2D.Double(0.0, 0.0, width, height).transformedBy(transform).bounds
+            val b = if (clip.isEmpty()) naturalBounds else
+                naturalBounds.intersection(clip.map(Shape::getBounds).reduce(Rectangle::intersection))
+            val boundsRelToNatural = Rectangle(b.x - naturalBounds.x, b.y - naturalBounds.y, b.width, b.height)
+            val bitmap = cache.get(srcKey, canvasCS, TransformKey(transform), boundsRelToNatural) {
+                val bitmap =
+                    Bitmap.allocate(Bitmap.Spec(Resolution(b.width, b.height), compatibleRepresentation(canvasCS)))
                 val shiftedTransform = AffineTransform.getTranslateInstance(-b.x.toDouble(), -b.y.toDouble())
                     .apply { concatenate(transform) }
                 forBitmap(bitmap.zero(), canvasCeiling).use { canvas -> drawTo(canvas, shiftedTransform) }
+                bitmap
             }
             val intTransl = AffineTransform.getTranslateInstance(b.x.toDouble(), b.y.toDouble())
-            return PreparedBitmap(bitmap, false, intTransl, AffineTransform(transform))
+            return PreparedBitmap(bitmap, promiseOpaque = false, intTransl)
         }
-
-        private fun differOnlyByIntegerTranslation(t1: AffineTransform, t2: AffineTransform) =
-            abs(t1.scaleX - t2.scaleX) < 0.00001 && abs(t1.scaleY - t2.scaleY) < 0.00001 &&
-                    abs(t1.shearX - t2.shearX) < 0.00001 && abs(t1.shearY - t2.shearY) < 0.00001 &&
-                    (t1.translateX - t2.translateX).let { abs(it - round(it)) < 0.00001 } &&
-                    (t1.translateY - t2.translateY).let { abs(it - round(it)) < 0.00001 }
 
     }
 
@@ -938,6 +968,14 @@ class Canvas private constructor(
     }
 
 
+    enum class GradientInterpolation(val code: Byte) {
+        // Note: We don't offer linear RGB, because apart from the famous red-to-green case, it mostly looks bad.
+        // See: https://aras-p.info/blog/2021/11/29/Gradients-in-linear-space-arent-better/
+        OKLAB(SkGradientShaderInterpolationColorSpace_OKLab()),
+        SRGB(SkGradientShaderInterpolationColorSpace_SRGB())
+    }
+
+
     sealed interface Shader {
 
         class Solid(val color: Color4f) : Shader
@@ -946,7 +984,8 @@ class Canvas private constructor(
             val point1: Point2D,
             val point2: Point2D,
             val colors: List<Color4f>,
-            val pos: FloatArray? = null
+            val pos: DoubleArray? = null,
+            val interpolation: GradientInterpolation = GradientInterpolation.OKLAB,
         ) : Shader {
             init {
                 require(colors.size == if (pos == null) 2 else pos.size)
@@ -959,6 +998,7 @@ class Canvas private constructor(
             val promiseOpaque: Boolean = false,
             val promiseClamped: Boolean = false,
             val transform: AffineTransform? = null,
+            val resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
             val tileMode: TileMode = TileMode.DECAL,
             val disregardUserTransform: Boolean = false
         ) : Shader {
@@ -973,6 +1013,7 @@ class Canvas private constructor(
     class Matte(
         val bitmap: Bitmap,
         val transform: AffineTransform? = null,
+        val resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
         val tileMode: TileMode = TileMode.DECAL,
         val disregardUserTransform: Boolean = false
     ) {
@@ -980,14 +1021,6 @@ class Canvas private constructor(
             require(isAlphaRep(bitmap.spec.representation))
         }
     }
-
-
-    class PreparedBitmap(
-        val bitmap: Bitmap?,
-        val promiseOpaque: Boolean,
-        val transform: AffineTransform,
-        val originalTransform: AffineTransform
-    )
 
 
     /** @throws IllegalArgumentException If the SVG cannot be parsed or is invalid in some respect. */
@@ -1001,13 +1034,16 @@ class Canvas private constructor(
         init {
             Arena.ofConfined().use { arena ->
                 setNativeNumericLocaleToC()
-                val cStr = arena.allocateUtf8String(xml)
-                handle = SkSVGDOM_Make(cStr, cStr.byteSize() - 1, LoadImageFromDataURI.UPCALL_STUB)
+                val cStr = arena.allocateFrom(xml)
+                handle = SkSVGDOM_Make(
+                    cStr, cStr.byteSize() - 1,
+                    LoadImageFromDataURI.LOAD_UPCALL_STUB, LoadImageFromDataURI.FREE_UPCALL_STUB
+                )
                     .also { require(it != NULL) { "Failed to allocate Skia SVGDOM." } }
                     .reinterpret(handleArena, ::SkRefCnt_unref)
 
                 try {
-                    val contSizeSeg = arena.allocateArray(JAVA_FLOAT, 2)
+                    val contSizeSeg = arena.allocate(JAVA_FLOAT, 2)
                     SkSVGDOM_containerSize(handle, contSizeSeg)
                     var w = contSizeSeg.getAtIndex(JAVA_FLOAT, 0)
                     var h = contSizeSeg.getAtIndex(JAVA_FLOAT, 1)
@@ -1017,7 +1053,7 @@ class Canvas private constructor(
                     // but we'd like a better default. So we read the viewBox attribute of the SVG (which must
                     // exist when width/height are missing) and set the SVG size to the viewBox size.
                     if (w <= 0f || h <= 0f) {
-                        val viewBoxSeg = arena.allocateArray(JAVA_FLOAT, 4)
+                        val viewBoxSeg = arena.allocate(JAVA_FLOAT, 4)
                         require(SkSVGDOM_getViewBox(handle, viewBoxSeg)) { "SVG has neither width/height nor viewBox." }
                         w = viewBoxSeg.getAtIndex(JAVA_FLOAT, 2)
                         h = viewBoxSeg.getAtIndex(JAVA_FLOAT, 3)
@@ -1039,19 +1075,29 @@ class Canvas private constructor(
 
         // We supply our own image-from-data-URI loader to widen the supported formats beyond whichever codecs happen to
         // have been compiled into Skia.
-        private class LoadImageFromDataURI : loadImage_t {
+        private class LoadImageFromDataURI : loadImage_t.Function, freeImage_t.Function {
 
             companion object {
-                val UPCALL_STUB: MemorySegment = loadImage_t.allocate(LoadImageFromDataURI(), Arena.global())
+
+                val LOAD_UPCALL_STUB: MemorySegment
+                val FREE_UPCALL_STUB: MemorySegment
+
+                init {
+                    val obj = LoadImageFromDataURI()
+                    LOAD_UPCALL_STUB = loadImage_t.allocate(obj, Arena.global())
+                    FREE_UPCALL_STUB = freeImage_t.allocate(obj, Arena.global())
+                }
+
             }
 
-            private val timer = Timer("SVGEmbeddedImageRetainer", true)
-            private val cache = ConcurrentHashMap<String, Optional<SoftReference<PreparedBitmap>>>()
+            private val cache = DisposableCache<String, Optional<PreparedBitmap>>()
+            private val freeBitmaps = ConcurrentHashMap<Long, Bitmap>()
+            private var freeCtr = AtomicLong()
 
+            // Load
             override fun apply(
-                path: MemorySegment,
                 name: MemorySegment,
-                id: MemorySegment,
+                freeCtx: MemorySegment,
                 w: MemorySegment,
                 h: MemorySegment,
                 colorType: MemorySegment,
@@ -1061,20 +1107,20 @@ class Canvas private constructor(
                 rowBytes: MemorySegment
             ): Boolean {
                 try {
-                    val prepared = read(name.getUtf8String(0L)) ?: return false
-                    val bitmap = prepared.bitmap ?: return false
+                    val prepared = read(name.getString(0L)) ?: return false
+                    val bitmap = (prepared.bitmap ?: return false).view()  // Create a view so we can free it later.
                     val (res, rep) = bitmap.spec
                     val (ct, at) = colorAndAlphaTypeFor(rep.pixelFormat, rep.alpha, prepared.promiseOpaque)
+                    val freeKey = freeCtr.incrementAndGet()
+                    freeCtx.set(ADDRESS, 0L, MemorySegment.ofAddress(freeKey))
                     w.set(JAVA_INT, 0L, res.widthPx)
                     h.set(JAVA_INT, 0L, res.heightPx)
                     colorType.set(JAVA_BYTE, 0L, ct)
                     alphaType.set(JAVA_BYTE, 0L, at)
-                    colorSpace.set(ADDRESS, 0L, rep.colorSpace!!.skiaHandle)
+                    colorSpace.set(ADDRESS, 0L, rep.colorSpace.skiaHandle)
                     pixels.set(ADDRESS, 0L, bitmap.memorySegment(0))
                     rowBytes.set(JAVA_LONG, 0L, bitmap.linesize(0).toLong())
-                    // Schedule a task that prevents rasterPic from being garbage-collected long enough for Skia's SVG
-                    // renderer to draw the image.
-                    timer.schedule(Retainer(bitmap), 20_000L)
+                    freeBitmaps[freeKey] = bitmap
                     return true
                 } catch (t: Throwable) {
                     // We have to catch all exceptions because if one escapes, a segfault happens.
@@ -1083,29 +1129,92 @@ class Canvas private constructor(
                 }
             }
 
-            private fun read(uri: String): PreparedBitmap? {
-                cache[uri]?.let { opt -> if (opt.isEmpty) return null else opt.get().get()?.let { return it } }
+            private fun read(uri: String): PreparedBitmap? = cache.get(uri) {
                 try {
                     // Note: We intentionally ignore the MIME type and instead let BitmapReader figure out the format.
                     val bytes = DataUri.parse(uri, Charsets.UTF_8).data
                     val prepared = BitmapReader.read(bytes, planar = false).use { bitmap ->
-                        prepareBitmap(bitmap, false, false, IDENTITY, ColorSpace.SRGB, 1f, null)
+                        prepareBitmap(bitmap, false, false, IDENTITY, NEAREST_NEIGHBOR, ColorSpace.SRGB, 1f, null)
                     }
-                    cache[uri] = Optional.of(SoftReference(prepared))
-                    return prepared
+                    SizedValue(Optional.of(prepared), prepared.bitmap?.bytes ?: 0)
                 } catch (e: Exception) {
                     LOGGER.error("Skipping image embedded in SVG because it is corrupt or cannot be read.", e)
-                    cache[uri] = Optional.empty()
-                    return null
+                    SizedValue(Optional.empty(), 0)
                 }
-            }
+            }.getOrNull()
 
-            private class Retainer(private val bitmap: Bitmap) : TimerTask() {
-                override fun run() {}
+            // Free
+            override fun apply(pixels: MemorySegment, freeCtx: MemorySegment) {
+                freeBitmaps.remove(freeCtx.address())?.close()
             }
 
         }
 
+    }
+
+
+    private class PreparedBitmap(val bitmap: Bitmap?, val promiseOpaque: Boolean, val transform: AffineTransform)
+
+
+    sealed interface Cache : AutoCloseable {
+        companion object {
+            operator fun invoke(): Cache = CacheImpl()
+        }
+    }
+
+    private class CacheImpl : Cache {
+
+        private val dc = DisposableCache<Any, Bitmap>()
+
+        override fun close() = dc.close()
+
+        companion object {
+            fun Cache?.get(vararg key: Any?, compute: () -> Bitmap): Bitmap {
+                if (this == null)
+                    return compute()
+                val cached = (this as CacheImpl).dc.get(key.asList()) {
+                    val computed = compute()
+                    SizedValue(computed, computed.bytes, computed::close)
+                }
+                return try {
+                    // Return a view that can no longer randomly be closed.
+                    cached.view()
+                } catch (_: IllegalStateException) {
+                    // In the extremely unlikely edge case that the cached bitmap was closed right before we wanted to
+                    // create a view, recompute the bitmap, but don't bother with caching.
+                    compute()
+                }
+            }
+        }
+
+    }
+
+    private data class TransformKey(
+        private val roundedScaleX: Long,
+        private val roundedScaleY: Long,
+        private val roundedShearX: Long,
+        private val roundedShearY: Long,
+        private val roundedFractionalTranslateX: Long,
+        private val roundedFractionalTranslateY: Long
+    ) {
+        constructor(t: AffineTransform) : this(
+            (t.scaleX * 1000.0).toLong(),
+            (t.scaleY * 1000.0).toLong(),
+            (t.shearX * 1000.0).toLong(),
+            (t.shearY * 1000.0).toLong(),
+            ((t.translateX - floor(t.translateX)) * 1000.0).toLong(),
+            ((t.translateY - floor(t.translateY)) * 1000.0).toLong()
+        )
+    }
+
+    private class WeakKey(obj: Any) {
+        private val ref = WeakReference(obj)
+        private val hashCode = obj.hashCode()
+        // If obj is GCed, the keys with that obj just stop being equal to anything. That's not a problem, because if
+        // an obj is GCed, nobody will ever access its cached values again, and they will eventually be removed from the
+        // cache when old entries are evicted.
+        override fun equals(other: Any?) = other is WeakKey && ref.get().let { it != null && it == other.ref.get() }
+        override fun hashCode() = hashCode
     }
 
 }

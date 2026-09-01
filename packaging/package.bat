@@ -14,10 +14,11 @@ powershell Expand-Archive work\%jdk_zip% -DestinationPath work\
 del work\%jdk_zip%
 
 echo Downloading and extracting Wix Toolset...
-set wix_zip=wix311-binaries.zip
-powershell (new-object System.Net.WebClient).DownloadFile('https://github.com/wixtoolset/wix3/releases/download/wix3112rtm/%wix_zip%', 'work\%wix_zip%')
-powershell Expand-Archive work\%wix_zip% -DestinationPath work\wix\
-del work\%wix_zip%
+set wix_msi=wix-cli-x64.msi
+set wix_exe="work\wix\PFiles64\WiX Toolset v7.0\bin\wix.exe" -acceptEula wix7
+powershell (new-object System.Net.WebClient).DownloadFile('https://github.com/wixtoolset/wix/releases/download/v7.0.0/%wix_msi%', 'work\%wix_msi%')
+msiexec /a work\%wix_msi% TARGETDIR=%~dp0work\wix\ /qn
+del work\%wix_msi%
 
 echo Collecting minimized JRE...
 %jdk_bin%\jlink @settings\jlink --output work\runtime\
@@ -39,22 +40,21 @@ set lang_tags=
 set lang_codes=
 set lang_tags_and_codes=
 FOR %%F IN (resources\msi\l10n\*) DO (
-    FOR /F "tokens=1 USEBACKQ" %%C IN (`powershell "(Select-XML -Path %%F -XPath '//ns:String[@Id=''LanguageCode'']' -Namespace @{ ns = 'http://schemas.microsoft.com/wix/2006/localization'; }).Node.'#text'"`) DO (
+    FOR /F "tokens=1 USEBACKQ" %%C IN (`powershell "[System.Globalization.CultureInfo]::GetCultureInfo('%%~nF').LCID"`) DO (
         call :append_lang %%~nF %%C
     )
 )
-REM Generate a .wxs file that lists all installed files
-work\wix\heat.exe dir work\image\cinecred\ -nologo -ag -cg Files -dr INSTALLDIR -srd -sfrag -scom -sreg -indent 2 -o work\Files.wxs
-REM Compile all .wxs files to .wxo files
-work\wix\candle.exe resources\msi\*.wxs work\Files.wxs -nologo -arch @ARCH_WIX@ -o work\wixobj\
-REM Assemble a separate .msi for each language
+REM Cache the Wix UI extension
+%wix_exe% extension add WixToolset.UI.wixext
 FOR %%T IN (%lang_tags%) DO (
-    IF "%%T" == "en-US" (set extra_arg=) else (set extra_arg=-reusecab)
-    work\wix\light.exe work\wixobj\* -nologo -b work\image\cinecred -loc resources\msi\l10n\%%T.wxl -cultures:%%T -ext WixUIExtension -cc work\wixcab\ -spdb -o work\wixmsi\%%T.msi %extra_arg%
-)
-REM Obtain .mst transformations from the en-US .msi to each other language's .msi
-FOR %%T IN (%lang_tags%) DO (
-    IF not "%%T" == "en-US" (work\wix\torch.exe -nologo work\wixmsi\en-US.msi work\wixmsi\%%T.msi -t language -o work\wixmst\%%T.mst)
+    REM Assemble a separate .msi for every language
+    %wix_exe% build -arch @ARCH_WIX@ -bindpath image=%~dp0work\image\cinecred\ -bindvariable WixUIBannerBmp=images\banner.bmp -bindvariable WixUIDialogBmp=images\sidebar.bmp -d Icon=images\icon.ico -culture %%T -ext WixToolset.UI.wixext -cabcache work\wixcab\ -pdbtype none -o work\wixmsi\%%T.msi resources\msi\*.wxs resources\msi\l10n\*.wxl
+    REM Obtain .mst transformations from the en-US .msi to every other language's .msi
+    IF not "%%T" == "en-US" (
+        %wix_exe% msi transform -t language -o work\wixmst\%%T.mst work\wixmsi\en-US.msi work\wixmsi\%%T.msi
+        REM Delete the localized .msi files immediately because they can be quite big, and there's a lot of them
+        del work\wixmsi\%%T.msi
+    )
 )
 REM Add the transformations as substorages to the en-US .msi
 copy work\wixmsi\en-US.msi work\out.msi

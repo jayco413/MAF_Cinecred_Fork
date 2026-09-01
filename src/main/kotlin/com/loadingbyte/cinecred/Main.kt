@@ -2,15 +2,14 @@
 
 package com.loadingbyte.cinecred
 
-import com.formdev.flatlaf.FlatClientProperties.STYLE_CLASS
 import com.formdev.flatlaf.FlatDarkLaf
 import com.formdev.flatlaf.FlatIconColors
 import com.formdev.flatlaf.FlatSystemProperties
 import com.formdev.flatlaf.util.HSLColor
 import com.formdev.flatlaf.util.SystemInfo
-import com.formdev.flatlaf.util.UIScale
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.DeckLink
+import com.loadingbyte.cinecred.ui.Report
 import com.loadingbyte.cinecred.ui.UIFactory
 import com.loadingbyte.cinecred.ui.UI_LOCALE_PREFERENCE
 import com.loadingbyte.cinecred.ui.comms.MasterCtrlComms
@@ -18,7 +17,6 @@ import com.loadingbyte.cinecred.ui.comms.WelcomeTab
 import com.loadingbyte.cinecred.ui.helper.*
 import com.oracle.si.Singleton
 import net.miginfocom.layout.PlatformDefaults
-import net.miginfocom.swing.MigLayout
 import org.bytedeco.ffmpeg.avutil.LogCallback
 import org.bytedeco.ffmpeg.global.avcodec
 import org.bytedeco.ffmpeg.global.avformat
@@ -27,9 +25,12 @@ import org.bytedeco.ffmpeg.global.swscale
 import org.bytedeco.javacpp.BytePointer
 import org.bytedeco.javacpp.Loader
 import org.slf4j.LoggerFactory
+import sun.misc.Signal
 import java.awt.*
-import java.net.URI
-import java.net.URLEncoder
+import java.awt.event.MouseEvent
+import java.lang.foreign.FunctionDescriptor
+import java.lang.foreign.Linker
+import java.lang.foreign.ValueLayout.JAVA_INT
 import java.util.*
 import java.util.Timer
 import java.util.concurrent.atomic.AtomicBoolean
@@ -47,6 +48,7 @@ private const val SINGLETON_APP_ID = "com.loadingbyte.cinecred"
 var demoCallback: (() -> Unit)? = null
 
 private lateinit var masterCtrl: MasterCtrlComms
+private val didSetupNatives = AtomicBoolean()
 private val hasCrashed = AtomicBoolean()
 
 
@@ -82,28 +84,8 @@ private fun initRuntime() {
     rootLogger.addHandler(ConsoleHandler().apply { formatter = JULFormatter })
     rootLogger.addHandler(JULBuilderHandler)
 
-    // Load our native libraries.
-    System.loadLibrary("skia")
-    System.loadLibrary("skiacapi")
-    System.loadLibrary("harfbuzz")
-    System.loadLibrary("zimg")
-    System.loadLibrary("nfd")
-    System.loadLibrary("decklinkcapi")
-
-    // Make JavaCPP and FlatLaf load their native libraries from java.library.path.
-    System.setProperty("org.bytedeco.javacpp.cacheLibraries", "false")
-    System.setProperty(FlatSystemProperties.NATIVE_LIBRARY_PATH, "system")
-
-    // Redirect JavaCPP's logging output to slf4j.
-    System.setProperty("org.bytedeco.javacpp.logger", "slf4j")
-    // Load the FFmpeg libs that we require.
-    Loader.load(avutil::class.java)
-    Loader.load(avcodec::class.java)
-    Loader.load(avformat::class.java)
-    Loader.load(swscale::class.java)
-    avcodec.av_jni_set_java_vm(Loader.getJavaVM(), null)
-    // Redirect FFmpeg's logging output to slf4j.
-    avutil.setLogCallback(FFmpegLogCallback)
+    // Set up the native libraries.
+    setupNatives()
 
     // Make PDFBox store its font cache in our config directory.
     System.setProperty("pdfbox.fontcache", CONFIG_DIR.absolutePathString())
@@ -119,6 +101,54 @@ private fun initRuntime() {
 }
 
 
+fun setupNatives() {
+    if (didSetupNatives.getAndSet(true))
+        return
+
+    // Make FlatLaf load its native library from java.library.path.
+    // We must st this property before the first usage of SystemInfo, as that sneakily loads the library on Windows 10.
+    System.setProperty(FlatSystemProperties.NATIVE_LIBRARY_PATH, "system")
+
+    // On Linux, set glibc's M_MMAP_THRESHOLD to a fixed value. This is the threshold above which malloc() calls are
+    // directly forwarded to mmap(), meaning that when the memory is freed again, it's immediately returned to the OS.
+    // We desire this behavior for all our bigger allocations (e.g., bitmaps), since if they don't go via mmap(), they
+    // often linger around forever in malloc()'s memory pool after deallocation and are never returned to the OS.
+    // By default, glibc dynamically adjusts the M_MMAP_THRESHOLD, but for our usage profile, that adjustment leads to
+    // few allocations going via mmap(). As a fix, we set the threshold to a fixed value.
+    // Notice that on Windows and macOS, we never observed the above problematic behavior, so no fix is needed for them.
+    if (SystemInfo.isLinux)
+        Linker.nativeLinker().downcallHandle(
+            Linker.nativeLinker().defaultLookup().find("mallopt").get(),
+            FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT)
+        )(-3 /* M_MMAP_THRESHOLD */, 64 * 1024)
+
+    // Load our native libraries.
+    System.loadLibrary("clib")
+    System.loadLibrary("skia")
+    System.loadLibrary("skiacapi")
+    System.loadLibrary("harfbuzz")
+    System.loadLibrary("clipper")
+    System.loadLibrary("zimg")
+    if (SystemInfo.isLinux)
+        System.loadLibrary("nfd")
+    System.loadLibrary("decklinkcapi")
+
+    // Make JavaCPP load its native libraries from java.library.path.
+    System.setProperty("org.bytedeco.javacpp.cacheLibraries", "false")
+    System.setProperty("org.bytedeco.javacpp.findLibraries", "false")
+    // Redirect JavaCPP's logging output to slf4j.
+    System.setProperty("org.bytedeco.javacpp.logger", "slf4j")
+    // Load the FFmpeg libs that we require.
+    Loader.load(avutil::class.java)
+    Loader.load(avcodec::class.java)
+    Loader.load(avformat::class.java)
+    Loader.load(swscale::class.java)
+    avcodec.av_jni_set_java_vm(Loader.getJavaVM(), null)
+    // Redirect FFmpeg's logging output to slf4j.
+    avutil.setLogCallback(FFmpegLogCallback)
+}
+
+
 private fun mainSwing(args: Array<String>) {
     initSwingEnvironment()
     // Run the demo code if configured, and then abort the regular startup.
@@ -126,9 +156,11 @@ private fun mainSwing(args: Array<String>) {
 
     masterCtrl = UIFactory().master()
 
-    // Globally listen to all key events.
+    // Globally listen to all key and mouse events.
     KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(masterCtrl::preGlobalKeyEvent)
     KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventPostProcessor(masterCtrl::postGlobalKeyEvent)
+    Toolkit.getDefaultToolkit()
+        .addAWTEventListener({ e -> masterCtrl.globalMouseEvent(e as MouseEvent) }, AWTEvent.MOUSE_EVENT_MASK)
 
     // On macOS, allow the user to open the about and preferences tabs via the OS.
     if (Desktop.getDesktop().isSupported(Desktop.Action.APP_ABOUT))
@@ -136,9 +168,12 @@ private fun mainSwing(args: Array<String>) {
     if (Desktop.getDesktop().isSupported(Desktop.Action.APP_PREFERENCES))
         Desktop.getDesktop().setPreferencesHandler { masterCtrl.showWelcomeFrame(tab = WelcomeTab.PREFERENCES) }
 
-    // On macOS, don't suddenly terminate the application when the user quits it or logs off, but instead try to close
-    // all windows, which in turn triggers all "unsaved changes" dialogs.
-    if (Desktop.getDesktop().isSupported(Desktop.Action.APP_QUIT_HANDLER))
+    // On Windows and macOS, don't suddenly terminate the application when the user logs off (or quits the application
+    // using the system-provided menu on macOS), but instead try to close all windows, which in turn triggers all
+    // "unsaved changes" dialogs.
+    if (SystemInfo.isWindows)
+        Signal.handle(Signal("TERM")) { masterCtrl.tryCloseProjectsAndDisposeAllFrames() }
+    else if (Desktop.getDesktop().isSupported(Desktop.Action.APP_QUIT_HANDLER))
         Desktop.getDesktop().setQuitHandler { _, response ->
             if (masterCtrl.tryCloseProjectsAndDisposeAllFrames())
                 response.performQuit()
@@ -241,96 +276,23 @@ private fun openUI(args: Array<String>) {
 }
 
 
-private object UncaughtHandler : Thread.UncaughtExceptionHandler {
+fun getLog(): String =
+    JULBuilderHandler.log.toString()
 
+
+private object UncaughtHandler : Thread.UncaughtExceptionHandler {
     override fun uncaughtException(t: Thread, e: Throwable) {
-        // Immediately collect contextual information before we do anything else.
-        val header = collectReportHeader()
         LOGGER.error("Uncaught exception. Will terminate the program.", e)
         if (hasCrashed.getAndSet(true))
             return
+        val report = Report()
         SwingUtilities.invokeLater {
-            sendReport(header)
+            report.showCrashDialog()
             // Once all frames have been disposed, no more non-daemon threads are running and hence Java will terminate.
             if (::masterCtrl.isInitialized)
                 masterCtrl.tryCloseProjectsAndDisposeAllFrames(force = true)
         }
     }
-
-    private fun collectReportHeader(): String {
-        val rt = Runtime.getRuntime()
-        val freeMem = rt.freeMemory()
-        val totalMem = rt.totalMemory()
-        val maxMem = rt.maxMemory()
-        val mb = 1024 * 1024
-        return """---- SYSTEM INFO ----
-Cinecred: $VERSION
-JVM: ${System.getProperty("java.vm.vendor")} ${System.getProperty("java.vm.name")} ${System.getProperty("java.vm.version")}
-OS: ${System.getProperty("os.name")} ${System.getProperty("os.arch")} ${System.getProperty("os.version")}
-Memory: Used ${(totalMem - freeMem) / mb} MB, Reserved ${totalMem / mb} MB, Max ${maxMem / mb} MB
-Cores: ${rt.availableProcessors()}
-Locale: ${Locale.getDefault().toLanguageTag()}
-
----- LOG ----
-"""
-    }
-
-    private fun sendReport(header: String) {
-        val win = FocusManager.getCurrentKeyboardFocusManager().activeWindow
-        val s = UIScale.getSystemScaleFactor(
-            win?.graphicsConfiguration
-                ?: GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration
-        )
-
-        val log = JULBuilderHandler.log.toString()
-        val logComp = JTextArea("$header$log").apply {
-            isEditable = false
-            putClientProperty(STYLE_CLASS, "monospaced")
-        }
-        val msgComp = JPanel(MigLayout("insets 0, wrap", "[::${50.0 * s}sp]", "[][]unrel[][]")).apply {
-            add(JLabel(l10n("ui.crash.msg.error")))
-            add(JScrollPane(logComp), "hmax ${40.0 * s}sp")
-            add(JLabel(l10n("ui.crash.msg.exit")))
-            add(JLabel(l10n("ui.crash.msg.report")))
-        }
-        val send = JOptionPane.showConfirmDialog(
-            win, msgComp, l10n("ui.crash.title"), JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE
-        ) == JOptionPane.YES_OPTION
-
-        if (send) {
-            val address = encodeMailURIComponent("crashes@cinecred.com")
-            val subject = encodeMailURIComponent("Cinecred Crash Report")
-            val report = "[If possible, please describe what you did leading up to this crash.]\n\n\n$header" +
-                    // We replace tabs by four dots because some email programs trim leading tabs and spaces.
-                    log.replace("\t", "....")
-            val body = encodeMailURIComponent(report)
-            tryMail(URI("mailto:$address?Subject=$subject&Body=$body"))
-        }
-    }
-
-    private fun encodeMailURIComponent(str: String): String =
-        URLEncoder.encode(str, "UTF-8")
-            .replace("+", "%20")
-            .replace("%21", "!")
-            .replace("%27", "'")
-            .replace("%28", "(")
-            .replace("%29", ")")
-            .replace("%7E", "~")
-
-}
-
-
-fun showLog() {
-    val win = FocusManager.getCurrentKeyboardFocusManager().activeWindow
-    val screenBounds = (win?.graphicsConfiguration
-        ?: GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice.defaultConfiguration).usableBounds
-    val log = JULBuilderHandler.log.toString()
-    val msgComp = JScrollPane(JTextArea(log).apply {
-        isEditable = false
-        putClientProperty(STYLE_CLASS, "monospaced")
-    })
-    msgComp.preferredSize = Dimension(screenBounds.width / 2, screenBounds.height / 2)
-    JOptionPane.showMessageDialog(win, msgComp, "Log", JOptionPane.INFORMATION_MESSAGE)
 }
 
 
@@ -339,7 +301,7 @@ private object JULFormatter : Formatter() {
     override fun format(record: LogRecord): String {
         val millis = record.millis - startMillis
         val threadName = getThreadByID(record.longThreadID)?.name ?: "???"
-        val exc = record.thrown?.stackTraceToString() ?: ""
+        val exc = record.thrown?.let(::formatThrowable) ?: ""
         val msg = formatMessage(record)
         return "$millis [$threadName] ${record.level} ${record.loggerName} - $msg\n$exc"
     }
@@ -355,6 +317,18 @@ private object JULFormatter : Formatter() {
             allThreads = arrayOfNulls(allThreads.size * 2)
         // Find the thread we are looking for.
         return allThreads.find { it != null && it.threadId() == threadID }
+    }
+
+    private fun formatThrowable(t: Throwable): String {
+        val stacktrace = t.stackTraceToString()
+        var t = t
+        while (true) t = t.cause ?: break
+        val inner = when (t) {
+            is ch.rabanti.nanoxlsx4j.exceptions.FormatException -> t.innerException
+            is ch.rabanti.nanoxlsx4j.exceptions.IOException -> t.innerException
+            else -> return stacktrace
+        }
+        return "${stacktrace}Inner exception: ${formatThrowable(inner)}"
     }
 }
 

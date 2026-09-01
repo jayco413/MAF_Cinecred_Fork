@@ -54,7 +54,7 @@ class PDFDrawer(
     private val textClippings = mutableListOf<Shape>()
     private var nestedHiddenOCGCount = 0
 
-    fun drawTo(canvas: Canvas, transform: AffineTransform?) {
+    fun drawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>) {
         // Find the transform from the page's coordinate system to the coordinate system of the canvas.
         val pageToCanvasTransform = compensateForCropBoxAndRotation(andFlip = true, page)
         transform?.let(pageToCanvasTransform::preConcatenate)
@@ -72,8 +72,10 @@ class PDFDrawer(
         // And now composite the PDF in that color space.
         val cropBox = page.cropBox
         canvas.compositeLayer(
-            bounds = Rectangle2D.Float(cropBox.lowerLeftX, cropBox.lowerLeftY, cropBox.width, cropBox.height),
-            transform = pageToCanvasTransform, colorSpace = requiredCS
+            colorSpace = requiredCS,
+            transform = pageToCanvasTransform,
+            clip = clip + Rectangle2D.Float(cropBox.lowerLeftX, cropBox.lowerLeftY, cropBox.width, cropBox.height)
+                .transformedBy(pageToCanvasTransform)
         ) { effCanvas, effPageToCanvasTr ->
             withGroup(Group(arrayOf(effCanvas), effPageToCanvasTr, devCS, numCompsOfSpecifiedCIEBasedBlendingCS)) {
                 processPage(page)
@@ -446,7 +448,8 @@ class PDFDrawer(
         val boundsOnCanvas = lazy(LazyThreadSafetyMode.NONE) {
             Rectangle(w, h).transformedBy(totalTransform).bounds.intersection(canvasBounds)
         }
-        val nearestNeigh = !interpolate && (totalTransform.scalingFactorX > 1.0 || totalTransform.scalingFactorY > 1.0)
+        val filter = if (!interpolate && (totalTransform.scalingFactorX > 1.0 || totalTransform.scalingFactorY > 1.0))
+            BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR else BitmapConverter.ResamplingFilter.DEFAULT
         val shader = if (isMask) currentShader(stroking = false, boundsOnCanvas) ?: return else null
         val blendMode = currentBlendMode()
         val matte = if (noSoftMask) null else currentSoftMaskMatte()
@@ -454,10 +457,10 @@ class PDFDrawer(
         val clip = group.clipCache.transform(graphicsState.currentClippingPaths)
         for (canvas in group.canvases)
             if (shader != null)
-                canvas.fillStencil(bitmap, shader, nearestNeigh, alpha, matte, 0.0, blendMode, totalTransform, clip)
+                canvas.fillStencil(bitmap, shader, alpha, matte, 0.0, blendMode, totalTransform, filter, clip)
             else
                 canvas.drawImage(
-                    bitmap, promiseOpaque, promiseClamped, nearestNeigh, alpha, matte, 0.0, blendMode, totalTransform,
+                    bitmap, promiseOpaque, promiseClamped, alpha, matte, 0.0, blendMode, totalTransform, filter,
                     clip
                 )
 
@@ -647,7 +650,7 @@ class PDFDrawer(
                 if (pdCS is PDDeviceRGB) {
                     val inPx = tgBitmap.getF(iw * 4)
                     val b = backdropColor!!.clone()
-                    ColorSpace.XYZD50.convert(tgBitmap.spec.representation.colorSpace!!, b, alpha = true, clamp = true)
+                    ColorSpace.XYZD50.convert(tgBitmap.spec.representation.colorSpace, b, alpha = true, clamp = true)
                     borderAlpha = softMaskAlpha(deviceRGBLuminosity(b, 0), transfer)
                     moveSoftMask(iw, ih) { i, o -> outPx[o] = softMaskAlpha(deviceRGBLuminosity(inPx, i), transfer) }
                 } else {
@@ -666,11 +669,13 @@ class PDFDrawer(
         if (borderAlpha != 0.toShort())
             fillBorder(outPx, ow, oh, borderAlpha)
 
-        val maskRepresentation = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAY16LE))
+        val maskRepresentation = Bitmap.Representation(
+            Bitmap.PixelFormat.of(AV_PIX_FMT_GRAY16LE), ColorSpace.of(ColorSpace.Transfer.LINEAR)
+        )
         val maskBitmap = Bitmap.allocate(Bitmap.Spec(Resolution(ow, oh), maskRepresentation))
         maskBitmap.put(outPx, ow, byteOrder = ByteOrder.LITTLE_ENDIAN)
         val offset = AffineTransform.getTranslateInstance((tgBounds.x - 1).toDouble(), (tgBounds.y - 1).toDouble())
-        return Canvas.Matte(maskBitmap, offset, Canvas.TileMode.CLAMP, disregardUserTransform = true)
+        return Canvas.Matte(maskBitmap, offset, tileMode = Canvas.TileMode.CLAMP, disregardUserTransform = true)
     }
 
     private fun softMaskAlpha(arg: Float, fn: PDFunction?): Short {
@@ -701,10 +706,9 @@ class PDFDrawer(
 
     private fun applyCurrentTransferFunction(bitmap: Bitmap): Bitmap {
         val transfers = try {
-            val value = graphicsState.transfer
-            when {
-                value is COSArray && value.size() >= 3 -> (0..2).map { PDFunction.create(value.getObject(it)) }
-                value is COSDictionary -> PDFunction.create(value).let { listOf(it, it, it) }
+            when (val value = graphicsState.transfer) {
+                is COSArray if value.size() >= 3 -> (0..2).map { PDFunction.create(value.getObject(it)) }
+                is COSDictionary -> PDFunction.create(value).let { listOf(it, it, it) }
                 else -> null
             }
         } catch (_: IOException) {

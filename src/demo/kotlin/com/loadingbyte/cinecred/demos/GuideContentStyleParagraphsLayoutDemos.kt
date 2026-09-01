@@ -28,7 +28,7 @@ object GuideContentStyleParagraphsLayoutLineHJustifyDemo : StyleSettingsDemo<Con
     listOf(ContentStyle::paragraphsLineHJustify.st()), pageGuides = true
 ) {
     override fun styles() = buildList<ContentStyle> {
-        for (justify in LineHJustify.entries)
+        for (justify in HJustifyCrumbsStack.entries)
             this += blurbCS.copy(name = "Demo", paragraphsLineHJustify = justify)
     }
 
@@ -66,7 +66,7 @@ object GuideContentStyleParagraphsLayoutParagraphGapAndLineGapDemo : StyleSettin
 }
 
 
-private val blurbCS = PRESET_CONTENT_STYLE.copy(
+private val blurbCS = presetContentStyle().copy(
     bodyLetterStyleName = "Normal", bodyLayout = BodyLayout.PARAGRAPHS, paragraphsLineWidthPx = 500.0
 )
 

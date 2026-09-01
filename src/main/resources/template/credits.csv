@@ -1,5 +1,4 @@
-{projectIO.credits.table.headDesc},{projectIO.credits.table.bodyDesc},{projectIO.credits.table.tailDesc},{projectIO.credits.table.vGapDesc},{projectIO.credits.table.contentStyleDesc},{projectIO.credits.table.breakHarmonizationDesc},{projectIO.credits.table.spinePosDesc},{projectIO.credits.table.pageStyleDesc},{projectIO.credits.table.pageRuntimeDesc},{projectIO.credits.table.pageGapDesc}
-@{projectIO.credits.table.head},@{projectIO.credits.table.body},@{projectIO.credits.table.tail},@{projectIO.credits.table.vGap},@{projectIO.credits.table.contentStyle},@{projectIO.credits.table.breakHarmonization},@{projectIO.credits.table.spinePos},@{projectIO.credits.table.pageStyle},@{projectIO.credits.table.pageRuntime},@{projectIO.credits.table.pageGap}
+@{head},@{body},@{tail},@{vGap},@{contentStyle},@{breakHarmonization},@{spinePos},@{pageStyle},@{pageRuntime},@{pageGap}
 ,,,,,,,,,
 ,,,,,,,,,
 ,,,,,,,,,
@@ -71,7 +70,7 @@ University,Desmond Desperation,,,,,,,,
 “I Love Cinecred”,Written by I’m Held Hostage,,,,,,,,
 ,Please Send Help,,,,,,,,
 ,,,,,,,,,
-“Hoppe hoppe Reiter”,Written by An Unknown Lad,,,,,<200> {projectIO.credits.table.parallel},,,
+“Hoppe hoppe Reiter”,Written by An Unknown Lad,,,,,<200> {parallel},,,
 ,in Ancient Germanic Times,,,,,,,,
 ,{{{blank}}},,,,,,,,
 ,,,,,,,,,
@@ -97,10 +96,10 @@ University,Desmond Desperation,,,,,,,,
 ,Sophia Supporter,,,,,,,,
 ,Valerie Volunteer,,,,,,,,
 ,,,6,,,,,,
-,{{{projectIO.credits.table.pic} Cinecred V}},,,{project.template.contentStyleLogos},,,,,
-,{{{projectIO.credits.table.pic} Cinecred H}},,,,,,,,
+,{{{pic} Cinecred V}},,,{project.template.contentStyleLogos},,,,,
+,{{{pic} Cinecred H}},,,,,,,,
 ,,,8,,,,,,
 ,"Here’s to all the lawyers who rejoice us by dint of their writing and printing and scripture; those finest of people who uswards bestow the greatest of delights in virtue of their wonderous wisdom, which wretched creatures as thee and me may never fully fathom ourself.",,,{project.template.contentStyleBlurb},,,,,
 ,Go now henceforth and forevermore recite thy verbiage which brings thee the most splendid of joys.,,,,,,,,
-,,,15,,,,,,{projectIO.credits.table.melt}
-,Copyright © 2023 {{{projectIO.credits.table.style} {project.template.letterStyleName}}}Callie Cash{{{projectIO.credits.table.style}}} and {{{projectIO.credits.table.style} {project.template.letterStyleName}}}Molly Money,,,,,,{project.PageBehavior.CARD},[3s],
+,,,15,,,,,,{fuse}
+,Copyright © 2023 {{{style} {project.template.letterStyleName}}}Callie Cash{{{style}}} and {{{style} {project.template.letterStyleName}}}Molly Money,,,,,,{project.PageBehavior.CARD},[3s],

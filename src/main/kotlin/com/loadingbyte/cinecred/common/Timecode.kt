@@ -165,6 +165,9 @@ sealed interface Timecode : Comparable<Timecode> {
         override fun toFrames(fps: FPS) =
             Frames(roundingDiv(numerator * fps.numerator, denominator * fps.denominator).toInt())
 
+        fun toFramesFloor(fps: FPS) =
+            Frames(floorDiv(numerator * fps.numerator, denominator * fps.denominator).toInt())
+
         fun toFramesCeil(fps: FPS) =
             Frames(ceilDiv(numerator * fps.numerator, denominator * fps.denominator).toInt())
 
@@ -317,8 +320,8 @@ sealed interface Timecode : Comparable<Timecode> {
         }
 
         private fun validateComponents(seconds: Int, frames: Int) {
-            require(seconds >= 0) { "Components timecode must have non-negative number of frames." }
-            require(frames >= 0) { "Components timecode must have non-negative number of seconds." }
+            require(seconds >= 0) { "Components timecode must have non-negative number of seconds." }
+            require(frames >= 0) { "Components timecode must have non-negative number of frames." }
         }
 
     }

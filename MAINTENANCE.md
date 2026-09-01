@@ -8,13 +8,11 @@ wish to contribute to its development.
 Running
 -------
 
-Cinecred requires JDK 21. Gradle's toolchain mechanism enforces that version,
+Cinecred requires JDK 25. Gradle's toolchain mechanism enforces that version,
 but automatic JDK downloading is disabled.
 
-Depending on your platform, use the command `gradle runOnWindows`,
-`gradle runOnMacX86`, `gradle runOnMacARM`, or `gradle runOnLinux` to build the
-software, collect all native libraries for the platform, and then run it with
-the necessary arguments.
+Use the command `gradle run` to build the software, collect all native libraries
+for your platform, and then run it with the necessary arguments.
 
 
 Releasing
@@ -24,7 +22,7 @@ This section explains how to build binaries of a new version and to publish them
 to the various distribution channels.
 
 1. Run `gradle clean preparePackaging`.
-   This will create three folders in `build/packaging/`, one for each OS.
+   This will create four folders in `build/packaging/`, one for each OS.
 2. Now copy the Windows folder onto a Windows machine and run the `package.bat`
    script there to build a Windows installer.
    Analogously proceed with macOS x86, macOS ARM, and Linux, but use the
@@ -64,11 +62,11 @@ update, which means:
 This process is fully automated using Gradle. On Windows, macOS x86, and Linux
 respectively, run
 
-    gradlew[.bat] build(Skia|SkiaCAPI|HarfBuzz|Zimg|NFD|DeckLinkCAPI)For(Windows|MacX86|MacARM|Linux)
+    gradlew[.bat] build(CLib|Skia|SkiaCAPI|HarfBuzz|Clipper|Zimg|NFD|DeckLinkCAPI)For(Windows|MacX86|MacARM|Linux)
 
 to build the native libraries and put them into the source tree. Then, on any
 machine, run
 
-    gradlew[.bat] jextract(SkiaCAPI|Skcms|HarfBuzz|Zimg|NFD|DeckLinkCAPI)
+    gradlew[.bat] jextract(CLib|SkiaCAPI|Skcms|HarfBuzz|ClipperCAPI|Zimg|NFD|DeckLinkCAPI)
 
 to regenerate the Java bindings and also put them into the source tree.

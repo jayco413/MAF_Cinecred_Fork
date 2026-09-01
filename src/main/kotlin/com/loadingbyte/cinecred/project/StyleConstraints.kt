@@ -2,8 +2,10 @@ package com.loadingbyte.cinecred.project
 
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.common.Severity.*
-import com.loadingbyte.cinecred.imaging.Color4f
-import com.loadingbyte.cinecred.imaging.Transition
+import com.loadingbyte.cinecred.imaging.*
+import com.loadingbyte.cinecred.imaging.Font.Companion.MANAGED_FEATURES
+import com.loadingbyte.cinecred.imaging.Font.Companion.PETITE_CAPS_FEATURE
+import com.loadingbyte.cinecred.imaging.Font.Companion.SMALL_CAPS_FEATURE
 import com.loadingbyte.cinecred.project.BlockOrientation.HORIZONTAL
 import com.loadingbyte.cinecred.project.BlockOrientation.VERTICAL
 import com.loadingbyte.cinecred.project.BodyLayout.FLOW
@@ -32,7 +34,6 @@ fun <S : Style> getStyleConstraints(styleClass: Class<S>): List<StyleConstraint<
 
 private val GLOBAL_CONSTRAINTS: List<StyleConstraint<Global, *>> = listOf(
     ResolutionConstr(ERROR, Global::resolution.st()),
-    FPSConstr(ERROR, Global::fps.st()),
     DynChoiceConstr(ERROR, Global::timecodeFormat.st()) { _, global ->
         global.fps.canonicalTimecodeFormats
     },
@@ -43,11 +44,11 @@ private val GLOBAL_CONSTRAINTS: List<StyleConstraint<Global, *>> = listOf(
 
 
 private val PAGE_STYLE_CONSTRAINTS: List<StyleConstraint<PageStyle, *>> = listOf(
-    JudgeConstr(WARN, msg("blank"), PageStyle::name.st()) { _, style -> style.name.isNotBlank() },
+    JudgeConstr(WARN, msg("required"), PageStyle::name.st()) { _, style -> style.name.isNotBlank() },
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), PageStyle::name.st()) { styling, style ->
         styling.pageStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
-    IntConstr(ERROR, PageStyle::cardRuntimeFrames.st(), min = 0),
+    IntConstr(ERROR, PageStyle::cardRuntimeFrames.st(), min = 1),
     IntConstr(ERROR, PageStyle::cardFadeInFrames.st(), min = 0),
     IntConstr(ERROR, PageStyle::cardFadeOutFrames.st(), min = 0),
     StyleNameConstr(
@@ -65,7 +66,7 @@ private val PAGE_STYLE_CONSTRAINTS: List<StyleConstraint<PageStyle, *>> = listOf
 
 
 private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = listOf(
-    JudgeConstr(WARN, msg("blank"), ContentStyle::name.st()) { _, style -> style.name.isNotBlank() },
+    JudgeConstr(WARN, msg("required"), ContentStyle::name.st()) { _, style -> style.name.isNotBlank() },
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), ContentStyle::name.st()) { styling, style ->
         styling.contentStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
@@ -136,6 +137,11 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
         }
     ),
     DynSizeConstr(ERROR, ContentStyle::gridCellHJustifyPerCol.st(), size = { _, style -> style.gridCols }),
+    DynChoiceConstr(WARN, ContentStyle::gridTextVJustify.st()) { _, style ->
+        if (style.gridTextVJustifyFragments == VTextFragment.ALL_LINES)
+            EnumSet.complementOf(EnumSet.of(VJustifyText.BASELINE))
+        else EnumSet.allOf(VJustifyText::class.java)
+    },
     DoubleConstr(ERROR, ContentStyle::gridRowGapPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::gridColGapPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::flowForceCellWidthPx.st(), min = 0.0),
@@ -164,11 +170,22 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
             }
         }
     ),
-    DoubleConstr(ERROR, ContentStyle::flowLineWidthPx.st(), min = 0.0, minInclusive = false),
-    DoubleConstr(ERROR, ContentStyle::flowLineGapPx.st(), min = 0.0),
-    DoubleConstr(ERROR, ContentStyle::flowHGapPx.st(), min = 0.0),
+    DynChoiceConstr(WARN, ContentStyle::flowTextVJustify.st()) { _, style ->
+        if (style.flowTextVJustifyFragments == VTextFragment.ALL_LINES)
+            EnumSet.complementOf(EnumSet.of(VJustifyText.BASELINE))
+        else EnumSet.allOf(VJustifyText::class.java)
+    },
+    DoubleConstr(ERROR, ContentStyle::flowRowWidthPx.st(), min = 0.0, minInclusive = false),
+    DoubleConstr(ERROR, ContentStyle::flowRowGapPx.st(), min = 0.0),
+    DoubleConstr(ERROR, ContentStyle::flowCellHGapPx.st(), min = 0.0),
     StyledStringConstr(WARN, ContentStyle::flowSeparator.st()) { _, style ->
-        style.flowSeparatorLetterStyleName.orElse { style.bodyLetterStyleName }
+        style.flowSeparatorLetterStyleName.value ?: style.bodyLetterStyleName
+    },
+    DynChoiceConstr(WARN, ContentStyle::flowSeparatorVJustify.st()) { _, style ->
+        if (style.flowTextVJustifyFragments == VTextFragment.ALL_LINES ||
+            style.flowTextVJustify != VJustifyText.BASELINE
+        ) EnumSet.complementOf(EnumSet.of(VJustifyText.BASELINE))
+        else EnumSet.allOf(VJustifyText::class.java)
     },
     DoubleConstr(ERROR, ContentStyle::paragraphsLineWidthPx.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, ContentStyle::paragraphsParaGapPx.st(), min = 0.0),
@@ -183,9 +200,14 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
             }
         }
     ),
+    DynChoiceConstr(WARN, ContentStyle::headVJustify.st()) { _, style ->
+        if (!style.headVJustifyBodyFragment.isLine || style.headVJustifyHeadFragment == VTextFragment.ALL_LINES)
+            EnumSet.complementOf(EnumSet.of(VJustifyText.BASELINE))
+        else EnumSet.allOf(VJustifyText::class.java)
+    },
     DoubleConstr(ERROR, ContentStyle::headGapPx.st(), min = 0.0),
     StyledStringConstr(WARN, ContentStyle::headLeader.st()) { _, style ->
-        style.headLeaderLetterStyleName.orElse { style.headLetterStyleName }
+        style.headLeaderLetterStyleName.value ?: style.headLetterStyleName.value ?: style.bodyLetterStyleName
     },
     DoubleConstr(ERROR, ContentStyle::headLeaderMarginLeftPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::headLeaderMarginRightPx.st(), min = 0.0),
@@ -200,9 +222,14 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
             }
         }
     ),
+    DynChoiceConstr(WARN, ContentStyle::tailVJustify.st()) { _, style ->
+        if (!style.tailVJustifyBodyFragment.isLine || style.tailVJustifyTailFragment == VTextFragment.ALL_LINES)
+            EnumSet.complementOf(EnumSet.of(VJustifyText.BASELINE))
+        else EnumSet.allOf(VJustifyText::class.java)
+    },
     DoubleConstr(ERROR, ContentStyle::tailGapPx.st(), min = 0.0),
     StyledStringConstr(WARN, ContentStyle::tailLeader.st()) { _, style ->
-        style.tailLeaderLetterStyleName.orElse { style.tailLetterStyleName }
+        style.tailLeaderLetterStyleName.value ?: style.tailLetterStyleName.value ?: style.bodyLetterStyleName
     },
     DoubleConstr(ERROR, ContentStyle::tailLeaderMarginLeftPx.st(), min = 0.0),
     DoubleConstr(ERROR, ContentStyle::tailLeaderMarginRightPx.st(), min = 0.0),
@@ -211,11 +238,14 @@ private val CONTENT_STYLE_CONSTRAINTS: List<StyleConstraint<ContentStyle, *>> = 
 
 
 private val LETTER_STYLE_CONSTRAINTS: List<StyleConstraint<LetterStyle, *>> = listOf(
-    JudgeConstr(WARN, msg("blank"), LetterStyle::name.st()) { _, style -> style.name.isNotBlank() },
+    JudgeConstr(WARN, msg("required"), LetterStyle::name.st()) { _, style -> style.name.isNotBlank() },
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), LetterStyle::name.st()) { styling, style ->
         styling.letterStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
     FontConstr(WARN, LetterStyle::font.st()),
+    FontVariationsConstr(WARN, LetterStyle::variations.st()) { _, style ->
+        style.font.font?.axes ?: emptyList()
+    },
     DoubleConstr(ERROR, LetterStyle::heightPx.st(), min = 1.0),
     JudgeConstr(
         WARN, msg("project.styling.constr.excessiveLeading"),
@@ -228,22 +258,20 @@ private val LETTER_STYLE_CONSTRAINTS: List<StyleConstraint<LetterStyle, *>> = li
         val font = style.font.font ?: return@JudgeConstr true
         when (style.smallCaps) {
             SmallCaps.OFF -> true
-            SmallCaps.SMALL_CAPS -> SMALL_CAPS_FONT_FEAT in font.getSupportedFeatures()
-            SmallCaps.PETITE_CAPS -> PETITE_CAPS_FONT_FEAT in font.getSupportedFeatures()
+            SmallCaps.SMALL_CAPS -> font.facets.any { it.tag == SMALL_CAPS_FEATURE }
+            SmallCaps.PETITE_CAPS -> font.facets.any { it.tag == PETITE_CAPS_FEATURE }
         }
     },
     DoubleConstr(ERROR, LetterStyle::superscriptScaling.st(), min = 0.0, minInclusive = false),
     FontFeatureConstr(WARN, LetterStyle::features.st()) { _, style ->
-        val font = style.font.font ?: return@FontFeatureConstr Collections.emptySortedSet()
-        TreeSet(font.getSupportedFeatures()).apply { removeAll(MANAGED_FONT_FEATS) }
+        style.font.font?.facets?.filter { it.tag !in MANAGED_FEATURES } ?: emptyList()
     },
     StyleNameConstr(
         WARN, LetterStyle::inheritLayersFromStyle.st(),
         styleClass = LetterStyle::class.java,
         choices = { styling, _ -> styling.letterStyles.filter { o -> !o.inheritLayersFromStyle.isActive } }
     ),
-    // This constraint is imposed upon us by Java. Source: sun.font.AttributeValues.i_validate()
-    DoubleConstr(ERROR, LetterStyle::hScaling.st(), min = 0.5, max = 10.0, maxInclusive = false)
+    DoubleConstr(ERROR, LetterStyle::hScaling.st(), min = 0.0, minInclusive = false)
 )
 
 
@@ -252,12 +280,12 @@ private const val BLUR_RADIUS_LIMIT = 200
 private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
     JudgeConstr(
         WARN, msg("project.styling.constr.unusedHiddenLayer"),
-        Layer::coloring.st(), Layer::color1.st(), Layer::flashColors.st(), Layer::color2.st()
+        Layer::coloring.st(), Layer::plainColor.st(), Layer::flashColors.st(), Layer::gradientStops.st()
     ) { styling, style ->
         val visible = when (style.coloring) {
             LayerColoring.OFF -> false
-            LayerColoring.PLAIN -> style.color1.a != 0f || style.flashColors.any { it.a != 0f }
-            LayerColoring.GRADIENT -> style.color1.a != 0f || style.color2.a != 0f
+            LayerColoring.PLAIN -> style.plainColor.a != 0f || style.flashColors.any { it.a != 0f }
+            LayerColoring.GRADIENT -> style.gradientStops.any { it.color.a != 0f }
         }
         if (visible)
             return@JudgeConstr true
@@ -269,8 +297,9 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
     },
     ColorConstr(ERROR, Layer::flashColors.st(), allowAlpha = true),
     IntConstr(ERROR, Layer::flashIntervalFrames.st(), min = 0),
-    DoubleConstr(ERROR, Layer::gradientAngleDeg.st(), min = -90.0, max = 90.0),
+    DoubleConstr(ERROR, Layer::gradientAngleDeg.st(), mod = 360.0),
     DoubleConstr(ERROR, Layer::gradientExtentRfh.st(), min = 0.0),
+    MinSizeConstr(ERROR, Layer::gradientStops.st(), minSize = 2),
     DoubleConstr(ERROR, Layer::stripeHeightRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::stripeCornerRadiusRfh.st(), min = 0.0, minInclusive = false),
     DoubleConstr(ERROR, Layer::stripeDashPatternRfh.st(), min = 0.0, minInclusive = false),
@@ -284,8 +313,10 @@ private val LAYER_CONSTRAINTS: List<StyleConstraint<Layer, *>> = listOf(
         siblingOrdinal != styleOrdinal
     },
     MinSizeConstr(WARN, Layer::cloneLayers.st(), minSize = 1),
-    DoubleConstr(ERROR, Layer::dilationRfh.st(), min = 0.0),
     DoubleConstr(ERROR, Layer::contourThicknessRfh.st(), min = 0.0, minInclusive = false),
+    DoubleConstr(ERROR, Layer::offsetAngleDeg.st(), mod = 360.0),
+    ScalingConstr(WARN, Layer::hScaling.st()),
+    ScalingConstr(WARN, Layer::vScaling.st()),
     DynChoiceConstr(WARN, Layer::anchor.st()) { _, style ->
         if (style.shape == LayerShape.CLONE && style.cloneLayers.size >= 2) EnumSet.allOf(LayerAnchor::class.java)
         else EnumSet.of(LayerAnchor.INDIVIDUAL, LayerAnchor.GLOBAL)
@@ -340,7 +371,7 @@ private fun canWalkBackToSelf(layers: List<Layer>, ownLayerIdx: Int): Boolean {
 
 
 private val TRANSITION_STYLE_CONSTRAINTS: List<StyleConstraint<TransitionStyle, *>> = listOf(
-    JudgeConstr(WARN, msg("blank"), TransitionStyle::name.st()) { _, style -> style.name.isNotBlank() },
+    JudgeConstr(WARN, msg("required"), TransitionStyle::name.st()) { _, style -> style.name.isNotBlank() },
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), TransitionStyle::name.st()) { styling, style ->
         styling.transitionStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
@@ -349,19 +380,39 @@ private val TRANSITION_STYLE_CONSTRAINTS: List<StyleConstraint<TransitionStyle, 
 
 
 private val PICTURE_STYLE_CONSTRAINTS: List<StyleConstraint<PictureStyle, *>> = listOf(
-    JudgeConstr(WARN, msg("blank"), PictureStyle::name.st()) { _, style -> style.name.isNotBlank() },
+    JudgeConstr(WARN, msg("required"), PictureStyle::name.st()) { _, style -> style.name.isNotBlank() },
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), PictureStyle::name.st()) { styling, style ->
         styling.pictureStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
     PictureConstr(WARN, PictureStyle::picture.st()),
     // To avoid OOM crashes due to absurdly large pictures, limit their size to a reasonable range.
     DoubleConstr(ERROR, PictureStyle::widthPx.st(), min = 0.0, minInclusive = false, max = 10_000.0),
-    DoubleConstr(ERROR, PictureStyle::heightPx.st(), min = 0.0, minInclusive = false, max = 10_000.0)
+    DoubleConstr(ERROR, PictureStyle::heightPx.st(), min = 0.0, minInclusive = false, max = 10_000.0),
+    DoubleConstr(ERROR, PictureStyle::cropLeftPx.st(), min = 0.0),
+    DoubleConstr(ERROR, PictureStyle::cropRightPx.st(), min = 0.0),
+    DoubleConstr(ERROR, PictureStyle::cropTopPx.st(), min = 0.0),
+    DoubleConstr(ERROR, PictureStyle::cropBottomPx.st(), min = 0.0),
+    JudgeConstr(
+        WARN, msg("project.styling.constr.excessiveCrop"),
+        PictureStyle::cropLeftPx.st(), PictureStyle::cropRightPx.st(),
+        PictureStyle::cropTopPx.st(), PictureStyle::cropBottomPx.st()
+    ) { _, style ->
+        try {
+            val crop = DeferredImage.EmbeddedPicture.computeCrop(
+                (style.picture.loader ?: return@JudgeConstr true).picture,
+                style.cropLeftPx, style.cropRightPx, style.cropTopPx, style.cropBottomPx
+            )
+            crop.width > 0.0 && crop.height > 0.0
+        } catch (_: IllegalStateException) {
+            true
+        }
+    },
+    DoubleConstr(ERROR, PictureStyle::rotationDeg.st(), mod = 360.0)
 )
 
 
 private val TAPE_STYLE_CONSTRAINTS: List<StyleConstraint<TapeStyle, *>> = listOf(
-    JudgeConstr(WARN, msg("blank"), TapeStyle::name.st()) { _, style -> style.name.isNotBlank() },
+    JudgeConstr(WARN, msg("required"), TapeStyle::name.st()) { _, style -> style.name.isNotBlank() },
     JudgeConstr(WARN, msg("project.styling.constr.duplicateStyleName"), TapeStyle::name.st()) { styling, style ->
         styling.tapeStyles.all { o -> o === style || !ROOT_CASE_INSENSITIVE_COLLATOR.equals(o.name, style.name) }
     },
@@ -369,6 +420,26 @@ private val TAPE_STYLE_CONSTRAINTS: List<StyleConstraint<TapeStyle, *>> = listOf
     // To avoid OOM crashes due to absurdly large tapes, limit their size to a reasonable range.
     IntConstr(ERROR, TapeStyle::widthPx.st(), min = 1, max = 10_000),
     IntConstr(ERROR, TapeStyle::heightPx.st(), min = 1, max = 10_000),
+    IntConstr(ERROR, TapeStyle::cropLeftPx.st(), min = 0),
+    IntConstr(ERROR, TapeStyle::cropRightPx.st(), min = 0),
+    IntConstr(ERROR, TapeStyle::cropTopPx.st(), min = 0),
+    IntConstr(ERROR, TapeStyle::cropBottomPx.st(), min = 0),
+    JudgeConstr(
+        WARN, msg("project.styling.constr.excessiveCrop"),
+        TapeStyle::cropLeftPx.st(), TapeStyle::cropRightPx.st(),
+        TapeStyle::cropTopPx.st(), TapeStyle::cropBottomPx.st()
+    ) { _, style ->
+        try {
+            val crop = DeferredImage.EmbeddedTape.computeCrop(
+                (style.tape.tape ?: return@JudgeConstr true),
+                style.cropLeftPx, style.cropRightPx, style.cropTopPx, style.cropBottomPx
+            )
+            crop.width > 0 && crop.height > 0
+        } catch (_: IllegalStateException) {
+            true
+        }
+    },
+    IntConstr(ERROR, TapeStyle::rotationDeg.st(), atom = 90, mod = 360),
     TapeSliceConstr(
         WARN, TapeStyle::slice.st(),
         getFPS = { styling, style ->
@@ -415,7 +486,10 @@ private val TAPE_STYLE_CONSTRAINTS: List<StyleConstraint<TapeStyle, *>> = listOf
         WARN, TapeStyle::fadeInTransitionStyleName.st(), TapeStyle::fadeOutTransitionStyleName.st(),
         styleClass = TransitionStyle::class.java,
         choices = { styling, _ -> styling.transitionStyles }
-    )
+    ),
+    FixedChoiceConstr(ERROR, TapeStyle::primaries.st(), choices = ColorSpace.Primaries.CODES),
+    FixedChoiceConstr(ERROR, TapeStyle::transfer.st(), choices = ColorSpace.Transfer.CODES),
+    FixedChoiceConstr(ERROR, TapeStyle::yuvCoefficients.st(), choices = Bitmap.YUVCoefficients.CODES)
 )
 
 
@@ -431,6 +505,8 @@ class IntConstr<S : Style>(
     setting: StyleSetting<S, Int>,
     val min: Int? = null,
     val max: Int? = null,
+    val atom: Int? = null,
+    val mod: Int? = null
 ) : StyleConstraint<S, StyleSetting<S, Int>>(setting)
 
 
@@ -440,21 +516,23 @@ class DoubleConstr<S : Style>(
     val min: Double? = null,
     val minInclusive: Boolean = true,
     val max: Double? = null,
-    val maxInclusive: Boolean = true
+    val maxInclusive: Boolean = true,
+    val atom: Double? = null,
+    val mod: Double? = null
 ) : StyleConstraint<S, StyleSetting<S, Double>>(setting)
 
 
-class FixedChoiceConstr<S : Style, SUBJ : Enum<SUBJ>>(
+class FixedChoiceConstr<S : Style, SUBJ : Any>(
     val severity: Severity,
     vararg settings: StyleSetting<S, SUBJ>,
-    val choices: EnumSet<SUBJ>
+    val choices: Collection<SUBJ>
 ) : StyleConstraint<S, StyleSetting<S, SUBJ>>(*settings)
 
 
-class DynChoiceConstr<S : Style, SUBJ : Enum<SUBJ>>(
+class DynChoiceConstr<S : Style, SUBJ : Any>(
     val severity: Severity,
     vararg settings: StyleSetting<S, SUBJ>,
-    val choices: (Styling, S) -> EnumSet<SUBJ>
+    val choices: (Styling, S) -> Collection<SUBJ>
 ) : StyleConstraint<S, StyleSetting<S, SUBJ>>(*settings)
 
 
@@ -472,6 +550,12 @@ class StyleNameConstr<S : Style, R : ListedStyle>(
 }
 
 
+class ScalingConstr<S : Style>(
+    val severity: Severity,
+    setting: StyleSetting<S, Double>
+) : StyleConstraint<S, StyleSetting<S, Double>>(setting)
+
+
 class ColorConstr<S : Style>(
     val severity: Severity,
     setting: StyleSetting<S, Color4f>,
@@ -483,12 +567,6 @@ class ResolutionConstr<S : Style>(
     val severity: Severity,
     setting: StyleSetting<S, Resolution>
 ) : StyleConstraint<S, StyleSetting<S, Resolution>>(setting)
-
-
-class FPSConstr<S : Style>(
-    val severity: Severity,
-    setting: StyleSetting<S, FPS>
-) : StyleConstraint<S, StyleSetting<S, FPS>>(setting)
 
 
 class FontConstr<S : Style>(
@@ -509,10 +587,17 @@ class TapeConstr<S : Style>(
 ) : StyleConstraint<S, StyleSetting<S, TapeRef>>(setting)
 
 
+class FontVariationsConstr<S : Style>(
+    val severity: Severity,
+    setting: StyleSetting<S, FontVariations>,
+    val getAvailableAxes: (Styling, S) -> List<Font.Axis>
+) : StyleConstraint<S, StyleSetting<S, FontVariations>>(setting)
+
+
 class FontFeatureConstr<S : Style>(
     val severity: Severity,
     setting: StyleSetting<S, FontFeature>,
-    val getAvailableTags: (Styling, S) -> SequencedSet<String>
+    val getAvailableFacets: (Styling, S) -> List<Font.Facet>
 ) : StyleConstraint<S, StyleSetting<S, FontFeature>>(setting)
 
 
@@ -577,7 +662,7 @@ class ConstraintViolation(
     val msg: String?
 )
 
-fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
+fun verifyConstraints(styling: Styling): MutableList<ConstraintViolation> {
     val violations = mutableListOf<ConstraintViolation>()
 
     fun log(
@@ -596,15 +681,25 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, value ->
                         val min = cst.min
                         val max = cst.max
+                        val atom = cst.atom
+                        val mod = cst.mod
                         if (min != null && value < min)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberGTE", min))
                         if (max != null && value > max)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLTE", max))
+                        if (atom != null && value % atom != 0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberMod", atom))
+                        if (mod != null && value < 0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberGTE", 0))
+                        if (mod != null && value >= mod)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLT", mod))
                     }
                 is DoubleConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, value ->
                         val min = cst.min
                         val max = cst.max
+                        val atom = cst.atom
+                        val mod = cst.mod
                         if (!value.isFinite())
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberFinite"))
                         if (min != null && cst.minInclusive && value < min)
@@ -615,6 +710,12 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLTE", max))
                         if (max != null && !cst.maxInclusive && value >= max)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLT", max))
+                        if (atom != null && value % atom != 0.0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberMod", atom))
+                        if (mod != null && value < 0.0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberGTE", 0.0))
+                        if (mod != null && value >= mod)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.numberLT", mod))
                     }
                 is FixedChoiceConstr<S, *> ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, value ->
@@ -637,9 +738,11 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                                 (!cst.clustering || choice.name != (style as ListedStyle).name) && choice.name == ref
                             }
                             if (refUnavailable) {
-                                val msg =
-                                    if (st is ListStyleSetting) l10n("project.styling.constr.styles")
-                                    else l10n("project.styling.constr.style")
+                                val msg = when {
+                                    choices.isEmpty() -> l10n("project.styling.constr.noStyles")
+                                    st is ListStyleSetting -> l10n("project.styling.constr.styles")
+                                    else -> l10n("project.styling.constr.style")
+                                }
                                 log(rootStyle, style, st, idx, cst.severity, msg)
                             }
                         }
@@ -665,6 +768,11 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                         }
                     }
                 }
+                is ScalingConstr ->
+                    style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, scaling ->
+                        if (scaling == 0.0)
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.zeroScaling"))
+                    }
                 is ColorConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, color ->
                         if (!cst.allowAlpha && color.a != 1f)
@@ -687,11 +795,6 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                             }
                         }
                     }
-                is FPSConstr ->
-                    style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, fps ->
-                        if (fps.run { numerator <= 0 || denominator <= 0 })
-                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.fps"))
-                    }
                 is FontConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, fontRef ->
                         if (fontRef.font == null)
@@ -699,8 +802,14 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                     }
                 is PictureConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, picRef ->
-                        if (picRef.loader == null)
+                        val loader = picRef.loader
+                        if (loader == null)
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.picture"))
+                        else try {
+                            loader.picture
+                        } catch (_: IllegalStateException) {
+                            log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.pictureCorrupt"))
+                        }
                     }
                 is TapeConstr ->
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, tapeRef ->
@@ -713,8 +822,30 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.tapeCorrupt"))
                         }
                     }
+                is FontVariationsConstr -> {
+                    val availableAxes = cst.getAvailableAxes(styling, style)
+                    style.forEachRelevantSubject(cst, ignoreSettings) { st, _, variations ->
+                        for ((tag, value) in variations) {
+                            val idx = availableAxes.indexOfFirst { axis -> axis.tag == tag }
+                            if (idx != -1) {
+                                val axis = availableAxes[idx]
+                                val min = axis.minValue
+                                val max = axis.maxValue
+                                var msg: String? = null
+                                if (!value.isFinite())
+                                    msg = l10n("project.styling.constr.numberFinite")
+                                else if (value < min)
+                                    msg = l10n("project.styling.constr.numberGTE", min)
+                                else if (value > max)
+                                    msg = l10n("project.styling.constr.numberLTE", max)
+                                if (msg != null)
+                                    log(rootStyle, style, st, idx, cst.severity, msg)
+                            }
+                        }
+                    }
+                }
                 is FontFeatureConstr -> {
-                    val availableTags = cst.getAvailableTags(styling, style)
+                    val availableTags = cst.getAvailableFacets(styling, style).mapTo(HashSet()) { it.tag }
                     forEachRelevantSetting(cst, ignoreSettings) { st ->
                         val remainingTags = HashSet(availableTags)
                         st.extractSubjects(style).forEachIndexed { idx, feat ->
@@ -744,8 +875,7 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                     val formats = cst.getTimecodeFormats(styling, style)
                     val range = cst.getRange(styling, style)
                     style.forEachRelevantSubject(cst, ignoreSettings) { st, idx, sl ->
-                        for (tcOpt in arrayOf(sl.inPoint, sl.outPoint)) if (tcOpt.isActive) {
-                            val tc = tcOpt.value
+                        for (tc in arrayOf(sl.inPoint, sl.outPoint)) if (tc != null) {
                             if (tc.format !in formats) {
                                 val msg = l10n("project.styling.constr.timecodeFormatDisallowed")
                                 log(rootStyle, style, st, idx, cst.severity, msg)
@@ -763,8 +893,8 @@ fun verifyConstraints(styling: Styling): List<ConstraintViolation> {
                                 log(rootStyle, style, st, idx, cst.severity, msg)
                             }
                         }
-                        if (sl.inPoint.isActive && sl.outPoint.isActive &&
-                            lessThan(sl.inPoint.value, sl.outPoint.value, fps) == false
+                        if (sl.inPoint != null && sl.outPoint != null &&
+                            lessThan(sl.inPoint, sl.outPoint, fps) == false
                         )
                             log(rootStyle, style, st, idx, cst.severity, l10n("project.styling.constr.tapeSpanLT"))
                     }

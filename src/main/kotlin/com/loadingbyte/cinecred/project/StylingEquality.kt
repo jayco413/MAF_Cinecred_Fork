@@ -76,7 +76,7 @@ private inline fun <E> List<E>.endOfRange(startIdx: Int, predicate: (E) -> Boole
 
 
 fun Style.equalsIgnoreIneffectiveSettings(styling: Styling, other: Style): Boolean {
-    fun eq(v1: Any, v2: Any): Boolean =
+    fun eq(v1: Any?, v2: Any?): Boolean =
         when {
             v1 is Style && v2 is Style -> v1.equalsIgnoreIneffectiveSettings(styling, v2)
             v1 is Opt<*> && v2 is Opt<*> -> v1.isActive == v2.isActive && (!v1.isActive || eq(v1.value, v2.value))
@@ -86,13 +86,16 @@ fun Style.equalsIgnoreIneffectiveSettings(styling: Styling, other: Style): Boole
 
     if (javaClass != other.javaClass)
         return false
-    val excludedSettings = findIneffectiveSettings(styling, this)
-    if (excludedSettings.keys != findIneffectiveSettings(styling, other).keys)
-        return false
-    for (setting in getStyleSettings(javaClass as Class<Style>))
+    // If the two styles have different ineffective settings, that can have one of two reasons:
+    //   - Either the styles themselves are different, which will be detected by the following equality procedure.
+    //   - Or the difference stems from context, e.g., because one style has a populated TapeRef while the other one
+    //     doesn't. In this case, we want to ignore the settings that are marked ineffective by the style that has more
+    //     information, hence we take the union of both sets of ineffective settings.
+    val excludedSettings = findIneffectiveSettings(styling, this).keys + findIneffectiveSettings(styling, other).keys
+    for (setting in getStyleSettings(javaClass))
         if (setting !in excludedSettings)
             when (setting) {
-                is DirectStyleSetting, is OptStyleSetting ->
+                is DirectStyleSetting, is OptStyleSetting, is OverrideStyleSetting ->
                     if (!eq(setting.get(this), setting.get(other)))
                         return false
                 is ListStyleSetting -> {

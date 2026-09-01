@@ -3,8 +3,8 @@ package com.loadingbyte.cinecred.demo
 import com.loadingbyte.cinecred.common.sumBetween
 import com.loadingbyte.cinecred.project.Style
 import com.loadingbyte.cinecred.project.StyleSetting
-import com.loadingbyte.cinecred.projectio.CsvFormat
 import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
 import com.loadingbyte.cinecred.ui.helper.*
 import com.loadingbyte.cinecred.ui.styling.StyleForm
@@ -20,7 +20,6 @@ import java.awt.event.MouseEvent
 import java.awt.event.MouseEvent.*
 import java.awt.geom.Path2D
 import java.awt.geom.Point2D
-import java.awt.image.BufferedImage
 import java.nio.file.Path
 import java.util.*
 import javax.swing.*
@@ -38,6 +37,8 @@ class VirtualDesktop(val width: Int, val height: Int) {
     private var mouseTarget: Point? = null
     private var mouseSpeed = 0.0  // px per second
     private var mousePressed = false
+    private var mouseScrubbing = false
+    private var dragOrigin: VirtualWindow? = null
     private var draggedTransferable: Transferable? = null
     private var draggingFolder: Boolean = false
 
@@ -57,6 +58,14 @@ class VirtualDesktop(val width: Int, val height: Int) {
         windows.add(0, window)
     }
 
+    fun coerce(window: VirtualWindow) {
+        val pos = window.pos
+        var size = window.size
+        size = Dimension(size.width.coerceAtMost(width), size.height.coerceAtMost(height))
+        window.size = size
+        window.pos = Point(pos.x.coerceIn(0, width - size.width), pos.y.coerceIn(0, height - size.height))
+    }
+
     fun center(window: VirtualWindow) {
         val size = window.size
         window.pos = Point((width - size.width) / 2, (height - size.height) / 2)
@@ -67,6 +76,16 @@ class VirtualDesktop(val width: Int, val height: Int) {
         window.size = Dimension(width, height)
     }
 
+    val fullscreen: Rectangle
+        get() {
+            val insets = windowMarginPlusPadding
+            return Rectangle(
+                0, 0,
+                width + insets.left + insets.right - VirtualWindow.INSET_L - VirtualWindow.INSET_R,
+                height + insets.top + insets.bottom - VirtualWindow.INSET_T - VirtualWindow.INSET_B
+            )
+        }
+
     fun snapToSide(window: VirtualWindow, rightSide: Boolean, ratio: Double = 0.5) {
         val windowWidth = (width * ratio).roundToInt()
         window.pos = Point(if (rightSide) width - windowWidth else 0, 0)
@@ -75,6 +94,9 @@ class VirtualDesktop(val width: Int, val height: Int) {
 
     fun isMouseMoving(): Boolean =
         mouseTarget != null
+
+    fun mouse(): Point =
+        Point(mouse.x.roundToInt(), mouse.y.roundToInt())
 
     fun mouseTo(point: Point, jump: Boolean = false) {
         if (jump) {
@@ -89,11 +111,14 @@ class VirtualDesktop(val width: Int, val height: Int) {
     fun mouseDown() {
         mousePressed = true
         windowContainingMouse()?.mousePressOrRelease(mouse, press = true)
+        mouseScrubbing = windowContainingMouse()?.isOverScrubber(mouse) == true
     }
 
     fun mouseDownAndDrag() {
         mouseDown()
-        draggedTransferable = windowContainingMouse()?.drag(mouse)
+        val window = windowContainingMouse()
+        dragOrigin = window
+        draggedTransferable = window?.drag(mouse)
     }
 
     fun mouseDownAndDragFolder(folder: Path) {
@@ -108,10 +133,12 @@ class VirtualDesktop(val width: Int, val height: Int) {
 
     fun mouseUp() {
         mousePressed = false
-        windowContainingMouse()?.let { window ->
-            window.mousePressOrRelease(mouse, press = false)
+        mouseScrubbing = false
+        val window = windowContainingMouse()
+        (dragOrigin ?: window)?.mousePressOrRelease(mouse, press = false)
+        if (window != null)
             draggedTransferable?.let { transferable -> window.drop(mouse, transferable) }
-        }
+        dragOrigin = null
         draggedTransferable = null
         draggingFolder = false
     }
@@ -142,7 +169,10 @@ class VirtualDesktop(val width: Int, val height: Int) {
                     mouse.y + (target.y - mouse.y) * tickDist / remainingDist
                 )
             }
-            windowContainingMouse()?.mouseMove(mouse, mousePressed, dnd = draggedTransferable != null)
+            val window = windowContainingMouse()
+            (dragOrigin ?: window)?.mouseMove(mouse, mousePressed)
+            if (draggedTransferable != null)
+                window?.dnd(mouse)
             draggedWindow?.pos = Point(
                 (mouse.x + draggedWindowOffsetFromMouse.x).roundToInt(),
                 (mouse.y + draggedWindowOffsetFromMouse.y).roundToInt()
@@ -169,12 +199,17 @@ class VirtualDesktop(val width: Int, val height: Int) {
         }
         // Paint mouse cursor
         g2.preserveTransform {
-            g2.translate(mouse.x, mouse.y)
-            g2.color = Color.WHITE
-            g2.fill(CURSOR_ICON)
-            g2.color = Color.BLACK
-            g2.stroke = BasicStroke(1.5f)
-            g2.draw(CURSOR_ICON)
+            if (mouseScrubbing || windowContainingMouse()?.isOverScrubber(mouse) == true) {
+                g2.translate(mouse.x.roundToInt(), mouse.y.roundToInt())
+                g2.drawImage(SCRUB_CURSOR_IMAGE, -24, -10, null)
+            } else {
+                g2.translate(mouse.x, mouse.y)
+                g2.color = Color.WHITE
+                g2.fill(CURSOR_ICON)
+                g2.color = Color.BLACK
+                g2.stroke = BasicStroke(1.5f)
+                g2.draw(CURSOR_ICON)
+            }
         }
     }
 
@@ -195,7 +230,6 @@ abstract class VirtualWindow {
         const val INSET_B = BORDER
         const val INSET_R = BORDER
         private val BORDER_COLOR = PALETTE_GRAY_COLOR.darker()
-        private val DUMMY_COMPONENT = JPanel()
     }
 
     var elapsedTime = 0.0  // seconds
@@ -206,12 +240,14 @@ abstract class VirtualWindow {
         mouse.x.toInt() - pos.x in 0..size.width && mouse.y.toInt() - pos.y in 0..size.height
 
     abstract fun paint(g2: Graphics2D)
+    open fun isOverScrubber(mouse: Point2D.Double): Boolean = false
     open fun mousePressOrRelease(mouse: Point2D.Double, press: Boolean) {}
-    open fun mouseMove(mouse: Point2D.Double, pressed: Boolean, dnd: Boolean) {}
+    open fun mouseMove(mouse: Point2D.Double, pressed: Boolean) {}
+    open fun dnd(mouse: Point2D.Double) {}
     open fun drag(mouse: Point2D.Double): Transferable? = null
     open fun drop(mouse: Point2D.Double, transferable: Transferable) {}
 
-    protected fun paintWindowDecorations(g2: Graphics2D, title: String, icon: BufferedImage?, bg: Color, fg: Color) {
+    protected fun paintWindowDecorations(g2: Graphics2D, title: String, icon: Icon?, bg: Color, fg: Color) {
         val (width, height) = size.run { Pair(width, height) }
         // Border
         g2.color = BORDER_COLOR
@@ -233,12 +269,12 @@ abstract class VirtualWindow {
         )
         // Icon
         if (icon != null) {
-            val iconGap = (TITLE_BAR_HEIGHT - icon.height) / 2
-            g2.drawImage(icon, BORDER + iconGap, BORDER + iconGap, null)
+            val iconGap = (TITLE_BAR_HEIGHT - icon.iconHeight) / 2
+            icon.paintIcon(null, g2, BORDER + iconGap, BORDER + iconGap)
         }
         // Close button
         val closeGap = (TITLE_BAR_HEIGHT - CANCEL_ICON.iconHeight) / 2
-        CANCEL_ICON.paintIcon(DUMMY_COMPONENT, g2, width - BORDER - closeGap - CANCEL_ICON.iconWidth, BORDER + closeGap)
+        CANCEL_ICON.paintIcon(null, g2, width - BORDER - closeGap - CANCEL_ICON.iconWidth, BORDER + closeGap)
     }
 
     /** Obtains virtual desktop coordinates for the title bar. */
@@ -259,11 +295,12 @@ abstract class VirtualWindow {
 class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
 
     companion object {
-        private val TITLE_BAR_ICON = WINDOW_ICON_IMAGES.first { it.height == 16 }
+        private val TITLE_BAR_ICON = EMBLEM_ICON.run { getScaledIcon(16.0 / iconWidth) }
         private val TITLE_BAR_BACKGROUND = UIManager.getColor("Panel.background")
         private val TITLE_BAR_FOREGROUND = UIManager.getColor("Panel.foreground")
     }
 
+    private var dragOrigin: Window? = null
     private var curDropTarget: DropTarget? = null
 
     override var pos: Point = backingWin.location
@@ -274,14 +311,14 @@ class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
 
     override var size: Dimension
         get() {
-            val insets = backingWin.insetsInclTitlePane
+            val insets = windowMarginPlusPadding
             return Dimension(
                 backingWin.width - insets.left - insets.right + INSET_L + INSET_R,
                 backingWin.height - insets.top - insets.bottom + INSET_T + INSET_B
             )
         }
         set(size) {
-            val insets = backingWin.insetsInclTitlePane
+            val insets = windowMarginPlusPadding
             edt {
                 backingWin.setSize(
                     size.width + insets.left + insets.right - INSET_L - INSET_R,
@@ -308,37 +345,61 @@ class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
         }
     }
 
+    override fun isOverScrubber(mouse: Point2D.Double): Boolean =
+        awtWinContaining(mouse)?.findComponentAt(Point(mouse.x.roundToInt(), mouse.y.roundToInt())) is Scrubber<*>
+
     override fun mousePressOrRelease(mouse: Point2D.Double, press: Boolean) {
-        val (win, x, y) = awtWinContaining(mouse) ?: return
-        val ids = if (press) intArrayOf(MOUSE_PRESSED) else intArrayOf(MOUSE_RELEASED, MOUSE_CLICKED)
-        edt { for (id in ids) win.dispatchEvent(MouseEvent(win, id, 0, 0, x, y, 1, false, BUTTON1)) }
+        val win = dragOrigin ?: awtWinContaining(mouse) ?: return
+        val (x, y) = relativeMouse(mouse, win)
+        edt {
+            @Suppress("DEPRECATION")
+            when {
+                press ->
+                    win.dispatchEvent(MouseEvent(win, MOUSE_PRESSED, 0, BUTTON1_DOWN_MASK, x, y, 1, false, BUTTON1))
+                dragOrigin != null ->
+                    win.dispatchEvent(MouseEvent(win, MOUSE_RELEASED, 0, BUTTON1_MASK, x, y, 0, false, BUTTON1))
+                else -> {
+                    win.dispatchEvent(MouseEvent(win, MOUSE_RELEASED, 0, BUTTON1_MASK, x, y, 1, false, BUTTON1))
+                    win.dispatchEvent(MouseEvent(win, MOUSE_CLICKED, 0, BUTTON1_MASK, x, y, 1, false, BUTTON1))
+                }
+            }
+        }
+        if (!press)
+            dragOrigin = null
     }
 
-    override fun mouseMove(mouse: Point2D.Double, pressed: Boolean, dnd: Boolean) {
-        val (win, x, y) = awtWinContaining(mouse) ?: return
+    override fun mouseMove(mouse: Point2D.Double, pressed: Boolean) {
+        val win = dragOrigin ?: awtWinContaining(mouse) ?: return
+        val (x, y) = relativeMouse(mouse, win)
         edt {
-            win.dispatchEvent(MouseEvent(win, MOUSE_MOVED, 0, 0, x, y, 0, false))
             if (pressed)
                 win.dispatchEvent(MouseEvent(win, MOUSE_DRAGGED, 0, BUTTON1_DOWN_MASK, x, y, 0, false))
+            else
+                win.dispatchEvent(MouseEvent(win, MOUSE_MOVED, 0, 0, x, y, 0, false))
         }
-        if (dnd) {
-            val newComp = deepestCompWithTransferHandler(win, x, y)
-            val newDT = newComp?.dropTarget
-            val curDT = curDropTarget
-            curDropTarget = newDT
-            if (curDT != null && curDT != newDT)
-                curDT.dragExit(DropTargetEvent(curDT.dropTargetContext))
-            if (newDT != null) {
-                val e = DropTargetDragEvent(newDT.dropTargetContext, Point(x - newComp.x, y - newComp.y), MOVE, MOVE)
-                if (curDT != newDT)
-                    newDT.dragEnter(e)
-                newDT.dragOver(e)
-            }
+    }
+
+    override fun dnd(mouse: Point2D.Double) {
+        val win = awtWinContaining(mouse) ?: return
+        val (x, y) = relativeMouse(mouse, win)
+        val newComp = deepestCompWithTransferHandler(win, x, y)
+        val newDT = newComp?.dropTarget
+        val curDT = curDropTarget
+        curDropTarget = newDT
+        if (curDT != null && curDT != newDT)
+            curDT.dragExit(DropTargetEvent(curDT.dropTargetContext))
+        if (newDT != null) {
+            val e = DropTargetDragEvent(newDT.dropTargetContext, Point(x - newComp.x, y - newComp.y), MOVE, MOVE)
+            if (curDT != newDT)
+                newDT.dragEnter(e)
+            newDT.dragOver(e)
         }
     }
 
     override fun drag(mouse: Point2D.Double): Transferable? {
-        val (win, x, y) = awtWinContaining(mouse) ?: return null
+        val win = awtWinContaining(mouse) ?: return null
+        val (x, y) = relativeMouse(mouse, win)
+        dragOrigin = win
         val comp = deepestCompWithTransferHandler(win, x, y) ?: return null
         val clip = Clipboard("")
         edt { comp.transferHandler.exportToClipboard(comp, clip, MOVE) }
@@ -346,7 +407,8 @@ class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
     }
 
     override fun drop(mouse: Point2D.Double, transferable: Transferable) {
-        val (win, x, y) = awtWinContaining(mouse) ?: return
+        val win = awtWinContaining(mouse) ?: return
+        val (x, y) = relativeMouse(mouse, win)
         val comp = deepestCompWithTransferHandler(win, x, y) ?: return
         val dt = comp.dropTarget
         val ts = TransferHandler.TransferSupport(comp, transferable)
@@ -369,30 +431,39 @@ class BackedVirtualWindow(private val backingWin: Window) : VirtualWindow() {
         return null
     }
 
-    private data class WinAndRelMouse(val win: Window, val relMouseX: Int, val relMouseY: Int)
-
-    private fun awtWinContaining(mouse: Point2D.Double): WinAndRelMouse? {
+    private fun awtWinContaining(mouse: Point2D.Double): Window? {
         forEachVisiblePopupOf(backingWin) { popup ->
             val vWinPos = desktopPosOf(popup, center = false)
             if (mouse.x.toInt() - vWinPos.x in 0..popup.width && mouse.y.toInt() - vWinPos.y in 0..popup.height)
-                return WinAndRelMouse(popup, mouse.x.toInt() - vWinPos.x, mouse.y.toInt() - vWinPos.y)
+                return popup
         }
         if (backingWin.isVisible) {
-            val winInsets = backingWin.insetsInclTitlePane
+            val winInsets = windowMarginPlusPadding
             if (mouse.x.toInt() - pos.x - INSET_L in 0..backingWin.width - winInsets.left - winInsets.right &&
                 mouse.y.toInt() - pos.y - INSET_T in 0..backingWin.height - winInsets.top - winInsets.bottom
-            ) {
-                val x = mouse.x.toInt() - pos.x - INSET_L + winInsets.left
-                val y = mouse.y.toInt() - pos.y - INSET_T + winInsets.top
-                return WinAndRelMouse(backingWin, x, y)
-            }
+            )
+                return backingWin
         }
         return null
     }
 
+    private data class XY(val x: Int, val y: Int)
+
+    private fun relativeMouse(mouse: Point2D.Double, win: Window): XY =
+        if (win != backingWin) {
+            val vWinPos = desktopPosOf(win, center = false)
+            XY(mouse.x.toInt() - vWinPos.x, mouse.y.toInt() - vWinPos.y)
+        } else {
+            val winInsets = windowMarginPlusPadding
+            XY(
+                mouse.x.toInt() - pos.x - INSET_L + winInsets.left,
+                mouse.y.toInt() - pos.y - INSET_T + winInsets.top
+            )
+        }
+
     /** Obtains virtual desktop coordinates for the given component, assuming that it is inside this window. */
     fun desktopPosOf(comp: Component, center: Boolean = true): Point {
-        val insets = backingWin.insetsInclTitlePane
+        val insets = windowMarginPlusPadding
         val rel = SwingUtilities.convertPoint(comp, 0, 0, backingWin)
         return Point(
             pos.x + (rel.x - insets.left) + INSET_L + if (center) comp.width / 2 else 0,
@@ -517,6 +588,7 @@ abstract class FakeVirtualWindow : VirtualWindow() {
         g2.fillRect(INSET_L, INSET_T, size.width - INSET_L - INSET_R, size.height - INSET_T - INSET_B)
         // Paint content
         paintContent(g2)
+        (g2 as? ScaledGraphics2D)?.settleDeferred()
     }
 
 }
@@ -595,7 +667,10 @@ class FileBrowserVirtualWindow : FakeVirtualWindow() {
 }
 
 
-class SpreadsheetEditorVirtualWindow(private val file: Path, skipRows: Int = 0) : FakeVirtualWindow() {
+class SpreadsheetEditorVirtualWindow(
+    private val file: Path,
+    private val format: SpreadsheetFormat
+) : FakeVirtualWindow() {
 
     companion object {
         private const val ROW_HEIGHT = 20
@@ -605,7 +680,15 @@ class SpreadsheetEditorVirtualWindow(private val file: Path, skipRows: Int = 0) 
 
     override val title = "${file.name} \u2013 " + l10nDemo("screencast.spreadsheetEditor.title")
 
-    val matrix = CsvFormat.read(file, "").first.single().drop(skipRows).map { it.cells.toMutableList() }
+    val sheetName: String
+    val matrix: List<MutableList<String>>
+
+    init {
+        val spreadsheet = format.read(file, "").single()
+        sheetName = spreadsheet.name
+        matrix = spreadsheet.records.map { it.cells.toMutableList() }
+    }
+
     var rowOffset = 0
     var colWidths = intArrayOf()
 
@@ -686,7 +769,7 @@ class SpreadsheetEditorVirtualWindow(private val file: Path, skipRows: Int = 0) 
     )
 
     fun save() {
-        CsvFormat.write(file, Spreadsheet("", matrix), SpreadsheetLook(emptyMap(), emptyList()))
+        format.write(file, Spreadsheet(sheetName, matrix), SpreadsheetLook(0, emptyMap(), emptyList(), emptyList()))
     }
 
     private fun cellX(colIdx: Int) = INSET_L + colIdx * SEP_THICKNESS + colWidths.sumBetween(0, colIdx)
@@ -707,6 +790,8 @@ private val CURSOR_ICON = Path2D.Double().apply {
     lineTo(18.9, 13.5)
     closePath()
 }
+
+private val SCRUB_CURSOR_IMAGE = SVGIcon.load("/icons/scrub.svg").renderIcon(48, 48)
 
 private const val FILE_ICON_WIDTH = 52
 private const val FILE_ICON_HEIGHT = 60

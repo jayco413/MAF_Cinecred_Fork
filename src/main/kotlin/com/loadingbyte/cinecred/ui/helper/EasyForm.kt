@@ -4,8 +4,12 @@ import com.loadingbyte.cinecred.common.Severity
 import javax.swing.JButton
 
 
-open class EasyForm(insets: Boolean, noticeArea: Boolean, constLabelWidth: Boolean) :
-    Form(insets, noticeArea, constLabelWidth) {
+open class EasyForm(
+    insets: String,
+    noticeArea: Boolean,
+    maxLabelWidth: String = "min(25%, 250)",
+    constLabelWidth: Boolean
+) : Form(insets, noticeArea, maxLabelWidth, constLabelWidth) {
 
     private class ExtFormRow(
         val formRow: FormRow,
@@ -18,7 +22,7 @@ open class EasyForm(insets: Boolean, noticeArea: Boolean, constLabelWidth: Boole
     private val extFormRows = mutableListOf<ExtFormRow>()
     private var submitButton: JButton? = null
 
-    fun <W : Widget<V>, V> addWidget(
+    fun <W : Widget<V>, V : Any> addWidget(
         label: String,
         widget: W,
         description: String? = null,

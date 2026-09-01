@@ -6,7 +6,7 @@ import com.loadingbyte.cinecred.demo.VideoDemo
 import com.loadingbyte.cinecred.demo.parseCreditsCS
 import com.loadingbyte.cinecred.demo.parseCreditsPS
 import com.loadingbyte.cinecred.project.HJustify
-import com.loadingbyte.cinecred.project.PRESET_CONTENT_STYLE
+import com.loadingbyte.cinecred.project.presetContentStyle
 import kotlinx.collections.immutable.persistentListOf
 
 
@@ -23,8 +23,10 @@ val GUIDE_CREDITS_SPREADSHEET_DEMOS
         GuideCreditsSpreadsheetSpinePositionCardDemo,
         GuideCreditsSpreadsheetSpinePositionParallelDemo,
         GuideCreditsSpreadsheetSpinePositionHookDemo,
-        GuideCreditsSpreadsheetPageGapMeltDemo,
-        GuideCreditsSpreadsheetPageGapMeltVideoDemo,
+        GuideCreditsSpreadsheetPageGapFadeIntoScrollDemo,
+        GuideCreditsSpreadsheetPageGapFuseDemo,
+        GuideCreditsSpreadsheetPageGapFuseHardDemo,
+        GuideCreditsSpreadsheetPageGapFuseSmoothDemo,
         GuideCreditsSpreadsheetPageGapScrollAwayDemo,
         GuideCreditsSpreadsheetBreakHarmonizationDemo
     )
@@ -55,6 +57,7 @@ Copyright © 2023 {{Style Name}}Callie Cash{{Style}} and {{Style Name}}Molly Mon
 
 
 object GuideCreditsSpreadsheetPicAndVideoTagsDemo : PageDemo("$DIR/pic-and-video-tags", Format.PNG, pageGuides = true) {
+    override val isLocaleSensitive get() = false
     override fun credits() = listOf(
         """
 @Body
@@ -166,8 +169,22 @@ I’m with my friend!,,Hook 1 Bottom-Top 0 200,
 }
 
 
-object GuideCreditsSpreadsheetPageGapMeltDemo : PageDemo(
-    "$DIR/page-gap-melt", Format.STEP_GIF, pageWidth = 700, pageGuides = true
+object GuideCreditsSpreadsheetPageGapFadeIntoScrollDemo : VideoDemo(
+    "$DIR/page-gap-fade-into-scroll", Format.VIDEO_GIF
+) {
+    override val isLocaleSensitive get() = false
+    override fun credits() = """
+@Head,@Body,@Content Style,@Page Style,@Page Runtime,@Page Gap
+1st AC,Paul Puller,Gutter,Scroll,,
+2nd AC,Charly Clapper,,,,
+,,,,,-00:00:01:12
+,Copyright © 2023,Blurb,Card,00:00:03:00,
+        """.parseCreditsPS()
+}
+
+
+object GuideCreditsSpreadsheetPageGapFuseDemo : PageDemo(
+    "$DIR/page-gap-fuse", Format.STEP_GIF, pageWidth = 700, pageGuides = true
 ) {
     override val isLocaleSensitive get() = false
     override fun credits() = listOf(TOP.parseCreditsCS(resolution = RES), (TOP + BOT).parseCreditsCS(resolution = RES))
@@ -178,19 +195,31 @@ object GuideCreditsSpreadsheetPageGapMeltDemo : PageDemo(
 2nd AC,Charly Clapper,,,,,
     """
     private const val BOT = """
-,,,5,,,Melt
+,,,5,,,Fuse
 ,Copyright © 2023,,,Blurb,Card,
     """
 }
 
 
-object GuideCreditsSpreadsheetPageGapMeltVideoDemo : VideoDemo("$DIR/page-gap-melt-video", Format.VIDEO_GIF) {
+object GuideCreditsSpreadsheetPageGapFuseHardDemo : VideoDemo("$DIR/page-gap-fuse-hard", Format.VIDEO_GIF) {
     override val isLocaleSensitive get() = false
     override fun credits() = """
 @Head,@Body,@Tail,@Vertical Gap,@Content Style,@Page Style,@Page Runtime,@Page Gap
 1st AC,Paul Puller,,,Gutter,Scroll,,
 2nd AC,Charly Clapper,,,,,,
-,,,5,,,,Melt 00:00:02:00 Linear
+,,,5,,,,Fuse
+,Copyright © 2023,,,Blurb,Card,00:00:03:00,
+        """.parseCreditsPS()
+}
+
+
+object GuideCreditsSpreadsheetPageGapFuseSmoothDemo : VideoDemo("$DIR/page-gap-fuse-smooth", Format.VIDEO_GIF) {
+    override val isLocaleSensitive get() = false
+    override fun credits() = """
+@Head,@Body,@Tail,@Vertical Gap,@Content Style,@Page Style,@Page Runtime,@Page Gap
+1st AC,Paul Puller,,,Gutter,Scroll,,
+2nd AC,Charly Clapper,,,,,,
+,,,5,,,,Fuse 00:00:02:00 Linear
 ,Copyright © 2023,,,Blurb,Card,00:00:03:00,
         """.parseCreditsPS()
 }
@@ -204,7 +233,7 @@ object GuideCreditsSpreadsheetPageGapScrollAwayDemo : VideoDemo("$DIR/page-gap-s
 2nd AC,Charly Clapper,,,,
 ,,,,,-00:00:03:00
 ,,,Scroll,,
-,,,,,Melt
+,,,,,Fuse
 ,Copyright © 2023,Blurb,Card,00:00:03:00,
         """.parseCreditsPS()
 }
@@ -229,4 +258,4 @@ Best Boy,Francesco Foreman,,
 }
 
 
-private val demoCS = PRESET_CONTENT_STYLE.copy(name = "Demo", bodyLetterStyleName = "Name")
+private val demoCS = presetContentStyle().copy(name = "Demo", bodyLetterStyleName = "Name")

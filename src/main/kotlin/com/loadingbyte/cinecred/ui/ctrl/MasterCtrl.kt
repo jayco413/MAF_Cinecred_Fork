@@ -1,22 +1,20 @@
 package com.loadingbyte.cinecred.ui.ctrl
 
 import com.loadingbyte.cinecred.common.isSameFileAsSafely
-import com.loadingbyte.cinecred.showLog
-import com.loadingbyte.cinecred.ui.PROJECT_HINT_TRACK_PENDING_PREFERENCE
-import com.loadingbyte.cinecred.ui.ProjectController
+import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.comms.MasterCtrlComms
 import com.loadingbyte.cinecred.ui.comms.UIFactoryComms
 import com.loadingbyte.cinecred.ui.comms.WelcomeCtrlComms
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
-import com.loadingbyte.cinecred.ui.makeProjectHintTrack
-import com.loadingbyte.cinecred.ui.play
+import com.loadingbyte.cinecred.ui.helper.DockingFrame
 import java.awt.GraphicsConfiguration
 import java.awt.Window
 import java.awt.event.KeyEvent
 import java.awt.event.KeyEvent.*
+import java.awt.event.MouseEvent
 import java.nio.file.Path
-import javax.swing.JComboBox
-import javax.swing.JTree
+import javax.swing.*
+import javax.swing.plaf.basic.BasicArrowButton
 import javax.swing.text.JTextComponent
 
 
@@ -52,18 +50,41 @@ class MasterCtrl(private val uiFactory: UIFactoryComms) : MasterCtrlComms {
             // unconsumed key event. Hence, in addition to the component correctly handling the event, our shortcut
             // would accidentally trigger. As a workaround, we just don't key events to our handler when any component
             // that is susceptible to this behavior is focused.
-            event.component.let { it !is JTextComponent && it !is JComboBox<*> && it !is JTree }
+            (event.component.let { it !is JTextComponent && it !is JComboBox<*> && it !is JTree } ||
+                    // Then again, a couple of keys are processed by us but not by these components, so let them pass.
+                    event.keyCode in VK_F1..VK_F12 || event.keyCode == VK_ESCAPE)
         ) onGlobalKeyEvent(event) else false
 
     private fun onGlobalKeyEvent(event: KeyEvent): Boolean {
         if (event.isConsumed || event.id != KEY_PRESSED)
             return false
-        if (event.modifiersEx == SHIFT_DOWN_MASK or CTRL_DOWN_MASK or ALT_DOWN_MASK && event.keyCode == VK_L) {
-            showLog()
+        if (Shortcut.HIDDEN_SHOW_LOG.matches(event)) {
+            Report.showLogDialog()
             return true
         }
         welcomeCtrl?.let { if (it.onGlobalKeyEvent(event)) return true }
         return projectCtrls.any { it.onGlobalKeyEvent(event) }
+    }
+
+    override fun globalMouseEvent(event: MouseEvent) {
+        // When the user clicks on a component that cannot attain focus, clear the focus in the clicked-on window. This
+        // ensures that all keyboard shortcuts can reliably be used (without a focused component interfering) simply by
+        // clicking "onto the void" beforehand.
+        val c = event.component
+        if (event.id == MouseEvent.MOUSE_PRESSED && c != null &&
+            // Note: We allow a focused JTabbedPane because clicking inside its empty content area often still reports
+            // the JTabbedPane as the clicked-on component.
+            (!c.hasFocus() || c is JTabbedPane) &&
+            // Note: We exclude JList because that's used for combo box menus, and including it breaks combo boxes on
+            // Windows 10 (not 11 though).
+            c !is JList<*> && c !is BasicArrowButton
+        )
+            if (!c.isEnabled || !c.isFocusable || c is JComponent && !c.isRequestFocusEnabled ||
+                c is JPanel || c is JRootPane || c is JSplitPane || c is JScrollPane || c is JScrollBar ||
+                c is JLabel || c is JSeparator || c is JProgressBar ||
+                c is JTabbedPane && c.indexAtLocation(event.x, event.y) == -1
+            )
+                SwingUtilities.getWindowAncestor(c)?.requestFocusInWindow()
     }
 
     override fun showWelcomeFrame(openProjectDir: Path?, tab: WelcomeTab?) {
@@ -101,10 +122,10 @@ class MasterCtrl(private val uiFactory: UIFactoryComms) : MasterCtrlComms {
         welcomeCtrl = null
     }
 
-    override fun openProject(projectDir: Path, openOnScreen: GraphicsConfiguration) {
+    override fun openProject(projectDir: Path, openOnScreen: GraphicsConfiguration?, trees: List<DockingFrame.Tree>?) {
         var projectCtrl: ProjectController? = null
         projectCtrl = ProjectController(
-            this, projectDir, openOnScreen, onClose = { projectCtrl?.let(::onCloseProject) }
+            this, projectDir, openOnScreen, trees, onClose = { projectCtrl?.let(::onCloseProject) }
         )
         projectCtrls.add(projectCtrl)
     }

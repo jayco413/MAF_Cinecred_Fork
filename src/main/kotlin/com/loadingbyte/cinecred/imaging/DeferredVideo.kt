@@ -1,18 +1,17 @@
 package com.loadingbyte.cinecred.imaging
 
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.common.RenderProfiling
 import com.loadingbyte.cinecred.imaging.DeferredImage.EmbeddedTape.Align.*
 import com.loadingbyte.cinecred.imaging.Y.Companion.toY
+import org.bytedeco.ffmpeg.global.avutil.*
 import java.awt.Point
 import java.awt.Rectangle
-import java.awt.geom.AffineTransform
 import java.lang.ref.SoftReference
+import java.nio.ByteOrder
 import java.nio.file.Path
 import java.util.*
 import java.util.concurrent.Semaphore
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.io.path.name
 import kotlin.math.*
 
 
@@ -313,8 +312,8 @@ class DeferredVideo private constructor(
         private val grounding: Color4f?,
         private val userSpec: Bitmap.Spec,
         private val canvasCeiling: Float? = 1f,
-        private val cache: DeferredImage.CanvasMaterializationCache? = null,
         private val randomAccessDraftMode: Boolean = false,
+        private val blendInUserColorSpace: Boolean = false,
         private val animateFlashingText: Boolean = false,
         private val diskCache: RenderDiskCache.Session? = null,
         private val profiling: RenderProfiling? = null
@@ -323,59 +322,66 @@ class DeferredVideo private constructor(
         init {
             require(video.resolution == userSpec.resolution)
             require(userSpec.content.let { it != Bitmap.Content.ONLY_TOP_FIELD && it != Bitmap.Content.ONLY_BOT_FIELD })
+            require(userSpec.scan == Bitmap.Scan.PROGRESSIVE || userSpec.resolution.heightPx % 2 == 0)
         }
 
         private val numFrames = video.numFrames
-        private val progressiveVideo = video.copy(
+        private val progressiveVideo = video.copy(  // Freezes the DeferredVideo instance.
             fpsScaling = if (userSpec.scan == Bitmap.Scan.PROGRESSIVE) 1 else 2,
             roundShifts = randomAccessDraftMode
         )
         private val userPixelFormat get() = userSpec.representation.pixelFormat
         private val canvasRepresentation = Canvas.compatibleRepresentation(
-            ColorSpace.of(userSpec.representation.colorSpace!!.primaries, ColorSpace.Transfer.BLENDING)
+            ColorSpace.of(userSpec.representation.colorSpace.primaries, ColorSpace.Transfer.BLENDING)
         )
 
         private val workWidth = closestWorkResolution(userSpec.resolution.widthPx, userPixelFormat.hChromaSub)
         private val workHeight = closestWorkResolution(userSpec.resolution.heightPx, userPixelFormat.vChromaSub)
-        private val workResolution = Resolution(workWidth, workHeight)
 
-        private val userWorkSpec = userSpec.copy(resolution = workResolution)
-        private val canvasWorkSpec = Bitmap.Spec(workResolution, canvasRepresentation)
+        private val userIWorkSpec =
+            userSpec.copy(resolution = Resolution(workWidth, workHeight))
+        private val userPWorkSpec =
+            userIWorkSpec.copy(scan = Bitmap.Scan.PROGRESSIVE, content = Bitmap.Content.PROGRESSIVE_FRAME)
+        private val canvasIWorkSpec =
+            userIWorkSpec.copy(representation = canvasRepresentation)
+        private val canvasPWorkSpec =
+            canvasIWorkSpec.copy(scan = Bitmap.Scan.PROGRESSIVE, content = Bitmap.Content.PROGRESSIVE_FRAME)
 
-        private val canvas2user = BitmapConverter(
-            canvasWorkSpec, userWorkSpec, promiseOpaque = grounding != null, approxTransfer = randomAccessDraftMode
+        private val canvasP2userP = BitmapConverter(
+            canvasPWorkSpec, userPWorkSpec, promiseOpaque = grounding != null, approxTransfer = randomAccessDraftMode
+        )
+        private val canvasI2userI = BitmapConverter(
+            canvasIWorkSpec, userIWorkSpec, promiseOpaque = grounding != null, approxTransfer = randomAccessDraftMode
         )
 
         override fun close() {
-            canvas2user.close()
-            blankCanvasBitmap.close()
-            blankUserBitmap.close()
+            canvasP2userP.close()
+            canvasI2userI.close()
+            blankCanvasPBitmap.close()
+            blankUserPBitmap.close()
             pageCache.close()
             for (userData in tapeTracker.collectUserData())
                 userData.close()
         }
 
-        fun preloadFrame(frameIdx: Int) {
-            check(randomAccessDraftMode) { "Frame preloading is only supported in random access mode." }
-            pageCache.query(frameIdx)
-        }
-
         private var lastFrameIdx = -1
 
         /** The returned bitmap is permitted to be [Bitmap.close]d, but must not be modified. */
-        fun materializeFrame(frameIdx: Int): Bitmap? {
-            val result = materializeFrameInternal(frameIdx, ownSharedFrames = true) ?: return null
-            return result.bitmap
-        }
+        fun materializeFrame(frameIdx: Int): Bitmap? =
+            materializeFrameInternal(frameIdx, ownSharedFrames = true)?.bitmap
 
+        /** A materialized frame; when not [owned], the bitmap is a view the caller must copy instead of close. */
         data class ExportMaterializedFrame(val bitmap: Bitmap, val owned: Boolean)
 
-        /** Like [materializeFrame], but may return shared views for the caller to copy into its own buffers. */
+        /**
+         * Like [materializeFrame], but avoids copying frames that are backed by a cached render, letting the caller
+         * blit the shared view straight into its own buffer. Saves a full frame copy per delivered frame.
+         */
         fun materializeFrameForExport(frameIdx: Int): ExportMaterializedFrame? =
             materializeFrameInternal(frameIdx, ownSharedFrames = false)
 
-        private fun materializeFrameInternal(frameIdx: Int, ownSharedFrames: Boolean): ExportMaterializedFrame? {
-            return profiling.measure("backend.materializeFrame") {
+        private fun materializeFrameInternal(frameIdx: Int, ownSharedFrames: Boolean): ExportMaterializedFrame? =
+            profiling.measure("backend.materializeFrame") {
                 if (!randomAccessDraftMode) {
                     require(frameIdx >= lastFrameIdx) { "Backend is not in random access mode." }
                     lastFrameIdx = frameIdx
@@ -395,19 +401,17 @@ class DeferredVideo private constructor(
                     if (writable) {
                         bitmap.close()
                         ExportMaterializedFrame(view, owned = true)
-                    } else if (!ownSharedFrames) {
+                    } else if (!ownSharedFrames)
                         ExportMaterializedFrame(view, owned = false)
-                    } else {
+                    else
                         profiling.measure("backend.copySharedFrame") {
                             val ownedBitmap = Bitmap.allocate(userSpec)
                             ownedBitmap.blit(view)
                             view.close()
                             ExportMaterializedFrame(ownedBitmap, owned = true)
                         }
-                    }
                 }
             }
-        }
 
         private data class Frame(val bitmap: Bitmap, val writable: Boolean, val shift: Int)
 
@@ -415,8 +419,14 @@ class DeferredVideo private constructor(
            ********** OBTAIN STATIC PROGRESSIVE FRAMES **********
            ****************************************************** */
 
+        /**
+         * A cached render of one chunk at one micro shift. On top of the bitmaps the chunk always needs, it lazily
+         * builds and caches the extra bitmaps that flashing text requires: an overlay holding only the flashing text
+         * for one flashing state, and the finished user bitmap that overlay composites into. Both are also mirrored
+         * into the render disk cache when one is configured, so a re-render of the same project reuses them.
+         */
         private class Render(
-            val transparentCanvasBitmap: Bitmap,
+            val transparCanvasOrDraftBitmap: Bitmap,
             private val groundedCanvasBitmap: Bitmap?,
             val userBitmap: Bitmap,
             val renderShift: Double,
@@ -427,100 +437,64 @@ class DeferredVideo private constructor(
             private val overlayUserBitmapFile: ((DeferredImage.FlashingStateKey) -> Path?)?,
             private val profiling: RenderProfiling?
         ) : AutoCloseable {
-            private val flashingOverlays =
-                HashMap<DeferredImage.FlashingStateKey, SoftReference<Bitmap>>()
-            private val flashingUserBitmaps =
-                HashMap<DeferredImage.FlashingStateKey, SoftReference<Bitmap>>()
-            private val flashingCanvasToUser = BitmapConverter(
-                transparentCanvasBitmap.spec,
-                userBitmap.spec,
-                promiseOpaque = grounding != null
-            )
+
+            private val flashingOverlays = HashMap<DeferredImage.FlashingStateKey, SoftReference<Bitmap>>()
+            private val flashingUserBitmaps = HashMap<DeferredImage.FlashingStateKey, SoftReference<Bitmap>>()
+            private val flashingCanvasToUser = lazy {
+                BitmapConverter(
+                    transparCanvasOrDraftBitmap.spec, userBitmap.spec, promiseOpaque = grounding != null
+                )
+            }
 
             @Synchronized
-            fun getOrCreateFlashingOverlay(
-                stateKey: DeferredImage.FlashingStateKey,
-                create: () -> Bitmap
-            ): Bitmap {
-                val overlay = flashingOverlays[stateKey]?.get()
-                if (overlay != null)
-                    return overlay
-                val file = overlayBitmapFile?.invoke(stateKey)
-                val loaded = file?.let {
+            fun getOrCreateFlashingOverlay(stateKey: DeferredImage.FlashingStateKey, create: () -> Bitmap): Bitmap {
+                flashingOverlays[stateKey]?.get()?.let { return it }
+                val loaded = overlayBitmapFile?.invoke(stateKey)?.let { file ->
                     diskCache?.loadOrCreateBitmap(
-                        it,
-                        transparentCanvasBitmap.spec,
-                        profiling,
-                        loadTimingKey = "diskCache.overlayLoad",
-                        storeTimingKey = "diskCache.overlayStore",
-                        hitCountKey = "diskCache.overlayHit",
-                        missCountKey = "diskCache.overlayMiss",
+                        file, transparCanvasOrDraftBitmap.spec, profiling,
+                        loadTimingKey = "diskCache.overlayLoad", storeTimingKey = "diskCache.overlayStore",
+                        hitCountKey = "diskCache.overlayHit", missCountKey = "diskCache.overlayMiss",
                         create = create
                     )
                 }
-                if (loaded != null)
-                    return loaded.also { flashingOverlays[stateKey] = SoftReference(it) }
-                return create().also { created -> flashingOverlays[stateKey] = SoftReference(created) }
+                val overlay = loaded ?: create()
+                flashingOverlays[stateKey] = SoftReference(overlay)
+                return overlay
             }
 
             @Synchronized
             fun getOrCreateFlashingUserBitmap(
-                stateKey: DeferredImage.FlashingStateKey,
-                createOverlay: () -> Bitmap
+                stateKey: DeferredImage.FlashingStateKey, createOverlay: () -> Bitmap
             ): Bitmap {
-                val combined = flashingUserBitmaps[stateKey]?.get()
-                if (combined != null)
-                    return combined
+                flashingUserBitmaps[stateKey]?.get()?.let { return it }
+                val build = { composeFlashingUserBitmap(stateKey, createOverlay) }
                 val bitmap = overlayUserBitmapFile?.invoke(stateKey)?.let { file ->
                     diskCache?.getOrCreateSharedBitmap(
-                        file,
-                        profiling,
-                        hitCountKey = "sharedCache.overlayUserHit",
-                        missCountKey = "sharedCache.overlayUserMiss"
-                    ) {
-                        profiling.measure("flashingUserBitmap.create") {
-                            val overlay = getOrCreateFlashingOverlay(stateKey, createOverlay)
-                            val combinedCanvasBitmap = profiling.measure("flashingUserBitmap.composeCanvas") {
-                                Bitmap.allocate(transparentCanvasBitmap.spec).also { canvasBitmap ->
-                                    canvasBitmap.blit(groundedCanvasBitmap ?: transparentCanvasBitmap)
-                                    Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
-                                        canvas.drawImageFast(overlay)
-                                    }
-                                }
-                            }
-                            profiling.measure("flashingUserBitmap.canvasToUser") {
-                                Bitmap.allocate(userBitmap.spec).also { combinedUserBitmap ->
-                                    flashingCanvasToUser.convert(
-                                        combinedCanvasBitmap,
-                                        combinedUserBitmap
-                                    )
-                                    combinedCanvasBitmap.close()
-                                }
-                            }
-                        }
-                    }
-                } ?: profiling.measure("flashingUserBitmap.create") {
-                    val overlay = getOrCreateFlashingOverlay(stateKey, createOverlay)
-                    val combinedCanvasBitmap = profiling.measure("flashingUserBitmap.composeCanvas") {
-                        Bitmap.allocate(transparentCanvasBitmap.spec).also { canvasBitmap ->
-                            canvasBitmap.blit(groundedCanvasBitmap ?: transparentCanvasBitmap)
-                            Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
-                                canvas.drawImageFast(overlay)
-                            }
-                        }
-                    }
-                    profiling.measure("flashingUserBitmap.canvasToUser") {
-                        Bitmap.allocate(userBitmap.spec).also { combinedUserBitmap ->
-                            flashingCanvasToUser.convert(
-                                combinedCanvasBitmap,
-                                combinedUserBitmap
-                            )
-                            combinedCanvasBitmap.close()
-                        }
-                    }
-                }
+                        file, profiling,
+                        hitCountKey = "sharedCache.overlayUserHit", missCountKey = "sharedCache.overlayUserMiss",
+                        create = build
+                    )
+                } ?: build()
                 flashingUserBitmaps[stateKey] = SoftReference(bitmap)
                 return bitmap
+            }
+
+            private fun composeFlashingUserBitmap(
+                stateKey: DeferredImage.FlashingStateKey, createOverlay: () -> Bitmap
+            ): Bitmap = profiling.measure("flashingUserBitmap.create") {
+                val overlay = getOrCreateFlashingOverlay(stateKey, createOverlay)
+                val combinedCanvasBitmap = profiling.measure("flashingUserBitmap.composeCanvas") {
+                    Bitmap.allocate(transparCanvasOrDraftBitmap.spec).also { canvasBitmap ->
+                        canvasBitmap.blit(groundedCanvasBitmap ?: transparCanvasOrDraftBitmap)
+                        Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas -> canvas.drawImageFast(overlay) }
+                    }
+                }
+                profiling.measure("flashingUserBitmap.canvasToUser") {
+                    Bitmap.allocate(userBitmap.spec).also { combinedUserBitmap ->
+                        flashingCanvasToUser.value.convert(combinedCanvasBitmap, combinedUserBitmap)
+                        combinedCanvasBitmap.close()
+                    }
+                }
             }
 
             override fun close() {
@@ -528,129 +502,142 @@ class DeferredVideo private constructor(
                     overlay.get()?.close()
                 for (bitmap in flashingUserBitmaps.values)
                     bitmap.get()?.close()
-                flashingCanvasToUser.close()
+                if (flashingCanvasToUser.isInitialized())
+                    flashingCanvasToUser.value.close()
                 groundedCanvasBitmap?.close()
-                transparentCanvasBitmap.close()
+                transparCanvasOrDraftBitmap.close()
                 userBitmap.close()
             }
+
         }
 
-        private val blankCanvasBitmap: Bitmap
-        private val blankUserBitmap: Bitmap
+        private val blankCanvasPBitmap: Bitmap
+        private val blankUserPBitmap: Bitmap
         private val pageCache: PageCache<Render>
 
         init {
-            blankCanvasBitmap = Bitmap.allocate(canvasWorkSpec)
-            blankUserBitmap = Bitmap.allocate(userWorkSpec)
+            blankCanvasPBitmap = Bitmap.allocate(canvasPWorkSpec)
+            blankUserPBitmap = Bitmap.allocate(userPWorkSpec)
             if (grounding != null) {
-                Canvas.forBitmap(blankCanvasBitmap, canvasCeiling).use { it.fill(Canvas.Shader.Solid(grounding)) }
-                canvas2user.convert(blankCanvasBitmap, blankUserBitmap)
+                Canvas.forBitmap(blankCanvasPBitmap.zero(), canvasCeiling).use { canvas ->
+                    canvas.fill(Canvas.Shader.Solid(grounding))
+                }
+                canvasP2userP.convert(blankCanvasPBitmap, blankUserPBitmap)
             } else {
-                blankCanvasBitmap.zero()
-                blankUserBitmap.zero()
+                blankCanvasPBitmap.zero()
+                blankUserPBitmap.zero()
             }
 
             pageCache = object : PageCache<Render>(
                 progressiveVideo,
+                userSpec.representation.pixelFormat.vChromaSub,
                 sequentialAccess = !randomAccessDraftMode,
                 preloading = true,
                 profiling = profiling
             ) {
                 override fun createRenders(
                     chunkIdx: Int, image: DeferredImage, baseShift: Int, microShifts: DoubleArray, height: Int
-                ): List<Render> {
+                ): SizedValue<List<Render>> {
                     // IMPORTANT: This method will be called from different threads at the same time when stuff is
                     // pre-rendered in the background. As such, we can't use any BitmapConverters or other stateful
                     // objects in this method!
-                    val h = closestWorkResolution(height, userPixelFormat.vChromaSub)
-                    val resolution = Resolution(workWidth, h)
+
+                    val resolution = Resolution(workWidth, height)
+
+                    // Materialize each micro shift to a transparent canvas bitmap.
                     val renderCanvasSpec = Bitmap.Spec(resolution, canvasRepresentation)
-                    val renderUserSpec = Bitmap.Spec(resolution, userSpec.representation)
-                    val transparentCanvasBitmaps = microShifts.mapIndexed { microShiftIdx, ms ->
-                        diskCache?.chunkFile(chunkIdx, microShiftIdx)?.let {
-                            diskCache.loadOrCreateBitmap(
-                                it,
-                                renderCanvasSpec,
-                                profiling,
-                                loadTimingKey = "diskCache.chunkLoad",
-                                storeTimingKey = "diskCache.chunkStore",
-                                hitCountKey = "diskCache.chunkHit",
-                                missCountKey = "diskCache.chunkMiss"
-                            ) {
-                                Bitmap.allocate(renderCanvasSpec).also { bmp ->
-                                    Canvas.forBitmap(bmp.zero(), canvasCeiling).use {
-                                        materialize(
-                                            it, image, -(baseShift + ms), frameIdx = 0,
-                                            flashingTextMode = DeferredImage.FlashingTextMode.EXCLUDE
-                                        )
-                                    }
-                                }
-                            }
-                        } ?: Bitmap.allocate(renderCanvasSpec).also { bmp ->
-                            Canvas.forBitmap(bmp.zero(), canvasCeiling).use {
-                                materialize(
-                                    it, image, -(baseShift + ms), frameIdx = 0,
-                                    flashingTextMode = DeferredImage.FlashingTextMode.EXCLUDE
-                                )
-                            }
-                        }
-                    }
-                    BitmapConverter(
-                        renderCanvasSpec, renderUserSpec,
-                        promiseOpaque = grounding != null, approxTransfer = randomAccessDraftMode
-                    ).use { converter ->
-                        // Note: Despite this map operation potentially being expensive if there are lots of bitmaps,
-                        // we cannot parallelize it because BitmapConverter.convert() is not thread-safe.
-                        return transparentCanvasBitmaps.mapIndexed { idx, transparentCanvasBitmap ->
-                            val groundedCanvasBitmap = if (grounding == null) null else
-                                diskCache?.groundedChunkFile(chunkIdx, idx)?.let { file ->
-                                    diskCache.getOrCreateSharedBitmap(
-                                        file,
-                                        profiling,
-                                        hitCountKey = "sharedCache.groundedChunkHit",
-                                        missCountKey = "sharedCache.groundedChunkMiss"
-                                    ) {
-                                        Bitmap.allocate(renderCanvasSpec).also { grounded ->
-                                            Canvas.forBitmap(grounded, canvasCeiling).use { canvas ->
-                                                canvas.fill(Canvas.Shader.Solid(grounding))
-                                                canvas.drawImageFast(transparentCanvasBitmap)
-                                            }
-                                        }
-                                    }
-                                } ?: Bitmap.allocate(renderCanvasSpec).also { grounded ->
-                                    Canvas.forBitmap(grounded, canvasCeiling).use { canvas ->
-                                        canvas.fill(Canvas.Shader.Solid(grounding))
-                                        canvas.drawImageFast(transparentCanvasBitmap)
-                                    }
-                                }
-                            val userBitmap = diskCache?.chunkUserFile(chunkIdx, idx)?.let { file ->
-                                diskCache.getOrCreateSharedBitmap(
-                                    file,
-                                    profiling,
-                                    hitCountKey = "sharedCache.chunkUserHit",
-                                    missCountKey = "sharedCache.chunkUserMiss"
-                                ) {
-                                    Bitmap.allocate(renderUserSpec).also { user ->
-                                        converter.convert(groundedCanvasBitmap ?: transparentCanvasBitmap, user)
-                                    }
-                                }
-                            } ?: Bitmap.allocate(renderUserSpec).also { user ->
-                                converter.convert(groundedCanvasBitmap ?: transparentCanvasBitmap, user)
-                            }
-                            Render(
-                                transparentCanvasBitmap,
-                                groundedCanvasBitmap,
-                                userBitmap,
-                                baseShift + microShifts[idx],
-                                grounding,
-                                canvasCeiling,
-                                diskCache,
-                                { stateKey -> diskCache?.overlayFile(chunkIdx, idx, stateKey) },
-                                { stateKey -> diskCache?.overlayUserFile(chunkIdx, idx, stateKey) },
-                                profiling
+                    fun renderChunk(ms: Double) = Bitmap.allocate(renderCanvasSpec).also { bmp ->
+                        Canvas.forBitmap(bmp.zero(), canvasCeiling).use {
+                            // Flashing text changes from frame to frame, so it must not be baked into the chunk;
+                            // it is drawn later as a per-frame overlay.
+                            materialize(
+                                it, image, -(baseShift + ms), frameIdx = 0,
+                                flashingTextMode = DeferredImage.Flashing.Mode.EXCLUDE
                             )
                         }
                     }
+                    val transparentCanvasBitmaps = microShifts.mapIndexed { microShiftIdx, ms ->
+                        val file = diskCache?.chunkFile(chunkIdx, microShiftIdx)
+                        if (file == null) renderChunk(ms) else diskCache.loadOrCreateBitmap(
+                            file, renderCanvasSpec, profiling,
+                            loadTimingKey = "diskCache.chunkLoad", storeTimingKey = "diskCache.chunkStore",
+                            hitCountKey = "diskCache.chunkHit", missCountKey = "diskCache.chunkMiss"
+                        ) { renderChunk(ms) }
+                    }
+
+                    // Set up the conversion from the transparent canvas bitmap to the user bitmap.
+                    val renderUserSpec = Bitmap.Spec(resolution, userSpec.representation)
+                    val renderCanvas2user = BitmapConverter(
+                        renderCanvasSpec, renderUserSpec,
+                        promiseOpaque = grounding != null, approxTransfer = randomAccessDraftMode
+                    )
+
+                    // When using the draft compositor, set up the conversion from the transparent canvas bitmap to the
+                    // transparent draft bitmap.
+                    var renderDraftSpec: Bitmap.Spec? = null
+                    var renderCanvas2draft: BitmapConverter? = null
+                    if (blendInUserColorSpace) {
+                        val rep = draftOverlayRepresentation(userSpec.representation.colorSpace, hasAlpha = true)
+                        renderDraftSpec = Bitmap.Spec(resolution, rep)
+                        renderCanvas2draft = BitmapConverter(renderCanvasSpec, renderDraftSpec, approxTransfer = true)
+                    }
+
+                    val renders = try {
+                        // Note: Despite this map operation potentially being expensive if there are lots of bitmaps,
+                        // we cannot parallelize it because BitmapConverter.convert() is not thread-safe.
+                        transparentCanvasBitmaps.mapIndexed { microShiftIdx, transparentCanvasBitmap ->
+                            // Obtain the grounded canvas bitmap. Unlike upstream, we hold on to it instead of closing
+                            // it right away, because flashing overlays are composited onto it later on.
+                            fun ground() = Bitmap.allocate(renderCanvasSpec).also { grounded ->
+                                Canvas.forBitmap(grounded, canvasCeiling).use { canvas ->
+                                    canvas.fill(Canvas.Shader.Solid(grounding!!))
+                                    canvas.drawImageFast(transparentCanvasBitmap)
+                                }
+                            }
+                            val groundedCanvasBitmap = if (grounding == null) null else {
+                                val file = diskCache?.groundedChunkFile(chunkIdx, microShiftIdx)
+                                if (file == null) ground() else diskCache.getOrCreateSharedBitmap(
+                                    file, profiling,
+                                    hitCountKey = "sharedCache.groundedChunkHit",
+                                    missCountKey = "sharedCache.groundedChunkMiss"
+                                ) { ground() }
+                            }
+
+                            // Obtain the user bitmap.
+                            fun toUser() = Bitmap.allocate(renderUserSpec).also { user ->
+                                renderCanvas2user.convert(groundedCanvasBitmap ?: transparentCanvasBitmap, user)
+                            }
+                            val userFile = diskCache?.chunkUserFile(chunkIdx, microShiftIdx)
+                            val userBitmap = if (userFile == null) toUser() else diskCache.getOrCreateSharedBitmap(
+                                userFile, profiling,
+                                hitCountKey = "sharedCache.chunkUserHit", missCountKey = "sharedCache.chunkUserMiss"
+                            ) { toUser() }
+
+                            // When using the draft compositor, obtain the transparent draft bitmap. We also don't need
+                            // the transparent canvas bitmap anymore, so close it.
+                            val transparentCanvasOrDraftBitmap =
+                                if (!blendInUserColorSpace) transparentCanvasBitmap else {
+                                    val transparentDraftBitmap = Bitmap.allocate(renderDraftSpec!!)
+                                    renderCanvas2draft!!.convert(transparentCanvasBitmap, transparentDraftBitmap)
+                                    transparentCanvasBitmap.close()
+                                    transparentDraftBitmap
+                                }
+
+                            Render(
+                                transparentCanvasOrDraftBitmap, groundedCanvasBitmap, userBitmap,
+                                baseShift + microShifts[microShiftIdx], grounding, canvasCeiling, diskCache,
+                                diskCache?.let { c -> { key -> c.overlayFile(chunkIdx, microShiftIdx, key) } },
+                                diskCache?.let { c -> { key -> c.overlayUserFile(chunkIdx, microShiftIdx, key) } },
+                                profiling
+                            )
+                        }
+                    } finally {
+                        renderCanvas2user.close()
+                        renderCanvas2draft?.close()
+                    }
+
+                    val bytes = renders.sumOf { it.transparCanvasOrDraftBitmap.bytes + it.userBitmap.bytes }
+                    return SizedValue(renders, bytes)
                 }
             }
         }
@@ -658,140 +645,148 @@ class DeferredVideo private constructor(
         private fun obtainStaticProgressiveFrame(progressiveFrameIdx: Int, useCanvasRep: Boolean): Frame {
             val responses = profiling.measure("pageCache.query") { pageCache.query(progressiveFrameIdx) }
             val r = responses.singleOrNull()
-            val hasFlashingText = animateFlashingText &&
-                    responses.any { resp ->
-                        when (resp) {
-                            is PageCache.Response.Image -> resp.image.hasFlashingText(staticLayers)
-                            is PageCache.Response.Render -> resp.image.hasFlashingText(staticLayers)
-                        }
-                    }
+            // Cached chunks are rendered without flashing text (see createRenders), so whenever flashing text is
+            // animated and actually present, the frame needs the extra per-frame overlay pass below.
+            val hasFlashingText = animateFlashingText && !blendInUserColorSpace && responses.any { resp ->
+                when (resp) {
+                    is PageCache.Response.Image -> resp.image.hasFlashingText(staticLayers)
+                    is PageCache.Response.Render -> resp.image.hasFlashingText(staticLayers)
+                }
+            }
             return when {
                 responses.isEmpty() -> {
-                    profiling.measure("staticProgressive.blankFrame") {
-                        val bitmap = if (useCanvasRep) blankCanvasBitmap else blankUserBitmap
-                        Frame(bitmap, writable = false, shift = 0)
+                    val bitmap = if (useCanvasRep) blankCanvasPBitmap else blankUserPBitmap
+                    Frame(bitmap, writable = false, shift = 0)
+                }
+                hasFlashingText -> obtainStaticProgressiveFlashingFrame(progressiveFrameIdx, useCanvasRep, responses, r)
+                r is PageCache.Response.Render && r.alpha == 1.0 -> when {
+                    !useCanvasRep -> Frame(r.render.userBitmap, writable = false, shift = r.shift)
+                    grounding == null -> Frame(r.render.transparCanvasOrDraftBitmap, writable = false, shift = r.shift)
+                    else -> {
+                        val bitmap = Bitmap.allocate(canvasPWorkSpec)
+                        Canvas.forBitmap(bitmap, canvasCeiling).use { canvas ->
+                            canvas.fill(Canvas.Shader.Solid(grounding))
+                            canvas.drawImageFast(r.render.transparCanvasOrDraftBitmap, y = -r.shift)
+                        }
+                        Frame(bitmap, writable = true, shift = 0)
                     }
                 }
-                hasFlashingText -> {
-                    if (!useCanvasRep && r is PageCache.Response.Render && r.alpha == 1.0) {
-                        val overlayState = r.image.flashingStateKey(staticLayers, progressiveFrameIdx)
-                        if (overlayState == null)
-                            return profiling.measure("staticProgressive.cachedFlashingRender") {
-                                Frame(r.render.userBitmap, writable = false, shift = r.shift)
-                            }
-                        return profiling.measure("staticProgressive.cachedFlashingRender") {
-                            Frame(
-                                r.render.getOrCreateFlashingUserBitmap(overlayState) {
-                                    profiling.measure("flashingOverlay.create") {
-                                        val bitmap = Bitmap.allocate(r.render.transparentCanvasBitmap.spec)
-                                        Canvas.forBitmap(bitmap.zero(), canvasCeiling).use {
-                                            materialize(
-                                                it, r.image, -r.render.renderShift, progressiveFrameIdx,
-                                                DeferredImage.FlashingTextMode.ONLY
-                                            )
-                                        }
-                                        bitmap
-                                    }
-                                },
-                                writable = false,
-                                shift = r.shift
-                            )
-                        }
+                blendInUserColorSpace -> {
+                    val bitmap = Bitmap.allocate(userPWorkSpec)
+                    bitmap.blit(blankUserPBitmap)
+                    for (resp in pageCache.query(progressiveFrameIdx)) {
+                        check(resp is PageCache.Response.Render)  // In draft mode, there are no micro shifts.
+                        draftComposite(resp.render.transparCanvasOrDraftBitmap, bitmap, 0, -resp.shift, resp.alpha)
                     }
-                    val canvasBitmap = profiling.measure("staticProgressive.flashing.compose") {
-                        Bitmap.allocate(canvasWorkSpec).also { canvasBitmap ->
-                            Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
-                                if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
-                                for (resp in responses)
-                                    when (resp) {
-                                        is PageCache.Response.Image ->
-                                            canvas.compositeLayer(alpha = resp.alpha) {
-                                                materialize(
-                                                    canvas, resp.image, -resp.shift, progressiveFrameIdx,
-                                                    DeferredImage.FlashingTextMode.ALL
-                                                )
-                                            }
-                                        is PageCache.Response.Render -> {
-                                            canvas.drawImageFast(
-                                                resp.render.transparentCanvasBitmap, alpha = resp.alpha, y = -resp.shift
-                                            )
-                                            val overlayState = resp.image.flashingStateKey(staticLayers, progressiveFrameIdx)
-                                            if (overlayState != null) {
-                                                val overlay = resp.render.getOrCreateFlashingOverlay(overlayState) {
-                                                    profiling.measure("flashingOverlay.create") {
-                                                        val bitmap = Bitmap.allocate(resp.render.transparentCanvasBitmap.spec)
-                                                        Canvas.forBitmap(bitmap.zero(), canvasCeiling).use {
-                                                            materialize(
-                                                                it, resp.image, -resp.render.renderShift, progressiveFrameIdx,
-                                                                DeferredImage.FlashingTextMode.ONLY
-                                                            )
-                                                        }
-                                                        bitmap
-                                                    }
-                                                }
-                                                canvas.drawImageFast(overlay, alpha = resp.alpha, y = -resp.shift)
-                                            }
-                                        }
-                                    }
-                            }
-                        }
-                    }
-                    val bitmap = if (useCanvasRep) canvasBitmap else
-                        profiling.measure("staticProgressive.canvasToUser") { canvas2userAndClose(canvasBitmap) }
                     Frame(bitmap, writable = true, shift = 0)
                 }
-                r is PageCache.Response.Render && r.alpha == 1.0 -> profiling.measure("staticProgressive.cachedRender") {
-                    when {
-                        !useCanvasRep -> Frame(r.render.userBitmap, writable = false, shift = r.shift)
-                        grounding == null -> Frame(r.render.transparentCanvasBitmap, writable = false, shift = r.shift)
-                        else -> {
-                            val bitmap = Bitmap.allocate(canvasWorkSpec)
-                            Canvas.forBitmap(bitmap, canvasCeiling).use { canvas ->
-                                canvas.fill(Canvas.Shader.Solid(grounding))
-                                canvas.drawImageFast(r.render.transparentCanvasBitmap, y = -r.shift)
-                            }
-                            Frame(bitmap, writable = true, shift = 0)
-                        }
-                    }
-                }
                 else -> {
-                    val canvasBitmap = profiling.measure("staticProgressive.generalCompose") {
-                        Bitmap.allocate(canvasWorkSpec).also { canvasBitmap ->
-                            Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
-                                if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
-                                for (resp in responses)
-                                    when (resp) {
-                                        is PageCache.Response.Image ->
-                                            canvas.compositeLayer(alpha = resp.alpha) {
-                                                materialize(canvas, resp.image, -resp.shift, progressiveFrameIdx)
-                                            }
-                                        is PageCache.Response.Render ->
-                                            canvas.drawImageFast(
-                                                resp.render.transparentCanvasBitmap, alpha = resp.alpha, y = -resp.shift
-                                            )
+                    val canvasBitmap = Bitmap.allocate(canvasPWorkSpec)
+                    Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                        if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
+                        for (resp in pageCache.query(progressiveFrameIdx))
+                            when (resp) {
+                                is PageCache.Response.Image ->
+                                    canvas.compositeLayer(alpha = resp.alpha) {
+                                        materialize(canvas, resp.image, -resp.shift)
                                     }
+                                is PageCache.Response.Render ->
+                                    canvas.drawImageFast(
+                                        resp.render.transparCanvasOrDraftBitmap, alpha = resp.alpha, y = -resp.shift
+                                    )
                             }
-                        }
                     }
-                    val bitmap = if (useCanvasRep) canvasBitmap else
-                        profiling.measure("staticProgressive.canvasToUser") { canvas2userAndClose(canvasBitmap) }
+                    val bitmap = if (useCanvasRep) canvasBitmap else Bitmap.allocate(userPWorkSpec)
+                        .also { canvasP2userP.convert(canvasBitmap, it); canvasBitmap.close() }
                     Frame(bitmap, writable = true, shift = 0)
                 }
             }
+        }
+
+        /**
+         * Builds a frame that contains flashing text. The non-flashing content still comes from the cached chunk
+         * renders; only the flashing text is materialized per frame, and even that is cached per flashing state, so
+         * a long stretch of frames cycling through the same few colors reuses a handful of overlays.
+         */
+        private fun obtainStaticProgressiveFlashingFrame(
+            progressiveFrameIdx: Int,
+            useCanvasRep: Boolean,
+            responses: List<PageCache.Response<Render>>,
+            r: PageCache.Response<Render>?
+        ): Frame {
+            fun createOverlay(resp: PageCache.Response.Render<Render>) = {
+                profiling.measure("flashingOverlay.create") {
+                    Bitmap.allocate(resp.render.transparCanvasOrDraftBitmap.spec).also { bitmap ->
+                        Canvas.forBitmap(bitmap.zero(), canvasCeiling).use {
+                            materialize(
+                                it, resp.image, -resp.render.renderShift, progressiveFrameIdx,
+                                DeferredImage.Flashing.Mode.ONLY
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Fast path: a single fully opaque cached render, so the finished user bitmap can be cached wholesale.
+            if (!useCanvasRep && r is PageCache.Response.Render && r.alpha == 1.0)
+                return profiling.measure("staticProgressive.cachedFlashingRender") {
+                    val stateKey = r.image.flashingStateKey(staticLayers, progressiveFrameIdx)
+                    if (stateKey == null)
+                        Frame(r.render.userBitmap, writable = false, shift = r.shift)
+                    else
+                        Frame(
+                            r.render.getOrCreateFlashingUserBitmap(stateKey, createOverlay(r)),
+                            writable = false, shift = r.shift
+                        )
+                }
+
+            // General path: composite every response, drawing each cached render's flashing overlay on top of it.
+            val canvasBitmap = profiling.measure("staticProgressive.flashingCompose") {
+                Bitmap.allocate(canvasPWorkSpec).also { canvasBitmap ->
+                    Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                        if (grounding == null) canvasBitmap.zero() else canvas.fill(Canvas.Shader.Solid(grounding))
+                        for (resp in responses)
+                            when (resp) {
+                                is PageCache.Response.Image ->
+                                    canvas.compositeLayer(alpha = resp.alpha) {
+                                        materialize(canvas, resp.image, -resp.shift, progressiveFrameIdx)
+                                    }
+                                is PageCache.Response.Render -> {
+                                    canvas.drawImageFast(
+                                        resp.render.transparCanvasOrDraftBitmap, alpha = resp.alpha, y = -resp.shift
+                                    )
+                                    val stateKey = resp.image.flashingStateKey(staticLayers, progressiveFrameIdx)
+                                    if (stateKey != null) {
+                                        val overlay =
+                                            resp.render.getOrCreateFlashingOverlay(stateKey, createOverlay(resp))
+                                        canvas.drawImageFast(overlay, alpha = resp.alpha, y = -resp.shift)
+                                    }
+                                }
+                            }
+                    }
+                }
+            }
+            val bitmap = if (useCanvasRep) canvasBitmap else
+                profiling.measure("staticProgressive.canvasToUser") {
+                    Bitmap.allocate(userPWorkSpec)
+                        .also { canvasP2userP.convert(canvasBitmap, it); canvasBitmap.close() }
+                }
+            return Frame(bitmap, writable = true, shift = 0)
         }
 
         private fun materialize(
             canvas: Canvas,
             defImg: DeferredImage,
             y: Double,
-            frameIdx: Int,
-            flashingTextMode: DeferredImage.FlashingTextMode = DeferredImage.FlashingTextMode.ALL
+            frameIdx: Int = 0,
+            flashingTextMode: DeferredImage.Flashing.Mode = DeferredImage.Flashing.Mode.ALL
         ) {
             val shiftedSrc = if (y == 0.0) defImg else
                 DeferredImage(canvas.width, canvas.height.toY()).apply { drawDeferredImage(defImg, y = y.toY()) }
             shiftedSrc.materialize(
-                canvas, cache, staticLayers, frameIdx = frameIdx, animateFlashingText = animateFlashingText,
-                flashingTextMode = flashingTextMode
+                canvas, cachePictures = randomAccessDraftMode, permitTapePreviews = null,
+                tolerateErroneousMedia = randomAccessDraftMode, staticLayers,
+                DeferredImage.Flashing(frameIdx, animateFlashingText, flashingTextMode)
             )
         }
 
@@ -806,7 +801,7 @@ class DeferredVideo private constructor(
             val sndSrcParity = 1 - fstSrcParity
             val fstDstParity = if (userSpec.content == Bitmap.Content.INTERLEAVED_FIELDS) fstSrcParity else sndSrcParity
             val sndDstParity = 1 - fstDstParity
-            val interleaved = Bitmap.allocate(if (useCanvasRep) canvasWorkSpec else userWorkSpec)
+            val interleaved = Bitmap.allocate(if (useCanvasRep) canvasIWorkSpec else userIWorkSpec)
             // It is important to query the earlier frame first, and also to immediately blit it, because the cache is
             // free to close it as soon as a later frame is queried (since sequentialAccess is true).
             val (fst, fstWritable, fstShift) = obtainStaticProgressiveFrame(frameIdx * 2, useCanvasRep)
@@ -833,16 +828,17 @@ class DeferredVideo private constructor(
             if (tapeResponses.isEmpty())
                 return static
             val composite = if (static.writable) static.bitmap else
-                Bitmap.allocate(if (compInCanvasRep) canvasWorkSpec else userWorkSpec)
-                    .apply { blit(static.bitmap, 0, static.shift, workWidth, workHeight, 0, 0, 1) }
-            profiling.measure("tapeOverlay.progressive") {
-                for (resp in tapeResponses) {
-                    val userData = takeTapeUserData(resp)
-                    userData.frameOverlayer!!.overlay(composite, userData.read(resp.timecode), resp.x, resp.y, resp.alpha)
-                    dropTapeUserData(resp, frameIdx)
+                Bitmap.allocate(if (compInCanvasRep) canvasPWorkSpec else userPWorkSpec)
+                    .apply { blitLeniently(static.bitmap, 0, static.shift, workWidth, workHeight, 0, 0) }
+            for (resp in tapeResponses) {
+                val userData = takeTapeUserData(resp)
+                userData.read(resp.timecode).use { overlay ->
+                    userData.frameOverlayer!!.overlay(composite, overlay, resp.x, resp.y, resp.alpha)
                 }
+                dropTapeUserData(resp, frameIdx)
             }
-            val userComposite = if (!compInCanvasRep) composite else canvas2userAndClose(composite)
+            val userComposite = if (!compInCanvasRep) composite else Bitmap.allocate(userPWorkSpec)
+                .also { canvasP2userP.convert(composite, it); composite.close() }
             return Frame(userComposite, writable = true, shift = 0)
         }
 
@@ -850,18 +846,15 @@ class DeferredVideo private constructor(
             val fstTapeResponses = profiling.measure("tapeTracker.query") { tapeTracker.query(frameIdx * 2) }
             val sndTapeResponses = profiling.measure("tapeTracker.query") { tapeTracker.query(frameIdx * 2 + 1) }
             val compInCanvasRep = shouldCompInCanvasRep(fstTapeResponses) || shouldCompInCanvasRep(sndTapeResponses)
-            val (composite, fstSrcParity, fstDstParity) = profiling.measure("backend.obtainStaticInterlacedFrame") {
-                obtainStaticInterlacedFrame(frameIdx, compInCanvasRep)
-            }
+            val (composite, fstSrcParity, fstDstParity) = obtainStaticInterlacedFrame(frameIdx, compInCanvasRep)
             if (fstTapeResponses.isEmpty() && sndTapeResponses.isEmpty())
                 return Frame(composite, writable = true, shift = 0)
             val sndSrcParity = 1 - fstSrcParity
             val sndDstParity = 1 - fstDstParity
-            profiling.measure("tapeOverlay.interlaced") {
-                overlayInterlacedTapes(composite, frameIdx * 2, fstTapeResponses, fstSrcParity, fstDstParity)
-                overlayInterlacedTapes(composite, frameIdx * 2 + 1, sndTapeResponses, sndSrcParity, sndDstParity)
-            }
-            val userComposite = if (!compInCanvasRep) composite else canvas2userAndClose(composite)
+            overlayInterlacedTapes(composite, frameIdx * 2, fstTapeResponses, fstSrcParity, fstDstParity)
+            overlayInterlacedTapes(composite, frameIdx * 2 + 1, sndTapeResponses, sndSrcParity, sndDstParity)
+            val userComposite = if (!compInCanvasRep) composite else Bitmap.allocate(userIWorkSpec)
+                .also { canvasI2userI.convert(composite, it); composite.close() }
             return Frame(userComposite, writable = true, shift = 0)
         }
 
@@ -913,15 +906,19 @@ class DeferredVideo private constructor(
                 }
                 if (frame.spec.scan == Bitmap.Scan.PROGRESSIVE)
                     field.close()
+                frame.close()
                 dropTapeUserData(resp, frameIdx)
             }
         }
 
         private fun shouldCompInCanvasRep(tapeResponses: List<TapeTracker.Response<TapeUserData>>): Boolean {
+            // If requested, use the fast draft compositor for everything, including alpha compositing.
+            if (blendInUserColorSpace)
+                return false
             // Alpha compositing can only be done using a canvas.
             if (tapeResponses.any { it.alpha != 1.0 || it.embeddedTape.tape.spec.representation.pixelFormat.hasAlpha })
                 return true
-            // Overlaying onto a chroma-subsampled bitmap is only possible if the overlay coincides with the subsampling
+            // Blitting onto a chroma-subsampled bitmap is only possible if the overlay coincides with the subsampling
             // grid. Otherwise, resort to overlaying onto the non-subsampled canvas bitmap, and then converting the
             // whole thing to the final subsampled representation.
             if (tapeResponses.isEmpty() || !userPixelFormat.hasChromaSub)
@@ -936,14 +933,15 @@ class DeferredVideo private constructor(
 
         private fun takeTapeUserData(resp: TapeTracker.Response<TapeUserData>): TapeUserData {
             resp.userData?.let { return it }
-            return TapeUserData(canvasRepresentation, canvasCeiling, userSpec, resp, randomAccessDraftMode)
-                .also { resp.userData = it }
+            return TapeUserData(
+                canvasRepresentation, canvasCeiling, userSpec, resp, randomAccessDraftMode, blendInUserColorSpace
+            ).also { resp.userData = it }
         }
 
         private fun dropTapeUserData(resp: TapeTracker.Response<TapeUserData>, frameIdx: Int) {
             // Close the reader early and dereference the user data if we no longer need it. Notice that in case of
             // errors, the close() function on this object will be called and will close all remaining readers.
-            if (frameIdx >= /* use >= instead of == just to be sure */ resp.lastFrameIdx) {
+            if (!randomAccessDraftMode && frameIdx >= /* use >= instead of == just to be sure */ resp.lastFrameIdx) {
                 resp.userData?.close()
                 resp.userData = null
             }
@@ -954,7 +952,8 @@ class DeferredVideo private constructor(
             canvasCeiling: Float?,
             userSpec: Bitmap.Spec,
             resp: TapeTracker.Response<*>,
-            usePreview: Boolean
+            usePreview: Boolean,
+            blendInUserColorSpace: Boolean
         ) {
 
             var topField: Bitmap? = null
@@ -968,34 +967,130 @@ class DeferredVideo private constructor(
                     field = value
                 }
 
+            private val tape = resp.embeddedTape.tape
+
             private lateinit var source: Source
+            private var reader: Tape.SequentialReader? = null
+
+            private var readConverter: BitmapConverter? = null
+            private var readConvertedSpec: Bitmap.Spec? = null
+            private lateinit var readCrop: Rectangle
+            private lateinit var readReorder: Reorder
             private lateinit var readSpec: Bitmap.Spec
-            private lateinit var reader: Tape.SequentialReader
-            private lateinit var previewTape: Tape
 
             init {
                 setupSafely({
                     val embeddedTape = resp.embeddedTape
+                    var origSpec: Bitmap.Spec
                     if (usePreview)
                         try {
-                            previewTape = embeddedTape.tape
-                            readSpec = embeddedTape.tape.getPreviewFrame(resp.timecode /* random */).get()!!.bitmap.spec
                             source = Source.PREVIEW
+                            origSpec = tape.getPreviewFrame(resp.timecode /* random */).get().bitmap.spec
+                            val tapeRes = tape.spec.resolution
+                            val tapeCrop = embeddedTape.crop
+                            val cropMulX = origSpec.resolution.widthPx / tapeRes.widthPx.toDouble()
+                            val cropMulY = origSpec.resolution.heightPx / tapeRes.heightPx.toDouble()
+                            readCrop = Rectangle(
+                                floor(cropMulX * tapeCrop.x).toInt(), floor(cropMulY * tapeCrop.y).toInt(),
+                                ceil(cropMulX * tapeCrop.width).toInt(), ceil(cropMulY * tapeCrop.height).toInt()
+                            )
                         } catch (_: Exception) {
-                            readSpec = Bitmap.Spec(embeddedTape.resolution, canvasRep)
                             source = Source.UNAVAILABLE
+                            val rep = Picture.Raster.compatibleRepresentation(
+                                userSpec.representation.colorSpace, Bitmap.Alpha.OPAQUE
+                            )
+                            origSpec = Bitmap.Spec(embeddedTape.resolution, rep)
+                            readCrop = embeddedTape.resolution.run { Rectangle(widthPx, heightPx) }
                         }
                     else {
-                        reader = embeddedTape.tape.SequentialReader(resp.timecode /* the span's first timecode */)
-                        readSpec = embeddedTape.tape.spec
                         source = Source.READER
+                        origSpec = embeddedTape.tape.spec
+                        readCrop = embeddedTape.crop
                     }
+
+                    // If the pixel format directly from the source has chroma subsampling, insert a converter stage
+                    // to an otherwise equivalent non-subsampled pixel format. This is necessary for interlaced export,
+                    // cropping, and reordering, but for simplicity, we simply always do it.
+                    var convertedSpec = origSpec
+                    val pixFmt = origSpec.representation.pixelFormat
+                    if (pixFmt.hasChromaSub) {
+                        val alpha = pixFmt.hasAlpha
+                        val le = pixFmt.byteOrder == ByteOrder.LITTLE_ENDIAN
+                        val convertedPixFmtCode = when (pixFmt.depth) {
+                            8 -> when (alpha) {
+                                true -> AV_PIX_FMT_YUVA444P
+                                else -> AV_PIX_FMT_YUV444P
+                            }
+                            9 -> when (alpha) {
+                                true -> if (le) AV_PIX_FMT_YUVA444P9LE else AV_PIX_FMT_YUVA444P9BE
+                                else -> if (le) AV_PIX_FMT_YUV444P9LE else AV_PIX_FMT_YUV444P9BE
+                            }
+                            10 -> when (alpha) {
+                                true -> if (le) AV_PIX_FMT_YUVA444P10LE else AV_PIX_FMT_YUVA444P10BE
+                                else -> if (le) AV_PIX_FMT_YUV444P10LE else AV_PIX_FMT_YUV444P10BE
+                            }
+                            12 -> when (alpha) {
+                                true -> if (le) AV_PIX_FMT_YUVA444P12LE else AV_PIX_FMT_YUVA444P12BE
+                                else -> if (le) AV_PIX_FMT_YUV444P12LE else AV_PIX_FMT_YUV444P12BE
+                            }
+                            14 -> when (alpha) {
+                                true -> if (le) AV_PIX_FMT_YUVA444P16LE else AV_PIX_FMT_YUVA444P16BE  // fallback
+                                else -> if (le) AV_PIX_FMT_YUV444P14LE else AV_PIX_FMT_YUV444P14BE
+                            }
+                            16 -> when (alpha) {
+                                true -> if (le) AV_PIX_FMT_YUVA444P16LE else AV_PIX_FMT_YUVA444P16BE
+                                else -> if (le) AV_PIX_FMT_YUV444P16LE else AV_PIX_FMT_YUV444P16BE
+                            }
+                            else -> if (le) AV_PIX_FMT_YUVA444P16LE else AV_PIX_FMT_YUVA444P16BE  // fallback
+                        }
+                        convertedSpec = origSpec.copy(
+                            representation = origSpec.representation.copy(
+                                pixelFormat = Bitmap.PixelFormat.of(convertedPixFmtCode),
+                                chromaLocation = AVCHROMA_LOC_UNSPECIFIED
+                            )
+                        )
+                        readConverter = BitmapConverter(origSpec, convertedSpec)
+                        readConvertedSpec = convertedSpec
+                    }
+
+                    readReorder = when (embeddedTape.rotation) {
+                        0 -> Reorder(flipH = embeddedTape.flipH, flipV = embeddedTape.flipV, transpose = false)
+                        90 -> Reorder(flipH = !embeddedTape.flipV, flipV = embeddedTape.flipH, transpose = true)
+                        180 -> Reorder(flipH = !embeddedTape.flipH, flipV = !embeddedTape.flipV, transpose = false)
+                        else -> Reorder(flipH = embeddedTape.flipV, flipV = !embeddedTape.flipH, transpose = true)
+                    }
+
+                    readSpec = convertedSpec.copy(
+                        resolution = when (embeddedTape.rotation % 180 == 0) {
+                            true -> Resolution(readCrop.width, readCrop.height)
+                            else -> Resolution(readCrop.height, readCrop.width)
+                        },
+                        scan = when {
+                            // When an interlaced tape is rotated onto its side, there's little synergy between
+                            // continuing to treat the now vertical fields as appearing at different times and
+                            // interlaced export, so for simplicity, we just treat the tape as progressive.
+                            readReorder.transpose -> Bitmap.Scan.PROGRESSIVE
+                            // When vertically flipping an interlaced tape, what previously was the top field becomes
+                            // the bottom field (and vice versa), so we when previously the top field came first, now
+                            // the bottom field comes first (and vice versa).
+                            readReorder.flipV -> when (convertedSpec.scan) {
+                                Bitmap.Scan.PROGRESSIVE -> Bitmap.Scan.PROGRESSIVE
+                                Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST -> Bitmap.Scan.INTERLACED_BOT_FIELD_FIRST
+                                Bitmap.Scan.INTERLACED_BOT_FIELD_FIRST -> Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST
+                            }
+                            else -> convertedSpec.scan
+                        },
+                        content = when {
+                            readReorder.transpose -> Bitmap.Content.PROGRESSIVE_FRAME
+                            else -> convertedSpec.content
+                        }
+                    )
                 }, ::close)
             }
 
             // When this bitmap is initialized, it will exactly match readSpec,
             // so it'll be a drop-in replacement for the actual tape frames.
-            private val missingMediaBitmap by lazy {
+            private val missingMediaBitmap = lazy {
                 val mmBitmap = Bitmap.allocate(readSpec)
                 val rep = Canvas.compatibleRepresentation(ColorSpace.SRGB)
                 Bitmap.allocate(Bitmap.Spec(readSpec.resolution, rep)).use { canvasBitmap ->
@@ -1014,46 +1109,98 @@ class DeferredVideo private constructor(
             val botFieldOverlayer: Overlayer?
 
             init {
-                val embeddedTapeFrameRes = resp.embeddedTape.resolution
-                val embeddedTapeFieldRes = Resolution(embeddedTapeFrameRes.widthPx, embeddedTapeFrameRes.heightPx / 2)
+                val userRep = userSpec.representation
+                val filter = if (usePreview) BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR else
+                    resp.embeddedTape.resamplingFilter
 
-                val userSpecIsProgressive = userSpec.scan == Bitmap.Scan.PROGRESSIVE
-                val readFramesAreProgressive = readSpec.scan == Bitmap.Scan.PROGRESSIVE
-                if (userSpecIsProgressive) {
-                    val compositedOverlayRes = if (readFramesAreProgressive) embeddedTapeFrameRes else
-                    // If the tape is interlaced, make it have even height in the final output.
-                        Resolution(embeddedTapeFrameRes.widthPx, embeddedTapeFrameRes.heightPx / 2 * 2)
-                    frameOverlayer = Overlayer(canvasRep, canvasCeiling, compositedOverlayRes, usePreview)
+                if (userSpec.scan == Bitmap.Scan.PROGRESSIVE) {
+                    val compositedOverlayRes = resp.embeddedTape.resolution
+                    frameOverlayer = when (blendInUserColorSpace) {
+                        true -> UserColorSpaceOverlayer(
+                            userRep.colorSpace, readSpec, compositedOverlayRes, filter
+                        )
+                        else -> QualityOverlayer(
+                            canvasRep, canvasCeiling, userRep, readSpec, compositedOverlayRes, filter, usePreview
+                        )
+                    }
                     topFieldOverlayer = null
                     botFieldOverlayer = null
                 } else {
-                    require(readFramesAreProgressive || readSpec.resolution.heightPx % 2 == 0) {
-                        "The interlaced tape '${resp.embeddedTape.tape.fileOrDir.name}' must have even height."
-                    }
+                    require(!blendInUserColorSpace) { "Interlaced processing does not support user CS blending." }
+                    val compositedOverlayRes = resp.embeddedTape.resolution.run { Resolution(widthPx, heightPx / 2) }
+                    val topFieldOverlaySpec = Bitmap.Spec(
+                        readSpec.resolution.run { Resolution(widthPx, heightPx / 2) },
+                        readSpec.representation,
+                        if (readSpec.scan != Bitmap.Scan.PROGRESSIVE) readSpec.scan else
+                            Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST,
+                        Bitmap.Content.ONLY_TOP_FIELD
+                    )
+                    val botFieldOverlaySpec = topFieldOverlaySpec.copy(content = Bitmap.Content.ONLY_BOT_FIELD)
                     frameOverlayer = null
-                    topFieldOverlayer = Overlayer(canvasRep, canvasCeiling, embeddedTapeFieldRes, usePreview)
-                    botFieldOverlayer = Overlayer(canvasRep, canvasCeiling, embeddedTapeFieldRes, usePreview)
+                    topFieldOverlayer = QualityOverlayer(
+                        canvasRep, canvasCeiling, userRep, topFieldOverlaySpec, compositedOverlayRes, filter, usePreview
+                    )
+                    botFieldOverlayer = QualityOverlayer(
+                        canvasRep, canvasCeiling, userRep, botFieldOverlaySpec, compositedOverlayRes, filter, usePreview
+                    )
                 }
             }
 
-            fun read(timecode: Timecode): Bitmap = when (source) {
-                Source.READER -> reader.read(timecode).bitmap
-                Source.PREVIEW -> try {
-                    previewTape.getPreviewFrame(timecode).get()!!.bitmap
-                } catch (_: Exception) {
-                    missingMediaBitmap
+            fun read(timecode: Timecode): Bitmap {
+                val origBitmap = when (source) {
+                    Source.READER ->
+                        reader?.let { reader ->
+                            try {
+                                reader.read(timecode).bitmap
+                            } catch (_: Tape.DescendingTimecodesException) {
+                                // If the tape is looping, we will create a new reader at the beginning of the tape.
+                                reader.close()
+                                null
+                            }
+                        } ?: tape.SequentialReader(timecode).also { reader = it }.read(timecode).bitmap
+                    Source.PREVIEW -> try {
+                        // For previews, create a view immediately because preview bitmaps might be closed at any time.
+                        // If the bitmap is already closed, the exception is caught and the missing bitmap is used.
+                        tape.getPreviewFrame(timecode).get().bitmap.view()
+                    } catch (_: Exception) {
+                        // Also create a view here since the code below expects to be able to close origBitmap if the
+                        // source is PREVIEW.
+                        return missingMediaBitmap.value.view()
+                    }
+                    // Once again, create a view here just like immediately above.
+                    Source.UNAVAILABLE -> return missingMediaBitmap.value.view()
                 }
-                Source.UNAVAILABLE -> missingMediaBitmap
+                var convertedBitmap = origBitmap
+                readConverter?.let { conv ->
+                    convertedBitmap = Bitmap.allocate(readConvertedSpec!!)
+                    conv.convert(origBitmap, convertedBitmap)
+                    if (source == Source.PREVIEW)
+                        origBitmap.close()
+                }
+                val croppedBitmap = readCrop.run { convertedBitmap.view(x, y, width, height, 1) }
+                if (convertedBitmap != origBitmap || source == Source.PREVIEW)
+                    convertedBitmap.close()
+                val (flipH, flipV, transpose) = readReorder
+                if (!flipH && !flipV && !transpose)
+                    return croppedBitmap
+                else {
+                    val reorderedBitmap = Bitmap.allocate(readSpec)
+                    reorderedBitmap.blitReordered(croppedBitmap, flipH, flipV, transpose)
+                    croppedBitmap.close()
+                    return reorderedBitmap
+                }
             }
 
             fun didReadFirstField(): Boolean {
                 check(source == Source.READER) { "Interlaced processing is not yet supported in previews." }
-                return reader.didReadFirstField()
+                return reader!!.didReadFirstField()
             }
 
             fun close() {
-                if (source == Source.READER)
-                    reader.close()
+                reader?.close()
+                readConverter?.close()
+                if (missingMediaBitmap.isInitialized())
+                    missingMediaBitmap.value.close()
                 frameOverlayer?.close()
                 topFieldOverlayer?.close()
                 botFieldOverlayer?.close()
@@ -1062,59 +1209,290 @@ class DeferredVideo private constructor(
             }
 
             private enum class Source { READER, PREVIEW, UNAVAILABLE }
+            private data class Reorder(val flipH: Boolean, val flipV: Boolean, val transpose: Boolean)
 
         }
 
-        private class Overlayer(
+        private interface Overlayer : AutoCloseable {
+
+            fun overlay(base: Bitmap, overlay: Bitmap, x: Int, y: Int, alpha: Double)
+
+            companion object {
+
+                fun makeOverlayConvAndDst(
+                    overlaySpec: Bitmap.Spec,
+                    dstRes: Resolution,
+                    dstRep: Bitmap.Representation,
+                    filter: BitmapConverter.ResamplingFilter,
+                    usingPreview: Boolean
+                ): Pair<BitmapConverter, Bitmap> {
+                    val dstSpec = overlaySpec.copy(resolution = dstRes, representation = dstRep)
+                    val conv = BitmapConverter(
+                        overlaySpec, dstSpec,
+                        // srcAligned is false due to potential cropping of the overlay.
+                        srcAligned = false, approxTransfer = usingPreview, resamplingFilter = filter
+                    )
+                    val dstBitmap = Bitmap.allocate(dstSpec)
+                    return Pair(conv, dstBitmap)
+                }
+
+                fun renderPreviewText(resolution: Resolution, colorSpace: ColorSpace): Pair<Bitmap, Bitmap> {
+                    val canvasBitmap =
+                        Bitmap.allocate(Bitmap.Spec(resolution, Canvas.compatibleRepresentation(colorSpace)))
+                    Canvas.forBitmap(canvasBitmap.zero()).use { canvas ->
+                        val (w, h) = resolution
+                        val previewIndicator = Tape.previewIndicator(0.0, 0.0, w.toDouble(), h.toDouble())
+                        canvas.fillShape(previewIndicator, Canvas.Shader.Solid(Color4f.TAPE_PREVIEW))
+                    }
+
+                    val draftOverlayRep = draftOverlayRepresentation(colorSpace, hasAlpha = true)
+                    val draftOverlayBitmap = Bitmap.allocate(Bitmap.Spec(resolution, draftOverlayRep))
+                    BitmapConverter.convert(canvasBitmap, draftOverlayBitmap)
+
+                    return Pair(canvasBitmap, draftOverlayBitmap)
+                }
+
+            }
+
+        }
+
+        private abstract class QualityOverlayer(
             private val canvasRep: Bitmap.Representation,
-            private val canvasCeiling: Float?,
-            private val compositedOverlayRes: Resolution,
-            private val usingPreview: Boolean
-        ) {
+            protected val canvasCeiling: Float?,
+            overlaySpec: Bitmap.Spec,
+            compositedOverlayRes: Resolution,
+            filter: BitmapConverter.ResamplingFilter,
+            usingPreview: Boolean
+        ) : Overlayer {
 
-            private var raw2user: BitmapConverter? = null
-            private var userOverlayBitmap: Bitmap? = null
+            private val overlay2canvas: BitmapConverter
+            private val canvasBitmap: Bitmap
 
-            fun overlay(base: Bitmap, overlay: Bitmap, x: Int, y: Int, alpha: Double) {
-                val (cw, ch) = compositedOverlayRes
+            private val overlay2clamp: BitmapConverter
+            private val clampBitmap: Bitmap
+
+            protected val clampSpec: Bitmap.Spec
+
+            init {
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, canvasRep, filter, usingPreview)
+                    .run { overlay2canvas = first; canvasBitmap = second }
+
+                val clampRep = Bitmap.Representation(
+                    Bitmap.PixelFormat.of(AV_PIX_FMT_GBRPF32), canvasRep.colorSpace,
+                    // Always opaque because this representation is only used when the overlay is opaque.
+                    Bitmap.Alpha.OPAQUE
+                )
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, clampRep, filter, usingPreview)
+                    .run { overlay2clamp = first; clampBitmap = second }
+                clampSpec = clampBitmap.spec
+            }
+
+            final override fun overlay(base: Bitmap, overlay: Bitmap, x: Int, y: Int, alpha: Double) {
                 if (base.spec.representation == canvasRep) {
-                    val (ow, oh) = overlay.spec.resolution
-                    val transform = AffineTransform.getTranslateInstance(x.toDouble(), y.toDouble())
-                        .apply { scale(cw / ow.toDouble(), ch / oh.toDouble()) }
+                    val promiseOpaque = !overlay.spec.representation.pixelFormat.hasAlpha
+                    overlay2canvas.convert(overlay, canvasBitmap)
+                    manipulateCanvasOverlay(canvasBitmap)
+                    canvasBitmap.clampFloatColors(canvasCeiling, promiseOpaque)
                     Canvas.forBitmap(base, canvasCeiling).use { canvas ->
-                        canvas.drawImage(overlay, nearestNeighbor = usingPreview, alpha = alpha, transform = transform)
+                        canvas.drawImageFast(canvasBitmap, promiseOpaque, alpha, x, y)
                     }
                 } else {
-                    check(alpha == 1.0)
-                    if (raw2user == null)
-                        initForBlit(base.spec, overlay.spec)
-                    val userOverlayBitmap = userOverlayBitmap!!
-                    raw2user!!.convert(overlay, userOverlayBitmap)
-                    if (userOverlayBitmap.spec.representation.pixelFormat.isFloat) {
-                        val cCS = canvasRep.colorSpace
-                        val uCS = userOverlayBitmap.spec.representation.colorSpace
-                        val userCeiling = if (canvasCeiling == null || cCS == null || uCS == null) canvasCeiling else
-                            Color4f(canvasCeiling, canvasCeiling, canvasCeiling, cCS).convert(uCS).rgb().min()
-                        userOverlayBitmap.clampFloatColors(
-                            userCeiling, promiseOpaque = !overlay.spec.representation.pixelFormat.hasAlpha
-                        )
-                    }
-                    base.blitLeniently(userOverlayBitmap, 0, 0, cw, ch, x, y)
+                    check(alpha == 1.0 && !overlay.spec.representation.pixelFormat.hasAlpha)
+                    overlay2clamp.convert(overlay, clampBitmap)
+                    clampBitmap.clampFloatColors(canvasCeiling)
+                    overlayOpaque(base, clampBitmap, x, y)
                 }
             }
 
-            private fun initForBlit(userSpec: Bitmap.Spec, rawOverlaySpec: Bitmap.Spec) {
-                val userOverlaySpec = userSpec.copy(resolution = compositedOverlayRes)
-                raw2user = BitmapConverter(
-                    rawOverlaySpec, userOverlaySpec,
-                    srcAligned = usingPreview, approxTransfer = usingPreview, nearestNeighbor = usingPreview
-                )
-                userOverlayBitmap = Bitmap.allocate(userOverlaySpec)
+            protected open fun manipulateCanvasOverlay(canvasBitmap: Bitmap) {}
+            protected abstract fun overlayOpaque(base: Bitmap, clampBitmap: Bitmap, x: Int, y: Int)
+
+            override fun close() {
+                overlay2canvas.close()
+                canvasBitmap.close()
+                overlay2clamp.close()
+                clampBitmap.close()
             }
 
-            fun close() {
-                raw2user?.close()
-                userOverlayBitmap?.close()
+            companion object {
+                operator fun invoke(
+                    canvasRep: Bitmap.Representation,
+                    canvasCeiling: Float?,
+                    userRep: Bitmap.Representation,
+                    overlaySpec: Bitmap.Spec,
+                    compositedOverlayRes: Resolution,
+                    filter: BitmapConverter.ResamplingFilter,
+                    usingPreview: Boolean
+                ) =
+                    if (!usingPreview)
+                        QualityReaderOverlayer(
+                            canvasRep, canvasCeiling, userRep, overlaySpec, compositedOverlayRes, filter
+                        )
+                    else
+                        QualityPreviewOverlayer(
+                            canvasRep, canvasCeiling, userRep, overlaySpec, compositedOverlayRes, filter
+                        )
+            }
+
+        }
+
+        private class QualityReaderOverlayer(
+            canvasRep: Bitmap.Representation,
+            canvasCeiling: Float?,
+            userRep: Bitmap.Representation,
+            overlaySpec: Bitmap.Spec,
+            compositedOverlayRes: Resolution,
+            filt: BitmapConverter.ResamplingFilter
+        ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, filt, usingPreview = false) {
+
+            private var clamp2user: BitmapConverter? = null
+            private val userBitmap = Bitmap.allocate(Bitmap.Spec(compositedOverlayRes, userRep))
+
+            // Note: This function is only called when shouldCompInCanvasRep() returned false. If the base bitmap is
+            // chroma-subsampled, it only returns false if the overlay coincides with the subsampling grid. Hence, this
+            // function can safely blit.
+            override fun overlayOpaque(base: Bitmap, clampBitmap: Bitmap, x: Int, y: Int) {
+                // Late-initialize the converter because its creation can fail if, e.g., userRep has chroma subsampling
+                // and compositedOverlayRes is odd -- but in such cases, this method would never be called anyway, and
+                // we'd instead go through canvas-based overlaying.
+                if (clamp2user == null)
+                    clamp2user = BitmapConverter(clampSpec, userBitmap.spec)
+                clamp2user!!.convert(clampBitmap, userBitmap)
+                val (w, h) = userBitmap.spec.resolution
+                base.blitLeniently(userBitmap, 0, 0, w, h, x, y)
+            }
+
+            override fun close() {
+                super.close()
+                clamp2user?.close()
+                userBitmap.close()
+            }
+
+        }
+
+        private class QualityPreviewOverlayer(
+            canvasRep: Bitmap.Representation,
+            canvasCeiling: Float?,
+            userRep: Bitmap.Representation,
+            overlaySpec: Bitmap.Spec,
+            compositedOverlayRes: Resolution,
+            filter: BitmapConverter.ResamplingFilter
+        ) : QualityOverlayer(canvasRep, canvasCeiling, overlaySpec, compositedOverlayRes, filter, usingPreview = true) {
+
+            private val clamp2draft: BitmapConverter
+            private val draftBitmap: Bitmap
+
+            private val clamp2user: BitmapConverter
+            private val userBitmap: Bitmap
+
+            private val textCanvasBitmap: Bitmap
+            private val textClampBitmap: Bitmap
+
+            private var userBlit = false
+
+            init {
+                val draftSpec =
+                    clampSpec.copy(representation = clampSpec.representation.copy(colorSpace = userRep.colorSpace))
+                clamp2draft = BitmapConverter(clampSpec, draftSpec, approxTransfer = true)
+                draftBitmap = Bitmap.allocate(draftSpec)
+
+                val userSpec = Bitmap.Spec(compositedOverlayRes, userRep)
+                clamp2user = BitmapConverter(clampSpec, userSpec, approxTransfer = true)
+                userBitmap = Bitmap.allocate(userSpec)
+
+                val topField = overlaySpec.content == Bitmap.Content.ONLY_TOP_FIELD
+                val botField = overlaySpec.content == Bitmap.Content.ONLY_BOT_FIELD
+                val (w, h) = compositedOverlayRes
+                val renderRes = if (topField || botField) Resolution(w, h * 2) else compositedOverlayRes
+                var (cB, pB) = Overlayer.renderPreviewText(renderRes, canvasRep.colorSpace)
+                if (topField || botField) {
+                    cB = ripField(cB, topField)
+                    pB = ripField(pB, topField)
+                }
+                textCanvasBitmap = cB
+                textClampBitmap = pB
+            }
+
+            private fun ripField(bitmap: Bitmap, topField: Boolean): Bitmap {
+                val spec = bitmap.spec.copy(
+                    scan = Bitmap.Scan.INTERLACED_TOP_FIELD_FIRST, content = Bitmap.Content.INTERLEAVED_FIELDS
+                )
+                return bitmap.use {
+                    bitmap.reinterpretedView(spec).use { if (topField) it.topFieldView() else it.botFieldView() }
+                }
+            }
+
+            override fun manipulateCanvasOverlay(canvasBitmap: Bitmap) {
+                Canvas.forBitmap(canvasBitmap, canvasCeiling).use { canvas ->
+                    canvas.drawImageFast(textCanvasBitmap)
+                }
+            }
+
+            override fun overlayOpaque(base: Bitmap, clampBitmap: Bitmap, x: Int, y: Int) {
+                draftComposite(textClampBitmap, clampBitmap)
+                if (!userBlit) {
+                    clamp2draft.convert(clampBitmap, draftBitmap)
+                    try {
+                        // Note: Since draftBitmap is opaque and alpha is 1, this call just does a fast blit, but no
+                        // actual alpha compositing; hence, this doesn't suffer from lower "draft" quality.
+                        draftComposite(draftBitmap, base, x, y)
+                    } catch (_: RuntimeException) {
+                        userBlit = true
+                    }
+                }
+                if (userBlit) {
+                    val (w, h) = userBitmap.spec.resolution
+                    clamp2user.convert(clampBitmap, userBitmap)
+                    base.blitLeniently(userBitmap, 0, 0, w, h, x, y)
+                }
+            }
+
+            override fun close() {
+                super.close()
+                clamp2draft.close()
+                draftBitmap.close()
+                clamp2user.close()
+                userBitmap.close()
+                textCanvasBitmap.close()
+                textClampBitmap.close()
+            }
+
+        }
+
+        private class UserColorSpaceOverlayer(
+            userColorSpace: ColorSpace,
+            overlaySpec: Bitmap.Spec,
+            compositedOverlayRes: Resolution,
+            filter: BitmapConverter.ResamplingFilter
+        ) : Overlayer {
+
+            private val overlay2prep: BitmapConverter
+            private val prepBitmap: Bitmap
+            private val textBitmap: Bitmap
+
+            init {
+                val prepRep = overlaySpec.representation.copy(
+                    colorSpace = userColorSpace,
+                    alpha = if (overlaySpec.representation.pixelFormat.hasAlpha)
+                        Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
+                )
+                Overlayer.makeOverlayConvAndDst(overlaySpec, compositedOverlayRes, prepRep, filter, usingPreview = true)
+                    .run { overlay2prep = first; prepBitmap = second }
+
+                Overlayer.renderPreviewText(compositedOverlayRes, userColorSpace)
+                    .run { first.close(); textBitmap = second }
+            }
+
+            override fun overlay(base: Bitmap, overlay: Bitmap, x: Int, y: Int, alpha: Double) {
+                overlay2prep.convert(overlay, prepBitmap)
+                draftComposite(textBitmap, prepBitmap)
+                draftComposite(prepBitmap, base, x, y, alpha)
+            }
+
+            override fun close() {
+                overlay2prep.close()
+                prepBitmap.close()
+                textBitmap.close()
             }
 
         }
@@ -1141,13 +1519,6 @@ class DeferredVideo private constructor(
             return size + n - (size and (n - 1))
         }
 
-        private fun canvas2userAndClose(src: Bitmap): Bitmap {
-            val dst = Bitmap.allocate(userWorkSpec)
-            canvas2user.convert(src, dst)
-            src.close()
-            return dst
-        }
-
     }
 
 
@@ -1169,6 +1540,7 @@ class DeferredVideo private constructor(
      */
     private abstract class PageCache<R : AutoCloseable>(
         private val video: DeferredVideo,
+        private val vChromaSub: Int,
         private val sequentialAccess: Boolean,
         private val preloading: Boolean,
         private val profiling: RenderProfiling? = null
@@ -1180,26 +1552,31 @@ class DeferredVideo private constructor(
         private val lastChunkIndices = IntArray(video.instructions.size)
 
         init {
+            val yMask = -(1 shl vChromaSub)
+
             // We make the chunks larger than the spacing between two chunks so that a chunk can be scrolled for some
             // time and then immediately the next chunk can be swapped in, without the need to stitch the two chunks.
-            // We further add 1 to the height to make room for the micro shift (which is between 0 and 1) at the bottom.
-            val maxChunkHeight = max(video.height + MIN_CHUNK_BUFFER, MAX_CHUNK_PIXELS / video.width)
-            chunkSpacing = maxChunkHeight - (video.height + 1)
+            // We further add 2^vChromaSub to the height to make room for the micro shift (which is between 0 and
+            // 2^vChromaSub) at the bottom.
+            val maxChunkHeight = max(video.height + MIN_CHUNK_BUFFER, MAX_CHUNK_PIXELS / video.width) and yMask
+            chunkSpacing = (maxChunkHeight - (video.height + (1 shl vChromaSub))) and yMask
 
             // Declare chunks for all instructions.
             for ((insnIdx, insn) in video.instructions.withIndex()) {
                 class CountedMicroShift(val microShift: Double, var count: Int)
 
                 // Find the min and max shifts in the current instruction. Also collect all distinct micro shifts:
-                // a micro shift is the deviation from an integer shift, and hence lies between 0 and 1.
+                // a micro shift is the deviation from the preceding integer shift aligned with the vertical chroma
+                // subsampling, and hence lies between 0 and 2^vChromaSub.
                 var minShift = 0.0
                 var maxShift = 0.0
-                val countedMicroShifts = if (video.roundShifts) null else mutableListOf<CountedMicroShift>()
+                val countedMicroShifts =
+                    if (video.roundShifts && vChromaSub == 0) null else mutableListOf<CountedMicroShift>()
                 for (shift in insn.shifts) {
                     minShift = min(minShift, shift)
                     maxShift = max(maxShift, shift)
                     if (countedMicroShifts != null) {
-                        val microShift = shift - floor(shift)
+                        val microShift = shift.mod((1 shl vChromaSub).toDouble())
                         // Check whether this micro shift is already present in our collection.
                         val cms = countedMicroShifts.find { abs(it.microShift - microShift) < EPS }
                         // If it is, increase its multiplicity. Otherwise, add the new micro shift to the collection.
@@ -1208,8 +1585,8 @@ class DeferredVideo private constructor(
                 }
 
                 // This is the smallest vertical area that covers the requests of all instructions.
-                val minY = floor(minShift).toInt()
-                val maxY = ceil(maxShift).toInt() + video.height
+                val minY = floor(minShift).toInt() and yMask
+                val maxY = (ceil(maxShift).toInt() + video.height + yMask.inv()) and yMask
 
                 val microShifts = when {
                     // If all shifts are integers, the only micro shift that occurs is 0.
@@ -1241,11 +1618,11 @@ class DeferredVideo private constructor(
 
         protected abstract fun createRenders(
             chunkIdx: Int, image: DeferredImage, baseShift: Int, microShifts: DoubleArray, height: Int
-        ): List<R>
+        ): SizedValue<List<R>>
 
         fun close() {
             for (chunk in chunks)
-                chunk.microShiftedRenders.getAndSet(null)?.get()?.forEach { it.close() }
+                chunk.microShiftedRenders.getAndSet(null)?.getAndClose()?.forEach { it.close() }
         }
 
         fun query(frameIdx: Int): List<Response<R>> = buildList {
@@ -1277,7 +1654,7 @@ class DeferredVideo private constructor(
                 for (i in chunkIdx - 1 downTo 0) {
                     val renders = chunks[i].microShiftedRenders.getAndSet(null)
                     // Stop when we encounter a chunk that was once loaded but has since been explicitly nulled before.
-                    if (renders != null) renders.get()?.forEach { it.close() } else break
+                    if (renders != null) renders.getAndClose()?.forEach { it.close() } else break
                 }
 
             // In preloading mode, queue preloading of the surrounding chunks in a background thread.
@@ -1295,13 +1672,15 @@ class DeferredVideo private constructor(
             if (microShiftedRenders != null) chunk.semaphore.release() else microShiftedRenders = loadChunk(chunk)
             // Determine the micro shift for the given shift and select the corresponding cached render that can be
             // passed to the consumer with only integer shifting.
-            val microShift = shift - floor(shift)
+            val microShift = shift.mod((1 shl vChromaSub).toDouble())
             return when (val imageIdx = chunk.microShifts.indexOfFirst { abs(it - microShift) < EPS }) {
                 // If no cached render could be found for the micro shift at hand, directly pass the deferred image
                 // to the consumer. This is slower than using cached renders, but it's our only option.
                 -1 -> Response.Image(chunk.image, shift, alpha)
                 // Otherwise, pass the found cached render.
-                else -> Response.Render(chunk.image, microShiftedRenders[imageIdx], floor(shift).toInt() - chunk.shift, alpha)
+                else -> Response.Render(
+                    chunk.image, microShiftedRenders[imageIdx], round(shift - microShift).toInt() - chunk.shift, alpha
+                )
             }
         }
 
@@ -1311,22 +1690,22 @@ class DeferredVideo private constructor(
                 return
             // If the chunk has already been rendered previously, immediately release the rendering right.
             // Otherwise, start rendering in another thread.
-            if (chunk.microShiftedRenders.get().let { it != null && !it.refersTo(null) })
+            if (chunk.microShiftedRenders.get().let { it?.get() != null })
                 chunk.semaphore.release()
             else
                 GLOBAL_THREAD_POOL.submit(throwableAwareTask { loadChunk(chunk) })
         }
 
         // Apart from code design, there is an important reason for why this method returns the renders: to ensure that
-        // there is a strong reference to them. Otherwise, the garbage collector could discard them immediately when the
+        // there is a strong reference to them. Otherwise, the DisposableReference could drop them immediately when the
         // method returns.
         private fun loadChunk(chunk: Chunk<R>): List<R> {
             try {
-                val microShiftedRenders = profiling.measure("pageCache.createRenders") {
+                val sizedValue = profiling.measure("pageCache.createRenders") {
                     createRenders(chunk.index, chunk.image, chunk.shift, chunk.microShifts, chunk.height)
                 }
-                chunk.microShiftedRenders.set(SoftReference(microShiftedRenders))
-                return microShiftedRenders
+                chunk.microShiftedRenders.set(DisposableReference(sizedValue))
+                return sizedValue.value
             } finally {
                 chunk.semaphore.release()
             }
@@ -1344,7 +1723,9 @@ class DeferredVideo private constructor(
 
         sealed interface Response<R> {
             class Image<R>(val image: DeferredImage, val shift: Double, val alpha: Double) : Response<R>
-            class Render<R>(val image: DeferredImage, val render: R, val shift: Int, val alpha: Double) : Response<R>
+            class Render<R>(
+                val image: DeferredImage, val render: R, val shift: Int, val alpha: Double
+            ) : Response<R>
         }
 
 
@@ -1355,7 +1736,7 @@ class DeferredVideo private constructor(
             val image: DeferredImage,
             val microShifts: DoubleArray
         ) {
-            val microShiftedRenders = AtomicReference<SoftReference<List<R>>?>()
+            val microShiftedRenders = AtomicReference<DisposableReference<List<R>>?>()
             val semaphore = Semaphore(1)
         }
 
@@ -1375,28 +1756,10 @@ class DeferredVideo private constructor(
                     val relLastFrameIdx = findRelLastFrameIdx(insn.shifts, placed.y + placedH - 0.001)
                     if (relLastFrameIdx < 0)
                         continue
-                    val rangeFrames = when (val rangeDiff = placed.embeddedTape.range.run { endExclusive - start }) {
-                        is Timecode.Frames -> rangeDiff.frames * video.fpsScaling
-                        is Timecode.Clock -> rangeDiff.toFramesCeil(video.fps).frames
-                        else -> throw IllegalStateException("Wrong timecode format: ${rangeDiff.javaClass.simpleName}")
-                    }
-                    var firstFrameIdx =
+                    val firstFrameIdx =
                         insn.firstFrameIdx + relFirstFrameIdx + placed.embeddedTape.leftMarginFrames * video.fpsScaling
-                    var lastFrameIdx =
+                    val lastFrameIdx =
                         insn.firstFrameIdx + relLastFrameIdx - placed.embeddedTape.rightMarginFrames * video.fpsScaling
-                    if (!placed.embeddedTape.loop) {
-                        val extraneousFrames = (lastFrameIdx - firstFrameIdx + 1) - rangeFrames
-                        if (extraneousFrames > 0)
-                            when (placed.embeddedTape.align) {
-                                START -> lastFrameIdx -= extraneousFrames
-                                END -> firstFrameIdx += extraneousFrames
-                                MIDDLE -> {
-                                    val half = extraneousFrames / 2
-                                    firstFrameIdx += half
-                                    lastFrameIdx -= extraneousFrames - half  // account for odd numbers
-                                }
-                            }
-                    }
                     if (firstFrameIdx > lastFrameIdx)
                         continue
                     add(Span(insn, placed, firstFrameIdx, lastFrameIdx))
@@ -1436,43 +1799,45 @@ class DeferredVideo private constructor(
         }
 
         fun query(frameIdx: Int): List<Response<U>> = buildList {
+            spans@
             for (span in spans)
                 if (frameIdx in span.firstFrameIdx..span.lastFrameIdx) {
                     val pastFrames = frameIdx - span.firstFrameIdx
                     val futureFrames = span.lastFrameIdx - frameIdx
 
-                    val start = span.embeddedTape.range.start
-                    val endExcl = span.embeddedTape.range.endExclusive
-                    var tmp = 0
-                    val rawTimecode = when {
-                        span.embeddedTape.tape.fileSeq -> when (span.embeddedTape.align) {
-                            START -> start + Timecode.Frames(pastFrames / video.fpsScaling)
-                            END -> endExcl - Timecode.Frames(futureFrames / video.fpsScaling + 1)
-                            MIDDLE -> {
-                                tmp = (((start + endExcl) as Timecode.Frames).frames - 1) * video.fpsScaling +
-                                        frameIdx * 2 - (span.firstFrameIdx + span.lastFrameIdx)
-                                Timecode.Frames(tmp / (2 * video.fpsScaling))
-                            }
-                        }
-                        else -> when (span.embeddedTape.align) {
-                            START -> start + Timecode.Frames(pastFrames).toClock(video.fps)
-                            END -> endExcl - Timecode.Frames(futureFrames).toClock(video.fps) -
-                                    Timecode.Frames(1).toClock(video.origFPS)
-                            MIDDLE ->
-                                (start + endExcl - Timecode.Frames(1).toClock(video.origFPS)) / 2 +
-                                        Timecode.Frames(frameIdx).toClock(video.fps) -
-                                        Timecode.Frames(span.firstFrameIdx + span.lastFrameIdx).toClock(video.fps) / 2
-                        }
+                    // We need this safety margin because negative timecodes would throw exceptions.
+                    val safetyMargin = Timecode.Frames(span.lastFrameIdx - span.firstFrameIdx + 1).toClock(video.fps)
+                    val tapeRuntime = span.embeddedTape.range.run { endExclusive - start }.toClock(video.origFPS)
+                    // Timecode into the tape relative to the embedded tape's range start (plus safety margin).
+                    var relTimecode = when (span.embeddedTape.align) {
+                        START ->
+                            safetyMargin +
+                                    Timecode.Frames(pastFrames).toClock(video.fps)
+                        END ->
+                            safetyMargin +
+                                    tapeRuntime -
+                                    Timecode.Frames(1).toClock(video.origFPS) -
+                                    Timecode.Frames(futureFrames).toClock(video.fps)
+                        MIDDLE ->
+                            safetyMargin +
+                                    (tapeRuntime - Timecode.Frames(1).toClock(video.origFPS)) / 2 +
+                                    Timecode.Frames(frameIdx).toClock(video.fps) -
+                                    Timecode.Frames(span.firstFrameIdx + span.lastFrameIdx).toClock(video.fps) / 2
                     }
-                    val timecode = if (span.embeddedTape.loop)
-                        loopTimecode(rawTimecode, start, endExcl, video.fps)
-                    else
-                        rawTimecode
-                    val fileSeqFirstField = span.embeddedTape.tape.fileSeq && when (span.embeddedTape.align) {
-                        START -> (pastFrames * 2 / video.fpsScaling) % 2 == 0
-                        END -> (futureFrames * 2 / video.fpsScaling) % 2 == 1
-                        MIDDLE -> (tmp / video.fpsScaling) % 2 == 0
+                    // If the tape timecode is outside the embedded tape's specified range, either don't emit a tape
+                    // response, or if looping is enabled, modulate the timecode until it's within the range.
+                    while (relTimecode < safetyMargin)
+                        if (!span.embeddedTape.loop) continue@spans else relTimecode += tapeRuntime
+                    while (relTimecode >= safetyMargin + tapeRuntime)
+                        if (!span.embeddedTape.loop) continue@spans else relTimecode -= tapeRuntime
+                    relTimecode -= safetyMargin
+
+                    val timecode = span.embeddedTape.range.start + when (span.embeddedTape.tape.fileSeq) {
+                        true -> relTimecode.toFramesFloor(video.origFPS)
+                        else -> relTimecode
                     }
+                    val fileSeqFirstField = span.embeddedTape.tape.fileSeq &&
+                            (relTimecode * 2).toFramesFloor(video.origFPS).frames % 2 == 0
 
                     val relFrameIdx = frameIdx - span.insn.firstFrameIdx
                     val x = span.placed.x.roundToInt()
@@ -1502,8 +1867,7 @@ class DeferredVideo private constructor(
              * information on which field inside that frame it refers to. This boolean retrofits that information.
              *
              * This field is only relevant when we're reading an interlaced image sequence and composite it onto an
-             * interlaced output video. As the former can never happen at this moment in time, this is really useless
-             * code at the moment, but we've kept it anyway in view of possible changes in the future.
+             * interlaced output video.
              */
             val fileSeqFirstField: Boolean,
             val x: Int,
@@ -1525,25 +1889,6 @@ class DeferredVideo private constructor(
             var userData: U? = null
             val embeddedTape get() = placed.embeddedTape
         }
-
-        private fun loopTimecode(timecode: Timecode, start: Timecode, endExcl: Timecode, fps: FPS): Timecode =
-            when (start) {
-                is Timecode.Frames -> {
-                    val startFrames = start.frames
-                    val endFrames = (endExcl as Timecode.Frames).frames
-                    val durationFrames = endFrames - startFrames
-                    val relFrames = ((timecode as Timecode.Frames).frames - startFrames).mod(durationFrames)
-                    Timecode.Frames(startFrames + relFrames)
-                }
-                is Timecode.Clock -> {
-                    val startFrames = start.toFrames(fps).frames
-                    val endFrames = (endExcl as Timecode.Clock).toFramesCeil(fps).frames
-                    val durationFrames = endFrames - startFrames
-                    val relFrames = (timecode.toFrames(fps).frames - startFrames).mod(durationFrames)
-                    Timecode.Frames(startFrames + relFrames).toClock(fps)
-                }
-                else -> throw IllegalStateException("Wrong timecode format: ${start.javaClass.simpleName}")
-            }
 
     }
 

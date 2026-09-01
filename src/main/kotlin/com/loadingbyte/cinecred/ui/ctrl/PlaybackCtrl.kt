@@ -1,22 +1,20 @@
 package com.loadingbyte.cinecred.ui.ctrl
 
-import com.formdev.flatlaf.util.UIScale
-import com.loadingbyte.cinecred.common.GLOBAL_THREAD_POOL
-import com.loadingbyte.cinecred.common.Resolution
-import com.loadingbyte.cinecred.common.formatTimecode
-import com.loadingbyte.cinecred.common.throwableAwareTask
+import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.drawer.DrawnProject
 import com.loadingbyte.cinecred.imaging.*
 import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.STATIC
 import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.TAPES
 import com.loadingbyte.cinecred.project.Global
 import com.loadingbyte.cinecred.ui.*
+import com.loadingbyte.cinecred.ui.comms.CreditsId
 import com.loadingbyte.cinecred.ui.comms.PlaybackCtrlComms
 import com.loadingbyte.cinecred.ui.comms.PlaybackViewComms
-import com.loadingbyte.cinecred.ui.helper.JobSlot
+import com.loadingbyte.cinecred.ui.helper.getSystemScaleFactor
 import java.awt.Dimension
 import java.awt.GraphicsConfiguration
 import java.awt.Transparency
+import java.awt.Window
 import java.awt.image.BufferedImage
 import java.lang.invoke.MethodHandles
 import java.util.concurrent.CancellationException
@@ -30,12 +28,10 @@ import kotlin.concurrent.withLock
 import kotlin.math.*
 
 
-class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlComms {
+class PlaybackCtrl : PlaybackCtrlComms {
 
     private val views = mutableListOf<PlaybackViewComms>()
 
-    private val materializationCacheAWT = DeferredImage.CanvasMaterializationCache()
-    private val materializationCacheDeckLink = DeferredImage.CanvasMaterializationCache()
     private val setupAWTJobSlot = JobSlot()
     private val setupDeckLinkJobSlot = JobSlot()
     private val displayNowAWTJobSlot = JobSlot()
@@ -96,14 +92,15 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
 
     // Supplied by other controllers or the UI.
     private var drawnProject: DrawnProject? = null
-    private var dialogVisible = false
+    private var visible = false
     private var selectedDeckLink: DeckLink? = null
     private var selectedDeckLinkMode: DeckLink.Mode? = null
     private var selectedDeckLinkDepth = DeckLink.Depth.D8
     private var selectedDeckLinkPrimaries = ColorSpace.Primaries.BT709
     private var selectedDeckLinkTransfer = ColorSpace.Transfer.BT1886
     private var deckLinkConnected = false
-    private var spreadsheetName: String? = null
+    private var previewCreditsId: CreditsId? = null
+    private var creditsId: CreditsId? = null
     private var videoCanvasSize: Dimension? = null
     private var videoCanvasGCfg: GraphicsConfiguration? = null
     private var actualSize = false
@@ -140,7 +137,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
     private var playRate = 0
         set(value) {
             val playRate =
-                if (drawnProject == null || !dialogVisible && activeDeckLink == null) 0 else value.coerceIn(-8, 8)
+                if (drawnProject == null || !visible && activeDeckLink == null) 0 else value.coerceIn(-8, 8)
             for (view in views) view.setPlaybackDirection(playRate.sign)
             if (field != playRate) {
                 field = playRate
@@ -154,21 +151,21 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
     }
 
     private fun stopPlayingIfNecessary() {
-        if (!dialogVisible && activeDeckLink == null)
+        if (!visible && activeDeckLink == null)
             playRate = 0
     }
 
     private fun setupAWTFrameSource() {
         val (global, video) = globalAndVideo ?: return
 
-        // Abort if the dialog has never been shown on the screen yet, which would have it in a pre-initialized state
+        // Abort if the dockable has never been shown on the screen yet, which would have it in a pre-initialized state
         // that this method can't cope with. As soon as it is shown for the first time, the resize listener will be
         // notified and call this method again.
         val gCfg = videoCanvasGCfg ?: return
         val nativeCM = gCfg.getColorModel(Transparency.OPAQUE) ?: return
         val frameSize = this.videoCanvasSize ?: return
 
-        val systemScaling = UIScale.getSystemScaleFactor(gCfg)
+        val systemScaling = getSystemScaleFactor(gCfg)
         val awtFrameSourceScaling = if (actualSize) 1.0 else
             systemScaling * min(
                 frameSize.width / global.resolution.widthPx.toDouble(),
@@ -177,23 +174,23 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
         viewScaling = 1.0 / systemScaling
 
         val frameIdx = this.frameIdx
-        val dialogVisible = this.dialogVisible
+        val visible = this.visible
         setupAWTJobSlot.submit {
             // Protect against too small canvas sizes.
-            val newAWTFrameSource = if (!dialogVisible || awtFrameSourceScaling < 0.001) null else {
+            val newAWTFrameSource = if (!visible || awtFrameSourceScaling < 0.001) null else {
                 val scaledVideo = video.copy(resolutionScaling = awtFrameSourceScaling)
                 val bitmapJ2DBridge = BitmapJ2DBridge(nativeCM)
                 FrameSource(
-                    materializationCacheAWT, scaledVideo, global.grounding, scaledVideo.resolution,
-                    bitmapJ2DBridge.nativeRepresentation, Bitmap.Scan.PROGRESSIVE, frameIdx,
-                    bitmapJ2DBridge::toNativeImage
+                    scaledVideo, global.grounding, scaledVideo.resolution,
+                    bitmapJ2DBridge.nativeRepresentation, Bitmap.Scan.PROGRESSIVE, blendInUserColorSpace = true,
+                    frameIdx, bitmapJ2DBridge::toNativeImage
                 )
             }
             SwingUtilities.invokeLater {
                 awtFrameSource?.close()
                 awtFrameSource = newAWTFrameSource
                 awtFrameBuffer?.changeSource(newAWTFrameSource)
-                displayFrameNowAWT(true)
+                displayFrameNowAWT()
             }
         }
     }
@@ -236,8 +233,9 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
                 val (vw, vh) = video.resolution
                 val scaledVideo = video.copy(resolutionScaling = min(mw / vw.toDouble(), mh / vh.toDouble()))
                 FrameSource(
-                    materializationCacheDeckLink, scaledVideo, global.grounding, activeMode.resolution,
-                    DeckLink.compatibleRepresentation(depth!!, colorSpace), activeMode.scan, frameIdx
+                    scaledVideo, global.grounding, activeMode.resolution,
+                    DeckLink.compatibleRepresentation(depth!!, colorSpace), activeMode.scan,
+                    blendInUserColorSpace = false, frameIdx
                 ) { it }
             }
             SwingUtilities.invokeLater {
@@ -262,7 +260,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
             // After the play task has terminated and already submitted its last invokeLater() job which will set the
             // final frameIdx, submit a second job that displays that frameIdx. This is necessary because the play task
             // might not have displayed the last frame if it took to long to render.
-            SwingUtilities.invokeLater { displayFrameNowAWT(false) }
+            SwingUtilities.invokeLater { displayFrameNowAWT() }
             activeDeckLink?.stopScheduledPlayback()
             // Also display the final frameIdx on DeckLink due to (a) the reason above and (b) the following reason:
             // It is a bit unpredictable where DeckLink playback actually stops, and even when telling it to stop at a
@@ -282,7 +280,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
             if (awtFrameBuffer == null) {
                 awtFrameBuffer = FrameBuffer(awtFrameSource, firstFrameIdx, frameStep.toDouble())
                 playTask = executor.scheduleAtFixedRate(throwableAwareTask {
-                    awtFrameBuffer?.nextOrSkip()?.let { for (view in views) view.setVideoFrame(it, viewScaling, false) }
+                    awtFrameBuffer?.nextOrSkip()?.let { for (view in views) view.setVideoFrame(it, viewScaling) }
                     SwingUtilities.invokeLater {
                         frameIdx += frameStep
                         if (frameIdx == 0 || frameIdx == numFrames - 1)
@@ -302,7 +300,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
         }
     }
 
-    private fun displayFrameNowAWT(clear: Boolean) {
+    private fun displayFrameNowAWT() {
         if (playRate != 0)
             return
         val frameIdx = this.frameIdx
@@ -310,7 +308,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
         val viewScaling = this.viewScaling
         displayNowAWTJobSlot.submit {
             awtFrameSource.materializeFrame(frameIdx)?.let {
-                for (view in views) view.setVideoFrame(it, viewScaling, clear)
+                for (view in views) view.setVideoFrame(it, viewScaling)
             }
         }
     }
@@ -337,7 +335,9 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
             val drawnProject = this.drawnProject ?: return null
             return Pair(
                 drawnProject.project.styling.global,
-                drawnProject.drawnCredits.find { it.credits.spreadsheetName == spreadsheetName }?.video ?: return null
+                drawnProject.drawnCreditsBooks.find { it.creditsBook.fileName == creditsId?.fileName }
+                    ?.drawnCredits?.find { it.credits.spreadsheetName == creditsId?.spreadsheetName }
+                    ?.video ?: return null
             )
         }
 
@@ -350,17 +350,21 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
         views += view
     }
 
+    override fun isFullScreenWindow(window: Window) = views.any { view -> view.isFullScreenWindow(window) }
+
     override fun updateProject(drawnProject: DrawnProject) {
         val oldGlobal = this.drawnProject?.project?.styling?.global
         val newGlobal = drawnProject.project.styling.global
         this.drawnProject = drawnProject
-        // Just to be sure, filter out spreadsheets which have 0 runtime.
-        val avail = drawnProject.drawnCredits.filter { it.video.numFrames > 0 }.map { it.credits.spreadsheetName }
-        if (spreadsheetName !in avail)
-            spreadsheetName = avail.firstOrNull()
+        val avail = drawnProject.drawnCreditsBooks.flatMap { drCreditsBook ->
+            drCreditsBook.drawnCredits
+                .map { drCredits -> CreditsId(drCreditsBook.creditsBook.fileName, drCredits.credits.spreadsheetName) }
+        }
+        if (creditsId !in avail)
+            creditsId = avail.firstOrNull()
         for (view in views) {
-            view.setSpreadsheetNames(avail)
-            spreadsheetName?.let(view::setSelectedSpreadsheetName)
+            view.setCreditsIds(avail)
+            creditsId?.let(view::setSelectedCreditsId)
         }
         if (avail.isEmpty()) {
             playRate = 0
@@ -369,7 +373,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
             for (view in views) {
                 view.setNumFrames(1, "\u2014")
                 view.setPlayheadPosition(0, "\u2014")
-                view.setVideoFrame(null, 1.0, true)
+                view.setVideoFrame(null, 1.0)
             }
         } else
             numFrames = globalAndVideo!!.second.numFrames
@@ -397,15 +401,15 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
         DECK_LINK_PRI_PREFERENCE.set(selectedDeckLinkPrimaries.code)
         DECK_LINK_TRC_PREFERENCE.set(selectedDeckLinkTransfer.canonCode)
         DECK_LINK_CONNECTED_PREFERENCE.set(deckLinkConnected)
+        for (view in views) view.disposeResources()
     }
 
-    override fun setDialogVisibility(visible: Boolean) {
-        if (dialogVisible == visible)
+    override fun onShowOrHide(visible: Boolean) {
+        if (this.visible == visible)
             return
-        dialogVisible = visible
-        projectCtrl.setDialogVisible(ProjectDialogType.VIDEO, visible)
+        this.visible = visible
         if (visible)
-            projectCtrl.projectFrame.panel.selectedSpreadsheetName?.let(::setSelectedSpreadsheetName)
+            previewCreditsId?.let(::setSelectedCreditsId)
         setupAWTFrameSource()
         stopPlayingIfNecessary()
     }
@@ -471,12 +475,17 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
 
     override fun toggleDeckLinkConnected() = setDeckLinkConnected(!deckLinkConnected)
 
-    override fun setSelectedSpreadsheetName(spreadsheetName: String) {
-        if (this.spreadsheetName == spreadsheetName)
+    override fun setPreviewCreditsId(creditsId: CreditsId?) {
+        previewCreditsId = creditsId
+    }
+
+    override fun setSelectedCreditsId(creditsId: CreditsId) {
+        if (this.creditsId == creditsId)
             return
         playRate = 0
-        this.spreadsheetName = spreadsheetName
-        for (view in views) view.setSelectedSpreadsheetName(spreadsheetName)
+        this.creditsId = creditsId
+        for (view in views) view.setSelectedCreditsId(creditsId)
+        numFrames = globalAndVideo!!.second.numFrames
         setupAWTFrameSource()
         setupDeckLinkFrameSource()
     }
@@ -492,11 +501,11 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
     }
 
     override fun scrub(frameIdx: Int) {
-        if (!dialogVisible && selectedDeckLink == null)
+        if (!visible && selectedDeckLink == null || this.frameIdx == frameIdx)
             return
         this.frameIdx = frameIdx
         if (playRate == 0) {
-            displayFrameNowAWT(false)
+            displayFrameNowAWT()
             displayFrameNowDeckLink()
         } else
             refreshPlayback(playRateChanged = false, forceStop = true)
@@ -538,7 +547,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
     }
 
     override fun setActualSize(actualSize: Boolean) {
-        if (!dialogVisible)
+        if (!visible)
             return
         this.actualSize = actualSize
         for (view in views) view.setActualSize(actualSize)
@@ -547,23 +556,22 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
 
     override fun toggleActualSize() = setActualSize(!actualSize)
 
-    override fun setFullScreen(fullScreen: Boolean) {
-        if (dialogVisible) for (view in views) view.setFullScreen(fullScreen)
-    }
+    override fun setFullScreen(fullScreen: Boolean): Boolean =
+        visible && views.any { view -> view.setFullScreen(fullScreen) }
 
     override fun toggleFullScreen() {
-        if (dialogVisible) for (view in views) view.toggleFullScreen()
+        if (visible) for (view in views) view.toggleFullScreen()
     }
 
 
     /** This class is thread-safe. */
     private class FrameSource<F : Any>(
-        materializationCache: DeferredImage.CanvasMaterializationCache,
         video: DeferredVideo,
         grounding: Color4f,
         private val resolution: Resolution,
         representation: Bitmap.Representation,
         scan: Bitmap.Scan,
+        blendInUserColorSpace: Boolean,
         preloadFrameIdx: Int,
         private val frameConverter: (Bitmap) -> F
     ) {
@@ -577,19 +585,22 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
             val spec = Bitmap.Spec(video.resolution, representation, scan, content)
             videoBackend = DeferredVideo.BitmapBackend(
                 video, listOf(STATIC), listOf(TAPES), grounding, spec,
-                cache = materializationCache, randomAccessDraftMode = true, animateFlashingText = false
+                randomAccessDraftMode = true,
+                blendInUserColorSpace = blendInUserColorSpace,
+                // Previews show the primary color only; flashing is resolved at delivery time.
+                animateFlashingText = false
             )
             // Simulate materializing the currently selected frame while the FrameBuffer is being constructed in a
             // background thread. As expensive operations are cached, the subsequent materialization of that frame in
             // another thread will be very fast.
-            videoBackend?.preloadFrame(preloadFrameIdx)
+            videoBackend?.materializeFrame(preloadFrameIdx)
         }
 
         fun materializeFrame(frameIdx: Int): F? {
             val baseBitmap = videoBackendLock.withLock { videoBackend?.materializeFrame(frameIdx) } ?: return null
             if (baseBitmap.spec.resolution == resolution)
                 return frameConverter(baseBitmap)
-            val paddedBitmap = Bitmap.allocate(Bitmap.Spec(resolution, baseBitmap.spec.representation)).zero()
+            val paddedBitmap = Bitmap.allocate(baseBitmap.spec.copy(resolution = resolution)).zero()
             val (w, h) = resolution
             val (bw, bh) = baseBitmap.spec.resolution
             paddedBitmap.blitLeniently(baseBitmap, 0, 0, bw, bh, (w - bw) / 2, (h - bh) / 2)
@@ -651,6 +662,7 @@ class PlaybackCtrl(private val projectCtrl: ProjectController) : PlaybackCtrlCom
                     if (frameIdx != newFrameIdx) {
                         closeFrame(frame)
                         frameIdx = newFrameIdx
+                        frame = null
                         frame = source?.materializeFrame(newFrameIdx)
                     }
                     // If rendering took too long and playback has already moved beyond the new frame, discard it.

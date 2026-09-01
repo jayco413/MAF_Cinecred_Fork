@@ -8,13 +8,9 @@ import com.github.weisj.jsvg.parser.SVGLoader
 import com.loadingbyte.cinecred.common.Severity
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.project.SpineAttachment.*
-import com.loadingbyte.cinecred.projectio.service.EtherCalcService
-import com.loadingbyte.cinecred.projectio.service.GoogleService
-import com.loadingbyte.cinecred.projectio.service.Service
-import java.awt.Color
-import java.awt.Component
-import java.awt.Graphics2D
-import java.awt.Paint
+import com.loadingbyte.cinecred.projectio.service.*
+import com.loadingbyte.cinecred.ui.comms.DockableId
+import java.awt.*
 import java.awt.image.BufferedImage
 import java.awt.image.RGBImageFilter
 import javax.swing.Icon
@@ -27,16 +23,11 @@ import kotlin.math.roundToInt
 const val ICON_ICON_GAP = 4
 
 
-val WINDOW_ICON_IMAGES = run {
-    val logo = requireNotNull(SVGLoader().load(SVGIcon::class.java.getResource("/logo.svg")!!)) { "Can't load logo." }
-    listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).map { size ->
-        BufferedImage(size, size, BufferedImage.TYPE_4BYTE_ABGR).withG2 { g2 ->
-            g2.setHighQuality()
-            g2.scale(size / logo.size().width.toDouble())
-            logo.render(null, g2)
-        }
-    }
-}
+val EMBLEM_ICON = SVGIcon.load("/branding/emblem.svg")
+val WINDOW_ICON_IMAGES = listOf(16, 20, 24, 32, 40, 48, 64, 128, 256).map { size -> EMBLEM_ICON.renderIcon(size, size) }
+
+
+val SCRUB_CURSOR = SVGIcon.load("/icons/scrub.svg").createCursor(16, 7, "scrub")
 
 
 val X_1_TO_1_ICON = SVGIcon.load("/icons/1to1.svg")
@@ -44,13 +35,16 @@ val ADD_ICON = SVGIcon.load("/icons/add.svg")
 val ADVANCED_ICON = SVGIcon.load("/icons/advanced.svg")
 val ANGLE_ICON = SVGIcon.load("/icons/angle.svg")
 val BASELINE_ICON = SVGIcon.load("/icons/baseline.svg")
+val BUG_ICON = SVGIcon.load("/icons/bug.svg")
 val CANCEL_ICON = SVGIcon.load("/icons/cancel.svg")
 val CHECK_ICON = SVGIcon.load("/icons/check.svg")
 val CROSS_ICON = SVGIcon.load("/icons/cross.svg")
 val DUPLICATE_ICON = SVGIcon.load("/icons/duplicate.svg")
 val EDIT_ICON = SVGIcon.load("/icons/edit.svg")
+val EMAIL_ICON = SVGIcon.load("/icons/email.svg")
 val ERROR_ICON = SVGIcon.load("/icons/error.svg")
 val FILMSTRIP_ICON = SVGIcon.load("/icons/filmstrip.svg")
+val FLIP_ICON = SVGIcon.load("/icons/flip.svg")
 val FOLDER_ICON = SVGIcon.load("/icons/folder.svg")
 val GEAR_ICON = SVGIcon.load("/icons/gear.svg")
 val GIFT_ICON = SVGIcon.load("/icons/gift.svg")
@@ -62,6 +56,8 @@ val INFO_ICON = SVGIcon.load("/icons/info.svg")
 val LABEL_ICON = SVGIcon.load("/icons/label.svg")
 val LAYOUT_ICON = SVGIcon.load("/icons/layout.svg")
 val LETTERS_ICON = SVGIcon.load("/icons/letters.svg")
+val LOCK_ICON = SVGIcon.load("/icons/lock.svg")
+val MINUS_ICON = SVGIcon.load("/icons/minus.svg")
 val PAGE_ICON = SVGIcon.load("/icons/page.svg")
 val PAUSE_ICON = SVGIcon.load("/icons/pause.svg")
 val PICTURE_ICON = SVGIcon.load("/icons/picture.svg")
@@ -73,6 +69,7 @@ val REFRESH_ICON = SVGIcon.load("/icons/refresh.svg")
 val RESET_ICON = SVGIcon.load("/icons/reset.svg")
 val SAVE_ICON = SVGIcon.load("/icons/save.svg")
 val SCREEN_ICON = SVGIcon.load("/icons/screen.svg")
+val SPREADSHEET_FILE_ICON = SVGIcon.load("/icons/spreadsheetFile.svg")
 val TABLE_ICON = SVGIcon.load("/icons/table.svg")
 val TEMPLATE_ICON = SVGIcon.load("/icons/template.svg")
 val TRANSITION_ICON = SVGIcon.load("/icons/transition.svg")
@@ -80,6 +77,7 @@ val TRASH_ICON = SVGIcon.load("/icons/trash.svg")
 val UNDO_ICON = SVGIcon.load("/icons/undo.svg")
 val UPDATE_ICON = SVGIcon.load("/icons/update.svg")
 val WARN_ICON = SVGIcon.load("/icons/warn.svg")
+val WINDOW_LAYOUT_ICON = SVGIcon.load("/icons/windowLayout.svg")
 val ZOOM_ICON = SVGIcon.load("/icons/zoom.svg")
 
 val ARROW_LEFT_ICON = SVGIcon.load("/icons/arrow/left.svg")
@@ -117,10 +115,6 @@ val OVERLAY_SAFE_AREAS_ICON = SVGIcon.load("/icons/overlay/safeAreas.svg")
 val OVERLAY_ASPECT_RATIO_ICON = SVGIcon.load("/icons/overlay/aspectRatio.svg")
 val OVERLAY_LINES_ICON = SVGIcon.load("/icons/overlay/lines.svg")
 
-val PROJECT_DIALOG_STYLING_ICON = SVGIcon.load("/icons/projectDialog/styling.svg")
-val PROJECT_DIALOG_VIDEO_ICON = SVGIcon.load("/icons/projectDialog/video.svg")
-val PROJECT_DIALOG_DELIVERY_ICON = SVGIcon.load("/icons/projectDialog/delivery.svg")
-
 val SHEARING_HORIZONTAL_ICON = SVGIcon.load("/icons/shearing/horizontal.svg")
 val SHEARING_VERTICAL_ICON = SVGIcon.load("/icons/shearing/vertical.svg")
 
@@ -134,6 +128,24 @@ val Severity.icon
         Severity.WARN -> WARN_ICON
         Severity.MIGRATE -> UPDATE_ICON
         Severity.ERROR -> ERROR_ICON
+    }
+
+
+private val DOCKABLE_TOOLBAR_ICON = SVGIcon.load("/icons/dockable/toolbar.svg")
+private val DOCKABLE_PREVIEW_ICON = SVGIcon.load("/icons/dockable/preview.svg")
+private val DOCKABLE_LOG_ICON = SVGIcon.load("/icons/dockable/log.svg")
+private val DOCKABLE_STYLING_ICON = SVGIcon.load("/icons/dockable/styling.svg")
+private val DOCKABLE_PLAYBACK_ICON = SVGIcon.load("/icons/dockable/playback.svg")
+private val DOCKABLE_DELIVERY_ICON = SVGIcon.load("/icons/dockable/delivery.svg")
+
+val DockableId.icon
+    get() = when (this) {
+        DockableId.TOOLBAR -> DOCKABLE_TOOLBAR_ICON
+        DockableId.PREVIEW -> DOCKABLE_PREVIEW_ICON
+        DockableId.LOG -> DOCKABLE_LOG_ICON
+        DockableId.STYLING -> DOCKABLE_STYLING_ICON
+        DockableId.PLAYBACK -> DOCKABLE_PLAYBACK_ICON
+        DockableId.DELIVERY -> DOCKABLE_DELIVERY_ICON
     }
 
 
@@ -175,53 +187,73 @@ val VJustify.icon
     }
 
 
-val SingleLineHJustify.icon
+val HJustifyCrumbs.icon
     get() = when (this) {
-        SingleLineHJustify.LEFT -> BEARING_LEFT_ICON
-        SingleLineHJustify.CENTER -> BEARING_CENTER_ICON
-        SingleLineHJustify.RIGHT -> BEARING_RIGHT_ICON
-        SingleLineHJustify.FULL -> BEARING_LEFT_RIGHT_ICON
+        HJustifyCrumbs.LEFT -> BEARING_LEFT_ICON
+        HJustifyCrumbs.CENTER -> BEARING_CENTER_ICON
+        HJustifyCrumbs.RIGHT -> BEARING_RIGHT_ICON
+        HJustifyCrumbs.FULL -> BEARING_LEFT_RIGHT_ICON
     }
 
 
-private val LINE_H_JUSTIFY_LEFT_ICON = SVGIcon.load("/icons/lineHJustify/left.svg")
-private val LINE_H_JUSTIFY_CENTER_ICON = SVGIcon.load("/icons/lineHJustify/center.svg")
-private val LINE_H_JUSTIFY_RIGHT_ICON = SVGIcon.load("/icons/lineHJustify/right.svg")
-private val LINE_H_JUSTIFY_FULL_LAST_LEFT_ICON = SVGIcon.load("/icons/lineHJustify/fullLastLeft.svg")
-private val LINE_H_JUSTIFY_FULL_LAST_CENTER_ICON = SVGIcon.load("/icons/lineHJustify/fullLastCenter.svg")
-private val LINE_H_JUSTIFY_FULL_LAST_RIGHT_ICON = SVGIcon.load("/icons/lineHJustify/fullLastRight.svg")
-private val LINE_H_JUSTIFY_FULL_LAST_FULL_ICON = SVGIcon.load("/icons/lineHJustify/fullLastFull.svg")
+private val H_JUSTIFY_CRUMBS_STACK_LEFT_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/left.svg")
+private val H_JUSTIFY_CRUMBS_STACK_CENTER_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/center.svg")
+private val H_JUSTIFY_CRUMBS_STACK_RIGHT_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/right.svg")
+private val H_JUSTIFY_CRUMBS_STACK_FULL_LAST_LEFT_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/fullLastLeft.svg")
+private val H_JUSTIFY_CRUMBS_STACK_FULL_LAST_CENTER_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/fullLastCenter.svg")
+private val H_JUSTIFY_CRUMBS_STACK_FULL_LAST_RIGHT_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/fullLastRight.svg")
+private val H_JUSTIFY_CRUMBS_STACK_FULL_LAST_FULL_ICON = SVGIcon.load("/icons/hJustifyCrumbsStack/fullLastFull.svg")
 
-val LineHJustify.icon
+val HJustifyCrumbsStack.icon
     get() = when (this) {
-        LineHJustify.LEFT -> LINE_H_JUSTIFY_LEFT_ICON
-        LineHJustify.CENTER -> LINE_H_JUSTIFY_CENTER_ICON
-        LineHJustify.RIGHT -> LINE_H_JUSTIFY_RIGHT_ICON
-        LineHJustify.FULL_LAST_LEFT -> LINE_H_JUSTIFY_FULL_LAST_LEFT_ICON
-        LineHJustify.FULL_LAST_CENTER -> LINE_H_JUSTIFY_FULL_LAST_CENTER_ICON
-        LineHJustify.FULL_LAST_RIGHT -> LINE_H_JUSTIFY_FULL_LAST_RIGHT_ICON
-        LineHJustify.FULL_LAST_FULL -> LINE_H_JUSTIFY_FULL_LAST_FULL_ICON
+        HJustifyCrumbsStack.LEFT -> H_JUSTIFY_CRUMBS_STACK_LEFT_ICON
+        HJustifyCrumbsStack.CENTER -> H_JUSTIFY_CRUMBS_STACK_CENTER_ICON
+        HJustifyCrumbsStack.RIGHT -> H_JUSTIFY_CRUMBS_STACK_RIGHT_ICON
+        HJustifyCrumbsStack.FULL_LAST_LEFT -> H_JUSTIFY_CRUMBS_STACK_FULL_LAST_LEFT_ICON
+        HJustifyCrumbsStack.FULL_LAST_CENTER -> H_JUSTIFY_CRUMBS_STACK_FULL_LAST_CENTER_ICON
+        HJustifyCrumbsStack.FULL_LAST_RIGHT -> H_JUSTIFY_CRUMBS_STACK_FULL_LAST_RIGHT_ICON
+        HJustifyCrumbsStack.FULL_LAST_FULL -> H_JUSTIFY_CRUMBS_STACK_FULL_LAST_FULL_ICON
     }
 
 
-private val APPENDAGE_V_SHELVE_FIRST_ICON = SVGIcon.load("/icons/appendageVShelve/first.svg")
-private val APPENDAGE_V_SHELVE_OVERALL_MIDDLE_ICON = SVGIcon.load("/icons/appendageVShelve/overallMiddle.svg")
-private val APPENDAGE_V_SHELVE_LAST_ICON = SVGIcon.load("/icons/appendageVShelve/last.svg")
-
-val AppendageVShelve.icon
+val VJustifyText.icon
     get() = when (this) {
-        AppendageVShelve.FIRST -> APPENDAGE_V_SHELVE_FIRST_ICON
-        AppendageVShelve.OVERALL_MIDDLE -> APPENDAGE_V_SHELVE_OVERALL_MIDDLE_ICON
-        AppendageVShelve.LAST -> APPENDAGE_V_SHELVE_LAST_ICON
+        VJustifyText.TOP -> BEARING_TOP_ICON
+        VJustifyText.MIDDLE -> BEARING_MIDDLE_ICON
+        VJustifyText.BOTTOM -> BEARING_BOTTOM_ICON
+        VJustifyText.BASELINE -> BASELINE_ICON
     }
 
 
-val AppendageVJustify.icon
+private val V_TEXT_FRAGMENT_ALL_LINES_ICON = SVGIcon.load("/icons/vTextFragment/allLines.svg")
+private val V_TEXT_FRAGMENT_FIRST_LINE_ICON = SVGIcon.load("/icons/vTextFragment/firstLine.svg")
+private val V_TEXT_FRAGMENT_LAST_LINE_ICON = SVGIcon.load("/icons/vTextFragment/lastLine.svg")
+
+val VTextFragment.icon
     get() = when (this) {
-        AppendageVJustify.TOP -> BEARING_TOP_ICON
-        AppendageVJustify.MIDDLE -> BEARING_MIDDLE_ICON
-        AppendageVJustify.BOTTOM -> BEARING_BOTTOM_ICON
-        AppendageVJustify.BASELINE -> BASELINE_ICON
+        VTextFragment.ALL_LINES -> V_TEXT_FRAGMENT_ALL_LINES_ICON
+        VTextFragment.FIRST_LINE -> V_TEXT_FRAGMENT_FIRST_LINE_ICON
+        VTextFragment.LAST_LINE -> V_TEXT_FRAGMENT_LAST_LINE_ICON
+    }
+
+
+private val V_BODY_FRAGMENT_ALL_ROWS_ICON = SVGIcon.load("/icons/vBodyFragment/allRows.svg")
+private val V_BODY_FRAGMENT_FIRST_ROW_ICON = SVGIcon.load("/icons/vBodyFragment/firstRow.svg")
+private val V_BODY_FRAGMENT_LAST_ROW_ICON = SVGIcon.load("/icons/vBodyFragment/lastRow.svg")
+private val V_BODY_FRAGMENT_FIRST_ROW_FIRST_LINE_ICON = SVGIcon.load("/icons/vBodyFragment/firstRowFirstLine.svg")
+private val V_BODY_FRAGMENT_FIRST_ROW_LAST_LINE_ICON = SVGIcon.load("/icons/vBodyFragment/firstRowLastLine.svg")
+private val V_BODY_FRAGMENT_LAST_ROW_FIRST_LINE_ICON = SVGIcon.load("/icons/vBodyFragment/lastRowFirstLine.svg")
+private val V_BODY_FRAGMENT_LAST_ROW_LAST_LINE_ICON = SVGIcon.load("/icons/vBodyFragment/lastRowLastLine.svg")
+
+val VBodyFragment.icon
+    get() = when (this) {
+        VBodyFragment.ALL_ROWS -> V_BODY_FRAGMENT_ALL_ROWS_ICON
+        VBodyFragment.FIRST_ROW -> V_BODY_FRAGMENT_FIRST_ROW_ICON
+        VBodyFragment.LAST_ROW -> V_BODY_FRAGMENT_LAST_ROW_ICON
+        VBodyFragment.FIRST_ROW_FIRST_LINE -> V_BODY_FRAGMENT_FIRST_ROW_FIRST_LINE_ICON
+        VBodyFragment.FIRST_ROW_LAST_LINE -> V_BODY_FRAGMENT_FIRST_ROW_LAST_LINE_ICON
+        VBodyFragment.LAST_ROW_FIRST_LINE -> V_BODY_FRAGMENT_LAST_ROW_FIRST_LINE_ICON
+        VBodyFragment.LAST_ROW_LAST_LINE -> V_BODY_FRAGMENT_LAST_ROW_LAST_LINE_ICON
     }
 
 
@@ -406,14 +438,16 @@ val CoordinateSystem.icon
 val Enum<*>.icon
     get() = when (this) {
         is Severity -> icon
+        is DockableId -> icon
         is BlockOrientation -> icon
         is BodyLayout -> icon
         is HJustify -> icon
         is VJustify -> icon
-        is LineHJustify -> icon
-        is SingleLineHJustify -> icon
-        is AppendageVShelve -> icon
-        is AppendageVJustify -> icon
+        is HJustifyCrumbs -> icon
+        is HJustifyCrumbsStack -> icon
+        is VJustifyText -> icon
+        is VTextFragment -> icon
+        is VBodyFragment -> icon
         is HarmonizeExtent -> icon
         is Sort -> icon
         is GridFillingOrder -> icon
@@ -539,11 +573,15 @@ private class SpineAttachmentIcon(
 
 
 private val SERVICE_GOOGLE_ICON = SVGIcon.load("/icons/service/google.svg")
+private val SERVICE_NEXTCLOUD_ICON = SVGIcon.load("/icons/service/nextcloud.svg")
+private val SERVICE_WEBDAV_ICON = SVGIcon.load("/icons/service/webdav.svg")
 private val SERVICE_ETHERCALC_ICON = SVGIcon.load("/icons/service/ethercalc.svg")
 
 val Service.icon
     get() = when (this) {
         is GoogleService -> SERVICE_GOOGLE_ICON
+        is NextcloudService -> SERVICE_NEXTCLOUD_ICON
+        is WebDAVService -> SERVICE_WEBDAV_ICON
         is EtherCalcService -> SERVICE_ETHERCALC_ICON
         else -> throw IllegalArgumentException()
     }
@@ -553,6 +591,7 @@ class SVGIcon private constructor(
     private val svg: SVGDocument,
     private val xScaling: Double,
     private val yScaling: Double,
+    private val rotation: Double,
     private val recolor: Color?,
     private val isDisabled: Boolean
 ) : FlatAbstractIcon(
@@ -561,9 +600,9 @@ class SVGIcon private constructor(
     null
 ), FlatLaf.DisabledIconProvider {
 
-    override fun paintIcon(c: Component, g2: Graphics2D) {
+    override fun paintIcon(c: Component?, g2: Graphics2D) {
         fun paintTo(g2: Graphics2D) {
-            if (xScaling == 1.0 && yScaling == 1.0)
+            if (xScaling == 1.0 && yScaling == 1.0 && rotation == 0.0)
                 svg.render(c as? JComponent, g2)
             else
                 g2.preserveTransform {
@@ -572,6 +611,8 @@ class SVGIcon private constructor(
                     if (yScaling < 0)
                         g2.translate(0.0, -svg.size().height * yScaling)
                     g2.scale(xScaling, yScaling)
+                    if (rotation != 0.0)
+                        g2.rotate(Math.toRadians(rotation), 0.5 * width, 0.5 * height)
                     svg.render(c as? JComponent, g2)
                 }
         }
@@ -586,11 +627,25 @@ class SVGIcon private constructor(
         paintTo(effG2)
     }
 
-    override fun getDisabledIcon() = SVGIcon(svg, xScaling, yScaling, recolor, isDisabled = true)
-    fun getRecoloredIcon(recolor: Color) = SVGIcon(svg, xScaling, yScaling, recolor, isDisabled)
+    fun renderIcon(width: Int, height: Int): BufferedImage =
+        BufferedImage(width, height, BufferedImage.TYPE_4BYTE_ABGR).withG2 { g2 ->
+            g2.setHighQuality()
+            g2.scale(width / this.width.toDouble(), height / this.height.toDouble())
+            paintIcon(null, g2)
+        }
+
+    fun createCursor(hotX: Int, hotY: Int, name: String): Cursor {
+        val d = Toolkit.getDefaultToolkit().getBestCursorSize(width, height)
+        val hotSpot = Point(hotX * d.width / width, hotY * d.height / height)
+        return Toolkit.getDefaultToolkit().createCustomCursor(renderIcon(d.width, d.height), hotSpot, name)
+    }
+
+    override fun getDisabledIcon() = SVGIcon(svg, xScaling, yScaling, rotation, recolor, isDisabled = true)
+    fun getRecoloredIcon(recolor: Color) = SVGIcon(svg, xScaling, yScaling, rotation, recolor, isDisabled)
+    fun getRotatedIcon(rotation: Double) = SVGIcon(svg, xScaling, yScaling, rotation, recolor, isDisabled)
     fun getScaledIcon(scaling: Double) = getScaledIcon(scaling, scaling)
     fun getScaledIcon(xScaling: Double, yScaling: Double) =
-        SVGIcon(svg, this.xScaling * xScaling, this.yScaling * yScaling, recolor, isDisabled)
+        SVGIcon(svg, this.xScaling * xScaling, this.yScaling * yScaling, rotation, recolor, isDisabled)
 
     companion object {
         fun load(name: String): SVGIcon {
@@ -598,7 +653,7 @@ class SVGIcon private constructor(
                 ?: SVGIcon::class.java.classLoader.getResource(name.removePrefix("/"))
             requireNotNull(resource) { "Missing SVG icon resource: $name" }
             val svg = requireNotNull(SVGLoader().load(resource)) { "Can't load SVG icon: $name" }
-            return SVGIcon(svg, 1.0, 1.0, null, false)
+            return SVGIcon(svg, 1.0, 1.0, 0.0, null, false)
         }
     }
 

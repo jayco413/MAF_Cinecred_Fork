@@ -2,8 +2,8 @@ package com.loadingbyte.cinecred.ui.view.welcome
 
 import com.formdev.flatlaf.FlatClientProperties.*
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.project.PRESET_GLOBAL
 import com.loadingbyte.cinecred.project.label
+import com.loadingbyte.cinecred.project.presetGlobal
 import com.loadingbyte.cinecred.projectio.SPREADSHEET_FORMATS
 import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.service.Account
@@ -36,8 +36,8 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     @Deprecated("ENCAPSULATION LEAK") val leakedStartDropLabel: JLabel
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgResWidget get() = createConfigureForm.resolutionWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgLocWidget get() = createConfigureForm.creditsLocationWidget
-    @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgFormatWidget get() = createConfigureForm.creditsFormatWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgAccWidget get() = createConfigureForm.creditsAccountWidget
+    @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgFormatWidget get() = createConfigureForm.creditsFormatWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCreCfgDoneButton get() = createConfigureDoneButton
     // =========================================
 
@@ -83,9 +83,9 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             background = null
             add(startCreateButton, "split 2, center")
             add(startOpenButton)
-            add(JSeparator(), "growx, shrink 0 0")
+            add(JSeparator(), "growx, hmin pref")
             add(startMemorizedScrollPane, "grow, push")
-            add(startDropLabel, "center, gaptop 20, gapbottom 20")
+            add(startDropLabel, "center, gapy 20 20")
             // Add the drag-and-drop handler.
             transferHandler = OpenTransferHandler()
             // Highlight the area when the user hovers over it during drag-and-drop.
@@ -110,9 +110,9 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
                     createConfigureForm.timecodeFormatWidget.value,
                     createConfigureForm.contentWidget.value,
                     createConfigureForm.creditsLocationWidget.value,
-                    createConfigureForm.creditsFormatWidget.value,
                     createConfigureForm.creditsAccountWidget.value.getOrNull(),
-                    createConfigureForm.creditsFilenameWidget.value
+                    createConfigureForm.creditsFilenameWidget.value,
+                    createConfigureForm.creditsFormatWidget.value
                 )
             }
 
@@ -228,7 +228,7 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     }
 
 
-    private inner class CreateConfigureForm : EasyForm(insets = false, noticeArea = false, constLabelWidth = true) {
+    private inner class CreateConfigureForm : EasyForm(insets = "0", noticeArea = false, constLabelWidth = true) {
 
         val localeWidget = addWidget(
             l10n("ui.styling.global.locale"),
@@ -240,7 +240,7 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         )
 
         val resolutionWidget = addWidget(
-            l10n("ui.styling.global.resolution"),
+            l10n("resolution"),
             ResolutionWidget()
         )
 
@@ -276,15 +276,6 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             )
         )
 
-        val creditsFormatWidget = addWidget(
-            l10n("ui.projects.create.creditsFormat"),
-            ComboBoxWidget(
-                SpreadsheetFormat::class.java, SPREADSHEET_FORMATS.filter { it.available }, widthSpec = WidthSpec.WIDE,
-                toString = { "${it.label} (Credits.${it.fileExt})" }
-            ),
-            isVisible = { creditsLocationWidget.value == CreditsLocation.LOCAL }
-        )
-
         val creditsAccountWidget = addWidget(
             l10n("ui.projects.create.creditsAccount"),
             OptionalComboBoxWidget(
@@ -300,15 +291,32 @@ class ProjectsPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             TextWidget(),
             isVisible = {
                 creditsLocationWidget.value == CreditsLocation.SERVICE &&
-                        creditsAccountWidget.value.getOrNull()?.service?.uploadNeedsFilename ?: false
+                        creditsAccountWidget.value.getOrNull().let { it != null && it.service.uploadNeedsFilename }
+            }
+        )
+
+        val creditsFormatWidget = addWidget(
+            l10n("ui.projects.create.creditsFormat"),
+            ComboBoxWidget(
+                SpreadsheetFormat::class.java, SPREADSHEET_FORMATS.filter { it.available }, widthSpec = WidthSpec.WIDE,
+                toString = { "${it.label} (.${it.fileExt})" }
+            ),
+            isVisible = {
+                when (creditsLocationWidget.value) {
+                    CreditsLocation.LOCAL -> true
+                    CreditsLocation.SERVICE ->
+                        creditsAccountWidget.value.getOrNull().let { it != null && it.service.uploadNeedsFormat }
+                    CreditsLocation.SKIP -> false
+                }
             }
         )
 
         init {
+            val global = presetGlobal()
             localeWidget.value = Locale.getDefault()
-            resolutionWidget.value = PRESET_GLOBAL.resolution
-            fpsWidget.value = PRESET_GLOBAL.fps
-            timecodeFormatWidget.value = PRESET_GLOBAL.timecodeFormat
+            resolutionWidget.value = global.resolution
+            fpsWidget.value = global.fps
+            timecodeFormatWidget.value = global.timecodeFormat
             // Populate the timecode format combo box.
             onChange(fpsWidget)
         }

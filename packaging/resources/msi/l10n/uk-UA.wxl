@@ -1,0 +1,7 @@
+﻿<WixLocalization xmlns="http://wixtoolset.org/schemas/v4/wxl" Culture="uk-UA">
+  <String Id="Slogan" Value="@SLOGAN_UK@"/>
+  <String Id="ShortcutDlgTitle" Value="{\WixUI_Font_Title}Ярлики"/>
+  <String Id="ShortcutDlgDescription" Value="Виберіть ярлики, які потрібно створити."/>
+  <String Id="ShortcutDlgDesktop" Value="Створити ярлик на робочому столі"/>
+  <String Id="ShortcutDlgStartMenu" Value="Створити ярлик у меню «Пуск»"/>
+</WixLocalization>

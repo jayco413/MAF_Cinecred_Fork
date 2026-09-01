@@ -42,7 +42,7 @@ abstract class BuildSkiaCAPI : DefaultTask() {
         if (forPlatform.os == WINDOWS) {
             val sub = mutableListOf<String>()
             // Skia requires C++17.
-            sub += listOf(Tools.vcvars(execOps), "&&", "cl", "/LD", "/std:c++17", "/O2", "/GL", "/GR-")
+            sub += listOf(Tools.vcvars(execOps), "&&", "cl", "/LD", "/MD", "/std:c++17", "/O2", "/GL", "/GR-")
             sub += macros.map { "/D$it" } + "/DCAPI=__declspec(dllexport)"
             sub += listOf("\"/Fe:${outFile.absolutePath}\"", "/I", "\"${repoDir.absolutePath}\"")
             sub += srcPaths.map { "\"$it\"" }

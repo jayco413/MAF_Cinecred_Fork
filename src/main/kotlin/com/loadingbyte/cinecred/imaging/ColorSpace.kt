@@ -1,5 +1,6 @@
 package com.loadingbyte.cinecred.imaging
 
+import com.loadingbyte.cinecred.common.DisposableReference
 import com.loadingbyte.cinecred.common.Resolution
 import com.loadingbyte.cinecred.natives.skcms.skcms_h.*
 import com.loadingbyte.cinecred.natives.skiacapi.skiacapi_h.*
@@ -7,74 +8,96 @@ import org.bytedeco.ffmpeg.global.avutil.*
 import java.lang.foreign.Arena
 import java.lang.foreign.MemorySegment
 import java.lang.foreign.ValueLayout.JAVA_FLOAT
-import java.lang.ref.SoftReference
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 import kotlin.math.pow
 
 
-class ColorSpace private constructor(val primaries: Primaries, val transfer: Transfer) {
+class ColorSpace private constructor(
+    /** If the primaries are null, the color space is for grayscale bitmaps. */
+    val primaries: Primaries?,
+    val transfer: Transfer
+) {
 
     val skiaHandle: MemorySegment by lazy {
+        checkNotNull(primaries) { "Gray color spaces do not admit a Skia color space." }
         check(transfer.hasCurve) { "Only transfer characteristics with a standard curve admit a Skia color space." }
         val c = transfer.toLinear
         val m = primaries.toXYZD50.values
         SkColorSpace_MakeRGB(c.g, c.a, c.b, c.c, c.d, c.e, c.f, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8])
     }
 
-    private val bmpConvCache = ConcurrentHashMap<ColorSpace, SoftReference<Triple<Bitmap, Bitmap, BitmapConverter>>>()
+    private val bmpConvCache =
+        ConcurrentHashMap<ColorSpace, DisposableReference<Triple<Bitmap, Bitmap, BitmapConverter>>>()
+
+    fun withPrimariesIfAbsent(primaries: Primaries): ColorSpace =
+        if (this.primaries == null) of(primaries, transfer) else this
 
     fun convert(dst: ColorSpace, colors: FloatArray, alpha: Boolean, clamp: Boolean = false, ceiling: Float? = 1f) {
+        require((primaries == null) == (dst.primaries == null)) { "Cannot convert between gray and chromatic arrays." }
         if (this != dst)
             if (transfer.hasCurve && dst.transfer.hasCurve) {
-                transfer.toLinear(colors, alpha)
-                primaries.toXYZD50(colors, alpha)
-                dst.primaries.fromXYZD50(colors, alpha)
-                dst.transfer.fromLinear(colors, alpha)
+                transfer.toLinear(colors, primaries == null, alpha)
+                if (primaries != null && dst.primaries != null) {
+                    primaries.toXYZD50(colors, alpha)
+                    dst.primaries.fromXYZD50(colors, alpha)
+                }
+                dst.transfer.fromLinear(colors, primaries == null, alpha)
             } else {
-                val numComps = if (alpha) 4 else 3
+                val numComps = (if (primaries == null) 1 else 3) + (if (alpha) 1 else 0)
                 require(colors.size % numComps == 0)
                 val w = colors.size / numComps
                 val alp = if (alpha) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
-                var srcBitmap: Bitmap? = null
-                var dstBitmap: Bitmap? = null
-                var converter: BitmapConverter? = null
-                val cached = bmpConvCache.remove(dst)?.get()
-                if (cached != null) {
+                var cachedRef = bmpConvCache.remove(dst)
+                val cached = cachedRef?.get()
+                val srcBitmap: Bitmap?
+                val dstBitmap: Bitmap?
+                val converter: BitmapConverter?
+                if (cached != null && cached.first.spec.run { resolution.widthPx == w && representation.alpha == alp }) {
                     srcBitmap = cached.first
                     dstBitmap = cached.second
                     converter = cached.third
-                }
-                if (srcBitmap == null || dstBitmap == null || converter == null ||
-                    srcBitmap.spec.resolution.widthPx != w || srcBitmap.spec.representation.alpha != alp
-                ) {
+                } else {
+                    cached?.run { first.close(); second.close(); third.close() }
                     val res = Resolution(w, 1)
-                    val pixelFormat = Bitmap.PixelFormat.of(if (alpha) AV_PIX_FMT_RGBAF32 else AV_PIX_FMT_RGBF32)
+                    val pixelFormatCode = when (primaries) {
+                        null -> if (alpha) AV_PIX_FMT_YAF32 else AV_PIX_FMT_GRAYF32
+                        else -> if (alpha) AV_PIX_FMT_RGBAF32 else AV_PIX_FMT_RGBF32
+                    }
+                    val pixelFormat = Bitmap.PixelFormat.of(pixelFormatCode)
                     val srcSpec = Bitmap.Spec(res, Bitmap.Representation(pixelFormat, this, alp))
                     val dstSpec = Bitmap.Spec(res, Bitmap.Representation(pixelFormat, dst, alp))
                     srcBitmap = Bitmap.allocate(srcSpec)
                     dstBitmap = Bitmap.allocate(dstSpec)
                     converter = BitmapConverter(srcSpec, dstSpec)
+                    // As the BitmapConverter is usually just a SKCMS stage, we can ignore its byte size.
+                    cachedRef =
+                        DisposableReference(Triple(srcBitmap, dstBitmap, converter), srcBitmap.bytes + dstBitmap.bytes)
                 }
                 srcBitmap.put(colors, colors.size)
                 converter.convert(srcBitmap, dstBitmap)
                 dstBitmap.get(colors, colors.size)
-                bmpConvCache[dst] = SoftReference(Triple(srcBitmap, dstBitmap, converter))
+                bmpConvCache.put(dst, cachedRef)?.getAndClose()?.run { first.close(); second.close(); third.close() }
             }
-        if (clamp)
+        if (clamp) {
+            val mask = if (primaries == null) 1 else 3
             for (i in colors.indices)
-                if (!alpha || i and 3 != 3)
+                if (!alpha || i and mask != mask)
                     colors[i] = colors[i].coerceIn(0f, ceiling)
+        }
     }
 
-    override fun toString() = "$primaries / $transfer"
+    override fun toString() = if (primaries == null) "$transfer" else "$primaries / $transfer"
 
 
     companion object {
 
-        private val cache = ConcurrentHashMap<Pair<Primaries, Transfer>, ColorSpace>()
+        private val cache = ConcurrentHashMap<Pair<Primaries?, Transfer>, ColorSpace>()
 
-        fun of(primaries: Primaries, transfer: Transfer): ColorSpace =
+        fun of(transfer: Transfer): ColorSpace =
+            of(primaries = null, transfer)
+
+        fun of(primaries: Primaries?, transfer: Transfer): ColorSpace =
             cache.computeIfAbsent(Pair(primaries, transfer)) { ColorSpace(primaries, transfer) }
 
         val XYZD50: ColorSpace = of(Primaries.XYZD50, Transfer.LINEAR)
@@ -164,6 +187,8 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                 populateCodeBased()
             }
 
+            val CODES: List<Int> = CODE_BASED.filterNotNull().map(Primaries::code)
+
             /** @throws IllegalArgumentException If the [code] does not refer to primaries. */
             fun of(code: Int): Primaries =
                 requireNotNull(CODE_BASED.getOrNull(code)) { "Unknown primaries code: $code" }
@@ -180,7 +205,7 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                 obtainCustom(null, toXYZD50(wx, wy))
 
             val XYZD50: Primaries
-            val XYZD65: Primaries = invertAndMake(-3, "XYZ-D65", null, toXYZD50(0.3127f, 0.329f))
+            val XYZE: Primaries = of(AVCOL_PRI_SMPTE428)
             val BT709: Primaries = of(AVCOL_PRI_BT709)
             val DCI_P3: Primaries = of(AVCOL_PRI_SMPTE431)
             val DISPLAY_P3: Primaries = of(AVCOL_PRI_SMPTE432)
@@ -208,8 +233,8 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
 
             private fun invertAndMake(code: Int, name: String, chroma: Chromaticities?, toXYZD50: Matrix): Primaries {
                 val fromXYZD50 = Arena.ofConfined().use { arena ->
-                    val inSeg = arena.allocateArray(toXYZD50.values)
-                    val outSeg = arena.allocateArray(JAVA_FLOAT, 9)
+                    val inSeg = arena.allocateFrom(toXYZD50.values)
+                    val outSeg = arena.allocate(JAVA_FLOAT, 9)
                     require(skcms_Matrix3x3_invert(inSeg, outSeg)) { "Could not invert toXYZD50 matrix." }
                     Matrix(outSeg.toArray(JAVA_FLOAT))
                 }
@@ -244,7 +269,7 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
                     toXYZD50(SkNamedGamut_Rec2020())
                 )
                 addCB(
-                    AVCOL_PRI_SMPTE428, "ST 428",
+                    AVCOL_PRI_SMPTE428, "XYZ-E",
                     Chromaticities(1f, 0f, 0f, 1f, 0f, 0f, 1f / 3f, 1f / 3f)
                 )
                 addCB(
@@ -271,14 +296,14 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
 
             private fun toXYZD50(c: Chromaticities): Matrix =
                 Arena.ofConfined().use { arena ->
-                    val seg = arena.allocateArray(JAVA_FLOAT, 9)
+                    val seg = arena.allocate(JAVA_FLOAT, 9)
                     require(skcms_PrimariesToXYZD50(c.rx, c.ry, c.gx, c.gy, c.bx, c.by, c.wx, c.wy, seg))
                     Matrix(seg.toArray(JAVA_FLOAT))
                 }
 
             private fun toXYZD50(wx: Float, wy: Float): Matrix =
                 Arena.ofConfined().use { arena ->
-                    val seg = arena.allocateArray(JAVA_FLOAT, 9)
+                    val seg = arena.allocate(JAVA_FLOAT, 9)
                     require(skcms_AdaptToXYZD50(wx, wy, seg))
                     Matrix(seg.toArray(JAVA_FLOAT))
                 }
@@ -300,10 +325,10 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
         val hasCurve: Boolean get() = _toLinear != null
 
         /** One of the `AVCOL_TRC_*` constants. */
-        fun code(primaries: Primaries, depth: Int): Int {
+        fun code(primaries: Primaries?, depth: Int): Int {
             if (!hasCode)
                 throw IllegalStateException("Transfer function $name does not have a code.")
-            if (_code == AVCOL_TRC_BT709 && primaries.hasCode)
+            if (_code == AVCOL_TRC_BT709 && primaries != null && primaries.hasCode)
                 when (primaries.code) {
                     AVCOL_PRI_SMPTE170M -> return AVCOL_TRC_SMPTE170M
                     AVCOL_PRI_SMPTE240M -> return AVCOL_TRC_SMPTE240M
@@ -346,7 +371,7 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
             val f: Float
         ) {
 
-            private val skiaHandle = Arena.ofAuto().allocateArray(asArray())
+            private val skiaHandle = Arena.ofAuto().allocateFrom(asArray())
 
             constructor(g: Float) : this(g, 1f, 0f, 0f, 0f, 0f, 0f)
             constructor(g: Float, a: Float) : this(g, a, 0f, 0f, 0f, 0f, 0f)
@@ -357,12 +382,13 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
             operator fun invoke(value: Float): Float =
                 if (this === LINEAR.toLinear) value else skcms_TransferFunction_eval(skiaHandle, value)
 
-            operator fun invoke(colors: FloatArray, alpha: Boolean) {
+            operator fun invoke(colors: FloatArray, gray: Boolean, alpha: Boolean) {
                 if (this === LINEAR.toLinear)
                     return
                 val skiaHandle = this.skiaHandle
+                val mask = if (gray) 1 else 3
                 for (i in colors.indices)
-                    if (!alpha || i and 3 != 3)
+                    if (!alpha || i and mask != mask)
                         colors[i] = skcms_TransferFunction_eval(skiaHandle, colors[i])
             }
 
@@ -375,6 +401,8 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
             init {
                 populateCodeBased()
             }
+
+            val CODES: List<Int> = CODE_BASED.filterNotNull().mapTo(sortedSetOf(), Transfer::canonCode).toList()
 
             /** @throws IllegalArgumentException If the [code] does not refer to transfer characteristics. */
             fun of(code: Int): Transfer =
@@ -429,8 +457,8 @@ class ColorSpace private constructor(val primaries: Primaries, val transfer: Tra
 
             private fun invert(toLinear: Curve): Curve =
                 Arena.ofConfined().use { arena ->
-                    val inSeg = arena.allocateArray(toLinear.asArray())
-                    val outSeg = arena.allocateArray(JAVA_FLOAT, 7)
+                    val inSeg = arena.allocateFrom(toLinear.asArray())
+                    val outSeg = arena.allocate(JAVA_FLOAT, 7)
                     require(skcms_TransferFunction_invert(inSeg, outSeg)) { "Could not invert transfer curve." }
                     Curve(outSeg.toArray(JAVA_FLOAT))
                 }

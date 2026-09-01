@@ -8,19 +8,32 @@ import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.ui.ProjectController
+import com.loadingbyte.cinecred.ui.Shortcut
+import com.loadingbyte.cinecred.ui.Shortcut.*
+import com.loadingbyte.cinecred.ui.comms.DockableId
 import com.loadingbyte.cinecred.ui.helper.*
 import kotlinx.collections.immutable.toPersistentList
+import net.miginfocom.layout.PlatformDefaults
+import net.miginfocom.layout.UnitValue
 import net.miginfocom.swing.MigLayout
 import java.awt.*
 import java.awt.event.ActionEvent
+import java.awt.event.HierarchyEvent
+import java.awt.event.HierarchyListener
 import java.awt.event.KeyEvent
-import java.awt.event.KeyEvent.*
 import java.util.*
 import javax.swing.*
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 
-class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
+class EditStylingPanel(private val ctrl: ProjectController) :
+    DockingFrame.Dockable(
+        dockableId = DockableId.STYLING.name,
+        title = l10n("ui.styling.title"),
+        icon = DockableId.STYLING.icon
+    ) {
 
     // ========== ENCAPSULATION LEAKS ==========
     @Deprecated("ENCAPSULATION LEAK") val leakedSplitPane: JSplitPane
@@ -33,6 +46,8 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
     @Deprecated("ENCAPSULATION LEAK") val leakedContentStyleForm get() = contentStyleForm
     @Deprecated("ENCAPSULATION LEAK") val leakedLetterStyleForm get() = letterStyleForm
     @Deprecated("ENCAPSULATION LEAK") val leakedPictureStyleForm get() = pictureStyleForm
+    @Deprecated("ENCAPSULATION LEAK") val leakedRebuildForResWidget get() = rebuildForResWidget
+    @Deprecated("ENCAPSULATION LEAK") val leakedRebuildForFPSWidget get() = rebuildForFPSWidget
     // =========================================
 
     private val keyListeners = mutableListOf<KeyListener>()
@@ -40,7 +55,15 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
     fun onKeyEvent(event: KeyEvent): Boolean =
         keyListeners.any { it.onKeyEvent(event) }
 
-    private val globalForm = StyleForm(Global::class.java)
+    private val rebuildForResWidget = ScaleActionWidget(doubleArrayOf(0.25, 0.5, 2.0, 4.0))
+    private val rebuildForFPSWidget = ScaleActionWidget(doubleArrayOf(0.25, 0.5, 2.0, 4.0))
+
+    private val globalForm = StyleForm(
+        Global::class.java, extraFormRows = mapOf(
+            1 to Form.FormRow(l10n("ui.styling.global.rebuildForResolution"), rebuildForResWidget),
+            3 to Form.FormRow(l10n("ui.styling.global.rebuildForFPS"), rebuildForFPSWidget)
+        )
+    )
     private val pageStyleForm = StyleForm(PageStyle::class.java)
     private val contentStyleForm = StyleForm(ContentStyle::class.java)
     private val letterStyleForm = StyleForm(LetterStyle::class.java)
@@ -51,14 +74,16 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
     // Create a panel with the four style editing forms.
     private val rightPanelCards = CardLayout()
     private val rightPanel = JPanel(rightPanelCards).apply {
-        add(JScrollPane() /* use a full-blown JScrollPane to match the look of the non-blank cards */, "Blank")
-        add(JScrollPane(globalForm), "Global")
-        add(JScrollPane(pageStyleForm), "PageStyle")
-        add(JScrollPane(contentStyleForm), "ContentStyle")
-        add(JScrollPane(letterStyleForm), "LetterStyle")
-        add(JScrollPane(transitionStyleForm), "TransitionStyle")
-        add(JScrollPane(pictureStyleForm), "PictureStyle")
-        add(JScrollPane(tapeStyleForm), "TapeStyle")
+        val bw = UIManager.getInt("Component.borderWidth")
+        border = BorderFactory.createMatteBorder(0, bw, 0, 0, UIManager.getColor("Component.borderColor"))
+        add(JPanel(), "Blank")
+        add(newStyleFormScrollPane(globalForm), "Global")
+        add(newStyleFormScrollPane(pageStyleForm), "PageStyle")
+        add(newStyleFormScrollPane(contentStyleForm), "ContentStyle")
+        add(newStyleFormScrollPane(letterStyleForm), "LetterStyle")
+        add(newStyleFormScrollPane(transitionStyleForm), "TransitionStyle")
+        add(newStyleFormScrollPane(pictureStyleForm), "PictureStyle")
+        add(newStyleFormScrollPane(tapeStyleForm), "TapeStyle")
     }
 
     private val stylingTree = StylingTree()
@@ -70,8 +95,7 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
             pageStyleForm, contentStyleForm, letterStyleForm, transitionStyleForm, pictureStyleForm, tapeStyleForm
         ),
         getCurrentStyling = ::styling,
-        getCurrentStyleInActiveForm = { stylingTree.selected as Style? },
-        notifyConstraintViolations = ::updateConstraintViolations
+        getCurrentStyleInActiveForm = { stylingTree.selected as Style? }
     )
 
     // Cache the Styling which is currently stored in the tree, so that we don't have to repeatedly regenerate it.
@@ -83,98 +107,93 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
 
     private var blockStylingHistoryUpdates = 0
 
-    // Remember the runtime of the latest render of the project, as well as the runtime of the first occurrences of
-    // individual scroll styles.
-    private var mostRecentRuntime = 0
-    private val mostRecentScrollRuntimes = HashMap<String, Int>()
-
     init {
         stylingTree.onDeselect = ::openBlank
         stylingTree.addSingletonType(
-            PRESET_GLOBAL, l10n("ui.styling.globalStyling"), GLOBE_ICON,
+            presetGlobal(), l10n("ui.styling.globalStyling"), GLOBE_ICON,
             onSelect = { openGlobal(it, globalForm, "Global") }
         )
         stylingTree.addListType(
             PageStyle::class.java, l10n("ui.styling.pageStyles"), PAGE_ICON,
             onSelect = { openListedStyle(it, pageStyleForm, "PageStyle") },
+            objToIdentity = PageStyle::identity,
             objToString = PageStyle::name
         )
         stylingTree.addListType(
             ContentStyle::class.java, l10n("ui.styling.contentStyles"), LAYOUT_ICON,
             onSelect = { openListedStyle(it, contentStyleForm, "ContentStyle") },
+            objToIdentity = ContentStyle::identity,
             objToString = ContentStyle::name
         )
         stylingTree.addListType(
             LetterStyle::class.java, l10n("ui.styling.letterStyles"), LETTERS_ICON,
             onSelect = { openListedStyle(it, letterStyleForm, "LetterStyle") },
+            objToIdentity = LetterStyle::identity,
             objToString = LetterStyle::name
         )
         stylingTree.addListType(
             TransitionStyle::class.java, l10n("ui.styling.transitionStyles"), TRANSITION_ICON,
             onSelect = { openListedStyle(it, transitionStyleForm, "TransitionStyle") },
+            objToIdentity = TransitionStyle::identity,
             objToString = TransitionStyle::name
         )
         stylingTree.addListType(
             PictureStyle::class.java, l10n("ui.styling.pictureStyles"), PICTURE_ICON,
             onSelect = { openListedStyle(it, pictureStyleForm, "PictureStyle") },
+            objToIdentity = PictureStyle::identity,
             objToString = PictureStyle::name,
             isVolatile = PictureStyle::volatile
         )
         stylingTree.addListType(
             TapeStyle::class.java, l10n("ui.styling.tapeStyles"), FILMSTRIP_ICON,
             onSelect = { openListedStyle(it, tapeStyleForm, "TapeStyle") },
+            objToIdentity = TapeStyle::identity,
             objToString = TapeStyle::name,
             isVolatile = TapeStyle::volatile
         )
 
         // Add buttons for adding and removing style nodes.
         val addPageStyleButton = newToolbarButtonWithKeyListener(
-            PAGE_ICON, l10n("ui.styling.addPageStyleTooltip"),
-            VK_P, CTRL_DOWN_MASK or SHIFT_DOWN_MASK
+            PAGE_ICON, l10n("ui.styling.addPageStyleTooltip"), STYLING_ADD_PAGE_STYLE
         ) {
-            addAndSelectStyle(PRESET_PAGE_STYLE.copy(name = l10n("ui.styling.newPageStyleName")))
+            addAndSelectStyle(presetPageStyle().copy(name = l10n("ui.styling.newPageStyleName")))
         }
         val addContentStyleButton = newToolbarButtonWithKeyListener(
-            LAYOUT_ICON, l10n("ui.styling.addContentStyleTooltip"),
-            VK_C, CTRL_DOWN_MASK or SHIFT_DOWN_MASK
+            LAYOUT_ICON, l10n("ui.styling.addContentStyleTooltip"), STYLING_ADD_CONTENT_STYLE
         ) {
-            addAndSelectStyle(PRESET_CONTENT_STYLE.copy(name = l10n("ui.styling.newContentStyleName")))
+            addAndSelectStyle(presetContentStyle().copy(name = l10n("ui.styling.newContentStyleName")))
         }
         val addLetterStyleButton = newToolbarButtonWithKeyListener(
-            LETTERS_ICON, l10n("ui.styling.addLetterStyleTooltip"),
-            VK_L, CTRL_DOWN_MASK or SHIFT_DOWN_MASK
+            LETTERS_ICON, l10n("ui.styling.addLetterStyleTooltip"), STYLING_ADD_LETTER_STYLE
         ) {
-            addAndSelectStyle(PRESET_LETTER_STYLE.copy(name = l10n("ui.styling.newLetterStyleName")))
+            addAndSelectStyle(presetLetterStyle().copy(name = l10n("ui.styling.newLetterStyleName")))
         }
         val addTransitionStyleButton = newToolbarButtonWithKeyListener(
-            TRANSITION_ICON, l10n("ui.styling.addTransitionStyleTooltip"),
-            VK_T, CTRL_DOWN_MASK or SHIFT_DOWN_MASK
+            TRANSITION_ICON, l10n("ui.styling.addTransitionStyleTooltip"), STYLING_ADD_TRANSITION_STYLE
         ) {
-            addAndSelectStyle(PRESET_TRANSITION_STYLE.copy(name = l10n("ui.styling.newTransitionStyleName")))
+            addAndSelectStyle(presetTransitionStyle().copy(name = l10n("ui.styling.newTransitionStyleName")))
         }
         val addPictureStyleButton = newToolbarButtonWithKeyListener(
-            PICTURE_ICON, l10n("ui.styling.addPictureStyleTooltip"),
-            VK_I, CTRL_DOWN_MASK or SHIFT_DOWN_MASK
+            PICTURE_ICON, l10n("ui.styling.addPictureStyleTooltip"), STYLING_ADD_PICTURE_STYLE
         ) {
-            addAndSelectStyle(PRESET_PICTURE_STYLE.copy(name = l10n("ui.styling.newPictureStyleName")))
+            addAndSelectStyle(presetPictureStyle().copy(name = l10n("ui.styling.newPictureStyleName")))
         }
         val addTapeStyleButton = newToolbarButtonWithKeyListener(
-            FILMSTRIP_ICON, l10n("ui.styling.addTapeStyleTooltip"),
-            VK_V, CTRL_DOWN_MASK or SHIFT_DOWN_MASK
+            FILMSTRIP_ICON, l10n("ui.styling.addTapeStyleTooltip"), STYLING_ADD_TAPE_STYLE
         ) {
-            addAndSelectStyle(PRESET_TAPE_STYLE.copy(name = l10n("ui.styling.newTapeStyleName")))
+            addAndSelectStyle(presetTapeStyle().copy(name = l10n("ui.styling.newTapeStyleName")))
         }
         val duplicateStyleButton = newToolbarButton(
-            DUPLICATE_ICON, l10n("ui.styling.duplicateStyleTooltip"), VK_D, CTRL_DOWN_MASK, ::duplicateStyle
+            DUPLICATE_ICON, l10n("ui.styling.duplicateStyleTooltip"), STYLING_DUPLICATE_STYLE, ::duplicateStyle
         )
         val removeStyleButton = newToolbarButton(
-            TRASH_ICON, l10n("ui.styling.removeStyleTooltip"), VK_DELETE, 0, ::removeStyle
+            TRASH_ICON, l10n("ui.styling.removeStyleTooltip"), STYLING_REMOVE_STYLE, ::removeStyle
         )
 
         // Add contextual keyboard shortcuts for the style duplication and removal buttons.
         stylingTree.getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT).apply {
-            put(KeyStroke.getKeyStroke(VK_D, CTRL_DOWN_MASK), "duplicate")
-            put(KeyStroke.getKeyStroke(VK_DELETE, 0), "remove")
+            put(STYLING_DUPLICATE_STYLE.run { KeyStroke.getKeyStroke(keyCode, modifiers) }, "duplicate")
+            put(STYLING_REMOVE_STYLE.run { KeyStroke.getKeyStroke(keyCode, modifiers) }, "remove")
         }
         stylingTree.actionMap.put("duplicate", object : AbstractAction() {
             override fun actionPerformed(e: ActionEvent) {
@@ -189,6 +208,10 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
 
         // Layout the buttons.
         val buttonPanel = JPanel(WrappingToolbarLayout(gap = 6)).apply {
+            border = BorderFactory.createEmptyBorder(
+                panelInsets(0), panelInsets(1), panelInsets(2),
+                panelInsets(3) - UIManager.getInt("SplitPane.dividerSize")
+            )
             add(addPageStyleButton)
             add(addContentStyleButton)
             add(addLetterStyleButton)
@@ -199,22 +222,36 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
             add(removeStyleButton)
         }
 
+        val stylingTreeScrollPane = JScrollPane(stylingTree).apply {
+            val bw = UIManager.getInt("Component.borderWidth")
+            border = BorderFactory.createMatteBorder(bw, 0, 0, bw, UIManager.getColor("Component.borderColor"))
+        }
+
         // Layout the tree and the button panel.
-        val leftPanel = JPanel(BorderLayout(0, 6)).apply {
+        val leftPanel = JPanel(BorderLayout()).apply {
             add(buttonPanel, BorderLayout.NORTH)
-            add(JScrollPane(stylingTree), BorderLayout.CENTER)
+            add(stylingTreeScrollPane, BorderLayout.CENTER)
             minimumSize = Dimension(100, 0)
         }
 
         // Put everything together in a split pane.
         val splitPane = JSplitPane(JSplitPane.HORIZONTAL_SPLIT, true, leftPanel, rightPanel)
-        // Slightly postpone moving the dividers so that the panes know their height when the dividers are moved.
-        SwingUtilities.invokeLater {
-            splitPane.setDividerLocation(0.225)
-            SwingUtilities.invokeLater { splitPane.setDividerLocation(0.225) }
-        }
+        // Postpone moving the dividers so that the panes know their height when the dividers are moved.
+        addHierarchyListener(object : HierarchyListener {
+            override fun hierarchyChanged(e: HierarchyEvent) {
+                if (e.id == HierarchyEvent.HIERARCHY_CHANGED &&
+                    e.changeFlags.toInt() and HierarchyEvent.SHOWING_CHANGED != 0
+                ) {
+                    removeHierarchyListener(this)
+                    SwingUtilities.invokeLater {
+                        splitPane.setDividerLocation(0.225)
+                        SwingUtilities.invokeLater { splitPane.setDividerLocation(0.225) }
+                    }
+                }
+            }
+        })
 
-        layout = MigLayout()
+        layout = MigLayout("insets 0")
         add(splitPane, "grow, push")
 
         @Suppress("DEPRECATION")
@@ -227,15 +264,23 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
         leakedRemoveStyleButton = removeStyleButton
     }
 
+    private fun newStyleFormScrollPane(styleForm: StyleForm<*>) =
+        JScrollPane(styleForm).apply { border = null }
+
     private fun newToolbarButtonWithKeyListener(
         icon: Icon,
         tooltip: String,
-        shortcutKeyCode: Int,
-        shortcutModifiers: Int,
+        shortcut: Shortcut,
         listener: () -> Unit
     ): JButton {
-        keyListeners.add(KeyListener(shortcutKeyCode, shortcutModifiers, listener))
-        return newToolbarButton(icon, tooltip, shortcutKeyCode, shortcutModifiers, listener)
+        keyListeners.add(KeyListener(shortcut, listener))
+        return newToolbarButton(icon, tooltip, shortcut, listener)
+    }
+
+    private fun panelInsets(side: Int): Int {
+        val v = PlatformDefaults.getPanelInsets(side)
+        require((v.unit == UnitValue.LPX || v.unit == UnitValue.LPY) && v.operation == UnitValue.STATIC)
+        return v.value.roundToInt()
     }
 
     private fun addAndSelectStyle(style: Style) {
@@ -305,17 +350,23 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
         // it here nevertheless for symmetry with the openListedStyle() method.
         form.changeListeners.clear()
         form.changeListeners.add { widget ->
-            var newStyle = form.save()
-            // If certain settings are 0 and have now been activated, initialize them.
-            for (spec in getStyleWidgetSpecs(newStyle.javaClass))
-                if (spec is ZeroInitWidgetSpec<Global, *> && performZeroInit(newStyle, form, spec))
-                    newStyle = form.save()
-            // If the global runtime setting is 0 and has now been activated, initialize the corresponding timecode
-            // spinner with the project's current runtime. This is to provide a good starting value for the user.
-            if (performZeroInit(newStyle, form, ZeroInitWidgetSpec(Global::runtimeFrames.st()) { mostRecentRuntime }))
-                newStyle = form.save()
-            stylingTree.setSingleton(newStyle)
-            styling = buildStyling()
+            stylingTree.setSingleton(form.save())
+            val styling = buildStyling()
+            this.styling = styling
+            when (widget) {
+                rebuildForResWidget -> {
+                    // Make sure the width and height cannot fall below 1.
+                    val scaling = rebuildForResWidget.value
+                        .coerceAtLeast(1.0 / styling.global.resolution.run { min(widthPx, heightPx) })
+                    setStyling(styling.scaleResolution(scaling))
+                }
+                rebuildForFPSWidget -> {
+                    // Make sure the FPS numerator cannot fall below 1.
+                    val scaling = rebuildForFPSWidget.value
+                        .coerceAtLeast(1.0 / styling.global.fps.numerator)
+                    setStyling(styling.scaleFPS(scaling))
+                }
+            }
             onChange(widget)
         }
         openStyle(style, form, cardName)
@@ -331,17 +382,6 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
                 form.castToStyle(PopupStyle::class.java).openSingleSetting(PopupStyle::volatile.st(), false)
                 newStyle = form.save()
             }
-            // If certain settings are 0 and have now been activated, initialize them.
-            for (spec in getStyleWidgetSpecs(newStyle.javaClass))
-                if (spec is ZeroInitWidgetSpec<S, *> && performZeroInit(newStyle, form, spec))
-                    newStyle = form.save()
-            // If the scroll page runtime setting is 0 and has now been activated, initialize the corresponding timecode
-            // spinner with the scroll page's current runtime. This is to provide a good starting value for the user.
-            if (newStyle is PageStyle && performZeroInit(
-                    newStyle, form.castToStyle(PageStyle::class.java),
-                    ZeroInitWidgetSpec(PageStyle::scrollRuntimeFrames.st()) { mostRecentScrollRuntimes[newStyle.name] })
-            )
-                newStyle = form.save()
             stylingTree.updateListElement(style.javaClass.cast(stylingTree.selected), newStyle)
             styling = buildStyling()
             val updates = consistencyRetainer.ensureConsistencyAfterEdit(styling!!, newStyle)
@@ -373,24 +413,11 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
         stylingTree.getList(TapeStyle::class.java).toPersistentList()
     )
 
-    private fun <S : Style, SUBJ : Number> performZeroInit(
-        style: S, form: StyleForm<S>, spec: ZeroInitWidgetSpec<S, SUBJ>
-    ): Boolean {
-        var initializedAny = false
-        for (setting in spec.settings)
-            if (setting.get(style).run { isActive && value.toDouble() == 0.0 })
-                spec.getInitialValue(style)?.let { value ->
-                    form.openSingleSetting(setting, Opt(true, value))
-                    initializedAny = true
-                }
-        return initializedAny
-    }
-
     fun setStyling(styling: Styling) {
         this.styling = styling
 
         stylingTree.setSingleton(styling.global)
-        stylingTree.replaceAllListElements(ListedStyle.CLASSES.flatMap { styling.getListedStyles(it) })
+        stylingTree.replaceAllListElementsKeepingAppearance(ListedStyle.CLASSES.flatMap { styling.getListedStyles(it) })
         formAdjuster.onLoadStyling()
 
         // Simulate the user selecting the node which is already selected currently. This will cause the selected style
@@ -402,42 +429,61 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
         formAdjuster.updateProjectFontFamilies(projectFamilies)
     }
 
-    fun updatePictureLoaders(pictureLoaders: Collection<Picture.Loader>) {
+    fun updatePictureLoaders(pictureLoaders: Map<String, Picture.Loader>) {
         formAdjuster.updatePictureLoaders(pictureLoaders)
     }
 
-    fun updateTapes(tapes: Collection<Tape>) {
+    fun updateTapes(tapes: Map<String, Tape>) {
         formAdjuster.updateTapes(tapes)
     }
 
-    fun updateProject(drawnProject: DrawnProject) {
-        // Only update the grayed-out status of styles if the DrawnProject we received stems from the current Styling.
-        // If it doesn't, the Styling has changed again in the meantime, and we can't compare with the outdated usage
-        // information because the identity of the styles has changed since then. If we didn't have this check, rapidly
-        // changing a style would cause it to blink gray and white in the styling tree.
-        if (drawnProject.project.styling === styling) {
-            val usedStyles = findUsedStyles(drawnProject.project)
-            stylingTree.adjustAppearance(isGrayedOut = { it is ListedStyle && it !in usedStyles })
-        }
-        drawnProject.drawnCredits.firstOrNull()?.let { mostRecentRuntime = it.video.numFrames }
-        for (drawnCredits in drawnProject.drawnCredits)
-            for (drawnPage in drawnCredits.drawnPages)
-                for ((stage, stageInfo) in drawnPage.page.stages.zip(drawnPage.stageInfo))
-                    if (stageInfo is DrawnStageInfo.Scroll)
-                        mostRecentScrollRuntimes.putIfAbsent(stage.style.name, stageInfo.frames)
-    }
+    fun updateProject(constraintViolations: List<ConstraintViolation>, drawnProject: DrawnProject?) {
+        // Find the used styles.
+        val usedStyles = drawnProject?.let { findUsedStyles(drawnProject.project) }
 
-    private fun updateConstraintViolations(constraintViolations: List<ConstraintViolation>) {
-        val severityPerStyle = IdentityHashMap<Style, Severity>()
+        // Find the icon severity per style.
+        val severityPerStyle = HashMap<UUID, Severity>()
         for (violation in constraintViolations)
-            severityPerStyle[violation.rootStyle] =
-                maxOf(violation.severity, severityPerStyle.getOrDefault(violation.rootStyle, Severity.entries[0]))
+            severityPerStyle[violation.rootStyle.identity] = maxOf(
+                violation.severity,
+                severityPerStyle.getOrDefault(violation.rootStyle.identity, Severity.entries[0])
+            )
 
-        stylingTree.adjustAppearance(getExtraIcons = { style ->
-            val severity = severityPerStyle[style]
-            if (severity == null || severity == Severity.INFO) emptyList() else listOf(severity.icon)
-        })
+        // Update the grayed-out statuses and the violation icons of styles.
+        stylingTree.adjustAppearance(
+            isGrayedOut = if (usedStyles == null) null else { style ->
+                style is ListedStyle && usedStyles.none { it.identity == style.identity }
+            },
+            getExtraIcons = { style ->
+                val severity = severityPerStyle[(style as Style).identity]
+                if (severity == null || severity == Severity.INFO) emptyList() else listOf(severity.icon)
+            }
+        )
+
+        // Assemble the override context. If the project couldn't be drawn, submit null, which will retain the old one.
+        val submittedOverrideCtx = drawnProject?.let {
+            // Find the runtime of the first credits sequence.
+            val runtime =
+                drawnProject.drawnCreditsBooks.firstOrNull()?.drawnCredits?.firstOrNull()?.video?.numFrames ?: 0
+
+            // Find the runtime of the first occurrences of each individual scroll style.
+            val scrollStyleRuntimes = HashMap<String, Int>()
+            for (drawnCreditsBook in drawnProject.drawnCreditsBooks)
+                for (drawnCredits in drawnCreditsBook.drawnCredits)
+                    for (drawnPage in drawnCredits.drawnPages)
+                        for ((stage, stageInfo) in drawnPage.page.stages.zip(drawnPage.stageInfo))
+                            if (stageInfo is DrawnStageInfo.Scroll)
+                                scrollStyleRuntimes.putIfAbsent(stage.style.name, stageInfo.frames)
+
+            OverrideWidgetSpec.Context(runtime, scrollStyleRuntimes)
+        }
+
+        // Submit the constraint violations and override context.
+        formAdjuster.updateConstraintViolationsAndOverrideCtx(constraintViolations, submittedOverrideCtx)
     }
+
+    override fun getMinimumSize(): Dimension =
+        if (isMinimumSizeSet) super.getMinimumSize() else Dimension(400, 150)
 
 
     /**
@@ -453,15 +499,14 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
         override fun preferredLayoutSize(parent: Container): Dimension {
             val rows = flowIntoRows(parent)
             val height = rows.sumOf(Row::height) + gap * (rows.size - 1)
-            val insets = parent.insets
-            return Dimension(parent.width + insets.left + insets.right, height + insets.top + insets.bottom)
+            return Dimension(parent.width, height + parent.insets.run { top + bottom })
         }
 
         override fun layoutContainer(parent: Container) {
             val insets = parent.insets
             var y = insets.top
             for (row in flowIntoRows(parent)) {
-                var x = insets.left + (parent.width - row.width) / 2
+                var x = insets.left + (parent.width - insets.run { left + right } - row.width) / 2
                 for (comp in row.comps) {
                     val pref = comp.preferredSize
                     comp.setBounds(x, y, pref.width, pref.height)
@@ -477,10 +522,11 @@ class EditStylingPanel(private val ctrl: ProjectController) : JPanel() {
             var rowComps = mutableListOf<Component>()
             var rowWidth = 0
             var rowHeight = 0
+            val availWidth = parent.width - parent.insets.run { left + right }
             for (idx in 0..<parent.componentCount) {
                 val comp = parent.getComponent(idx)
                 val pref = comp.preferredSize
-                if (rowWidth == 0 || rowWidth + gap + pref.width <= parent.width) {
+                if (rowWidth == 0 || rowWidth + gap + pref.width <= availWidth) {
                     rowComps.add(comp)
                     if (rowWidth != 0) rowWidth += gap
                     rowWidth += pref.width

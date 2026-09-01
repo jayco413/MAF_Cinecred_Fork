@@ -18,7 +18,7 @@ import javax.imageio.ImageIO
 
 
 /**
- * This task transcodes the logo SVG to the platform-specific icon image format and put it into the packaging folder.
+ * This task transcodes the emblem SVG to the platform-specific icon image format and put it into the packaging folder.
  * For Windows and macOS, it additionally creates the appropriate installer background images.
  */
 abstract class DrawImages : DefaultTask() {
@@ -28,7 +28,7 @@ abstract class DrawImages : DefaultTask() {
     @get:Input
     abstract val forOS: Property<Platform.OS>
     @get:InputFile
-    abstract val logoFile: RegularFileProperty
+    abstract val emblemFile: RegularFileProperty
     @get:InputFile
     abstract val semiFontFile: RegularFileProperty
     @get:InputFile
@@ -39,25 +39,25 @@ abstract class DrawImages : DefaultTask() {
     @TaskAction
     fun run() {
         val version = version.get()
-        val logoFile = logoFile.get().asFile
+        val emblemFile = emblemFile.get().asFile
         val outputDir = outputDir.get().asFile
 
-        val logo = Logo(logoFile)
+        val emblem = Logo(emblemFile)
         val semiFont = Font.createFonts(semiFontFile.get().asFile)[0]!!
         val boldFont = Font.createFonts(boldFontFile.get().asFile)[0]!!
 
         when (forOS.get()) {
             Platform.OS.WINDOWS -> {
-                logo.transcode(16, 20, 24, 32, 40, 48, 64, 256, file = outputDir.resolve("icon.ico"))
+                emblem.transcode(16, 20, 24, 32, 40, 48, 64, 256, file = outputDir.resolve("icon.ico"))
                 buildImage(outputDir.resolve("banner.bmp"), 493, 58, BufferedImage.TYPE_INT_RGB) { g2 ->
                     g2.color = Color.WHITE
                     g2.fillRect(0, 0, 493, 58)
-                    g2.drawImage(logo.rasterize(48), 438, 5, null)
+                    g2.drawImage(emblem.rasterize(48), 438, 5, null)
                 }
                 buildImage(outputDir.resolve("sidebar.bmp"), 493, 312, BufferedImage.TYPE_INT_RGB) { g2 ->
                     g2.color = Color.WHITE
                     g2.fillRect(165, 0, 493, 312)
-                    g2.drawImage(logo.rasterize(100), 32, 28, null)
+                    g2.drawImage(emblem.rasterize(100), 32, 28, null)
                     g2.font = semiFont.deriveFont(32f)
                     g2.drawCenteredString("Cinecred", 0, 176, 165)
                     g2.font = boldFont.deriveFont(20f)
@@ -67,10 +67,10 @@ abstract class DrawImages : DefaultTask() {
             Platform.OS.MAC -> {
                 // Note: Currently, icons smaller than 128 written into an ICNS file by TwelveMonkeys cannot be
                 // properly parsed by macOS. We have to leave out those sizes to avoid glitches.
-                logo.transcode(128, 256, 512, 1024, margin = 0.055, file = outputDir.resolve("icon.icns"))
+                emblem.transcode(128, 256, 512, 1024, margin = 0.055, file = outputDir.resolve("icon.icns"))
                 fun buildBgImage(to: File, textColor: Color) {
                     buildImage(to, 182, 180, BufferedImage.TYPE_INT_ARGB) { g2 ->
-                        g2.drawImage(logo.rasterize(80), 51, 0, null)
+                        g2.drawImage(emblem.rasterize(80), 51, 0, null)
                         g2.color = textColor
                         g2.font = semiFont.deriveFont(24f)
                         g2.drawCenteredString("Cinecred", 0, 110, 182)
@@ -82,8 +82,8 @@ abstract class DrawImages : DefaultTask() {
                 buildBgImage(outputDir.resolve("background-dark.png"), Color.WHITE)
             }
             Platform.OS.LINUX -> {
-                logoFile.copyTo(outputDir.resolve("cinecred.svg"), overwrite = true)
-                logo.transcode(256, file = outputDir.resolve("cinecred.png"))
+                emblemFile.copyTo(outputDir.resolve("cinecred.svg"), overwrite = true)
+                emblem.transcode(256, file = outputDir.resolve("cinecred.png"))
             }
         }
     }

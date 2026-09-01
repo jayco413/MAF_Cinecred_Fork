@@ -256,10 +256,10 @@ fun convertPDFColorSpaceToColorSpace(pdCS: PDColorSpace, devCS: DeviceCS?): Colo
     }
 
 private fun convertSpaceDeviceGray(devCS: DeviceCS?): ColorSpace =
-    devCS?.deviceGray?.similarColorSpace ?: ColorSpace.of(ColorSpace.Primaries.XYZD65, ColorSpace.Transfer.SRGB)
+    devCS?.deviceGray?.similarColorSpace?.withPrimariesIfAbsent(ColorSpace.Primaries.BT709) ?: ColorSpace.SRGB
 
 private fun convertSpaceDeviceRGB(devCS: DeviceCS?): ColorSpace =
-    devCS?.deviceRGB?.similarColorSpace ?: ColorSpace.SRGB
+    devCS?.deviceRGB?.similarColorSpace?.withPrimariesIfAbsent(ColorSpace.Primaries.BT709) ?: ColorSpace.SRGB
 
 private fun convertSpaceCalGray(pdCS: PDCalGray): ColorSpace? {
     val info = getCalGrayInfo(pdCS)
@@ -276,7 +276,7 @@ private fun convertSpaceCalRGB(pdCS: PDCalRGB): ColorSpace? {
 private fun convertSpaceICCBased(pdCS: PDICCBased, devCS: DeviceCS?): ColorSpace? {
     val awtCS = pdCS.getAWTColorSpace()
     return if (awtCS != null)
-        ICCProfile.of(awtCS.profile).similarColorSpace
+        ICCProfile.of(awtCS.profile).similarColorSpace?.withPrimariesIfAbsent(ColorSpace.Primaries.BT709)
     else
         convertPDFColorSpaceToColorSpace(pdCS.getActivatedAlternateColorSpace()!!, devCS)
 }

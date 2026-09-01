@@ -1,5 +1,6 @@
 package com.loadingbyte.cinecred.imaging
 
+import com.loadingbyte.cinecred.setupNatives
 import com.loadingbyte.cinecred.project.*
 import kotlinx.collections.immutable.persistentListOf
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -11,12 +12,7 @@ internal class FlashingTextTest {
 
     companion object {
         init {
-            System.loadLibrary("skia")
-            System.loadLibrary("skiacapi")
-            System.loadLibrary("harfbuzz")
-            System.loadLibrary("zimg")
-            System.loadLibrary("nfd")
-            System.loadLibrary("decklinkcapi")
+            setupNatives()
         }
     }
 
@@ -26,9 +22,9 @@ internal class FlashingTextTest {
 
     @Test
     fun `plain text layer with flash colors becomes flashing coloring`() {
-        val layer = PRESET_LAYER.copy(
+        val layer = presetLayer().copy(
             shape = LayerShape.TEXT,
-            color1 = red,
+            plainColor = red,
             flashColors = persistentListOf(green, blue),
             flashIntervalFrames = 3
         )
@@ -44,7 +40,7 @@ internal class FlashingTextTest {
     fun `preview keeps primary color for flashing coat`() {
         val coat = DeferredImage.Coat.Flashing(listOf(red, green, blue), intervalFrames = 2)
 
-        val resolved = DeferredImage.resolveTextCoat(coat, frameIdx = 5, animateFlashingText = false)
+        val resolved = DeferredImage.Flashing(frameIdx = 5, animate = false).resolve(coat)
         val plain = assertInstanceOf(DeferredImage.Coat.Plain::class.java, resolved)
 
         assertEquals(red, plain.color)
@@ -56,15 +52,15 @@ internal class FlashingTextTest {
 
         val frame0 = assertInstanceOf(
             DeferredImage.Coat.Plain::class.java,
-            DeferredImage.resolveTextCoat(coat, frameIdx = 0, animateFlashingText = true)
+            DeferredImage.Flashing(frameIdx = 0, animate = true).resolve(coat)
         )
         val frame2 = assertInstanceOf(
             DeferredImage.Coat.Plain::class.java,
-            DeferredImage.resolveTextCoat(coat, frameIdx = 2, animateFlashingText = true)
+            DeferredImage.Flashing(frameIdx = 2, animate = true).resolve(coat)
         )
         val frame4 = assertInstanceOf(
             DeferredImage.Coat.Plain::class.java,
-            DeferredImage.resolveTextCoat(coat, frameIdx = 4, animateFlashingText = true)
+            DeferredImage.Flashing(frameIdx = 4, animate = true).resolve(coat)
         )
 
         assertEquals(red, frame0.color)

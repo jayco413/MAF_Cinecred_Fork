@@ -5,7 +5,8 @@ import com.loadingbyte.cinecred.common.Resolution
 import com.loadingbyte.cinecred.common.ceilDiv
 import jdk.incubator.vector.FloatVector
 import org.bytedeco.ffmpeg.avutil.AVFrame
-import org.bytedeco.ffmpeg.avutil.AVFrame.AV_NUM_DATA_POINTERS
+import org.bytedeco.ffmpeg.avutil.AVFrame.*
+import org.bytedeco.ffmpeg.avutil.AVPixFmtDescriptor
 import org.bytedeco.ffmpeg.global.avutil.*
 import org.bytedeco.javacpp.BytePointer
 import java.lang.Byte.toUnsignedInt
@@ -16,7 +17,6 @@ import java.lang.foreign.ValueLayout
 import java.lang.foreign.ValueLayout.*
 import java.nio.ByteOrder
 import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicReferenceArray
 import kotlin.math.max
 
 
@@ -33,7 +33,7 @@ import kotlin.math.max
 class Bitmap private constructor(
     val spec: Spec,
     /**
-     * The underlying [AVFrame]. Only access it while in an [ifNotClosed] or [requireNotClosed] block. And if possible,
+     * The underlying [AVFrame]. Only access it while in a [requireNotClosed] block. And if possible,
      * please use [memorySegment] and [linesize] instead.
      */
     val frame: AVFrame
@@ -60,12 +60,13 @@ class Bitmap private constructor(
     // These MemorySegments are not only useful for accessing the bitmap, they hopefully also make the garbage
     // collector aware that this object holds a large chunk of off-heap memory, so when it looks for non-reachable
     // or soft-reachable objects to free under memory pressure, it actually considers this one.
-    private val bufferSegment = frame.buf(0)?.let { buf ->
+    private val bufferSegment = frame.buf(0).let { buf ->
         MemorySegment.ofAddress(buf.data().address()).reinterpret(buf.size(), arena, null)
     }
     private val planeSegments = Array(spec.representation.pixelFormat.planes) { plane ->
         val addr = frame.data(plane).address()
-        val size = frame.linesize(plane) * spec.resolution.heightPx.toLong()
+        val planeHeight = spec.resolution.heightPx shr spec.representation.pixelFormat.vChromaSubOfPlane(plane)
+        val size = frame.linesize(plane) * planeHeight.toLong()
         MemorySegment.ofAddress(addr).reinterpret(size, arena, null)
     }
     private val linesizes = IntArray(planeSegments.size, frame::linesize)
@@ -76,21 +77,22 @@ class Bitmap private constructor(
         cleanable.clean()
     }
 
-    /** Keeps the bitmap open until the given action returns. If the bitmap is already closed, the action is not run. */
-    fun <T> ifNotClosed(action: () -> T): T? = closureProtector.ifNotClosed(action)
-
-    /** Keeps the bitmap open until the given action returns. If the bitmap is already closed, throws an exception. */
+    /**
+     * Keeps the bitmap open until the given action returns.
+     *
+     * @throws IllegalStateException If the bitmap is already closed.
+     */
     fun <T> requireNotClosed(action: () -> T): T = closureProtector.requireNotClosed(action)
 
     /** Pay attention to never reference this bitmap object from the listener! */
     fun addClosureListener(listener: Runnable) {
-        if (ifNotClosed { closureListeners += listener; Any() } == null) listener.run()
+        if (closureProtector.ifNotClosed { closureListeners += listener; listener } == null) listener.run()
     }
 
     /**
      * Returns a safe [MemorySegment] that grants direct access to the given [plane] of the bitmap. When operating on
      * the raw [MemorySegment.address], or implicitly writing the address to some struct and then passing that struct to
-     * a downcall handle, make sure to be in an [ifNotClosed] or [requireNotClosed] block. When instead using Java's
+     * a downcall handle, make sure to be in a [requireNotClosed] block. When instead using Java's
      * memory access methods or passing the segment directly to a downcall handle (as opposed to first resolving the raw
      * address), Java guarantees that the segment is not closed during the operation, so the *NotClosed blocks don't
      * need to be used.
@@ -105,6 +107,10 @@ class Bitmap private constructor(
         linesizes.getOrElse(plane) {
             throw IllegalArgumentException("Bitmap only has ${linesizes.size} planes, so $plane is out of bounds.")
         }
+
+    /** Returns the total number of bytes occupied by the picture data, excluding the [AVFrame]. */
+    val bytes: Long
+        get() = bufferSegment.byteSize()
 
     /**
      * Returns whether each plane of the bitmap starts at a [BYTE_ALIGNMENT]-aligned position and has a linesize that is
@@ -129,8 +135,14 @@ class Bitmap private constructor(
             return true
         }
 
+    /** Returns whether this bitmap shares any portion of memory with the other bitmap. */
     fun sharesStorageWith(other: Bitmap): Boolean =
-        bufferSegment != null && bufferSegment == other.bufferSegment
+        bufferSegment != null && other.bufferSegment != null &&
+                bufferSegment.asOverlappingSlice(other.bufferSegment).isPresent
+
+    /** Returns an object that identifies the content of this bitmap, irrespective of the bitmap object's identity. */
+    fun key(): Any =
+        Pair(spec, planeSegments.toList())
 
     /** Copies the bitmap object but shares the data. The new object can be [close]d without closing this one. */
     fun view(): Bitmap = reinterpretedView(spec)
@@ -138,6 +150,7 @@ class Bitmap private constructor(
     /** This method is guaranteed to return a new instance, which can be [close]d without closing the original one. */
     fun view(x: Int, y: Int, width: Int, height: Int, yStep: Int): Bitmap {
         val (specWidth, specHeight) = spec.resolution
+        val pixelFormat = spec.representation.pixelFormat
         require(x >= 0) { "Left view coordinate $x is < 0." }
         require(y >= 0) { "Top view coordinate $y is < 0." }
         require(width >= 1) { "View width $width is < 1." }
@@ -145,6 +158,10 @@ class Bitmap private constructor(
         require(yStep >= 1) { "Vertical view step $yStep is < 1." }
         require(x + width <= specWidth) { "Right view coordinate $x + $width exceeds bitmap width $specWidth." }
         require(y + height <= specHeight) { "Bottom view coordinate $y + $height exceeds bitmap height $specHeight." }
+        require(x % (1 shl pixelFormat.hChromaSub) == 0) { "Left view coordinate $x misaligns w/ h subsampling." }
+        require(y % (1 shl pixelFormat.vChromaSub) == 0) { "Top view coordinate $y misaligns w/ v subsampling." }
+        if (pixelFormat.vChromaSub != 0)
+            require(yStep == 1) { "Under vertical chroma subsampling, the vertical view step must be 1, not $yStep." }
         val viewResolution = Resolution(width, ceilDiv(height, yStep))
         val evenY = y % 2 == 0
         val evenYSkip = yStep % 2 == 0
@@ -153,24 +170,17 @@ class Bitmap private constructor(
                 evenYSkip && evenY -> Content.ONLY_TOP_FIELD
                 evenYSkip && !evenY -> Content.ONLY_BOT_FIELD
                 !evenYSkip && evenY -> Content.INTERLEAVED_FIELDS
-                else -> Content.INTERLEAVED_FIELDS_REVERSED
-            }
-            Content.INTERLEAVED_FIELDS_REVERSED -> when {
-                evenYSkip && evenY -> Content.ONLY_BOT_FIELD
-                evenYSkip && !evenY -> Content.ONLY_TOP_FIELD
-                !evenYSkip && evenY -> Content.INTERLEAVED_FIELDS_REVERSED
-                else -> Content.INTERLEAVED_FIELDS
+                else -> throw IllegalArgumentException("Under interlacing, the top view coordinate $y must be even.")
             }
             else -> spec.content
         }
         return allocateWithoutBufAndSetup(spec.copy(resolution = viewResolution, content = viewContent)) { viewFrame ->
             requireNotClosed { referenceBuffers(frame, viewFrame) }
-            val pixelFormat = spec.representation.pixelFormat
             for (plane in 0..<pixelFormat.planes) {
                 val ls = linesize(plane)
                 val step = pixelFormat.stepOfPlane(plane)
-                val realX = if (pixelFormat.hChromaSub != 0 && plane in 1..2) x shr pixelFormat.hChromaSub else x
-                val realY = if (pixelFormat.vChromaSub != 0 && plane in 1..2) y shr pixelFormat.vChromaSub else y
+                val realX = x shr pixelFormat.hChromaSubOfPlane(plane)
+                val realY = y shr pixelFormat.vChromaSubOfPlane(plane)
                 val offset = realY * ls + realX * step
                 viewFrame.data(plane, BytePointer().position(memorySegment(plane).address() + offset))
                 viewFrame.linesize(plane, ls * yStep)
@@ -182,7 +192,6 @@ class Bitmap private constructor(
     fun topFieldView(): Bitmap =
         when (spec.content) {
             Content.INTERLEAVED_FIELDS -> view(0, 0, spec.resolution.widthPx, spec.resolution.heightPx, 2)
-            Content.INTERLEAVED_FIELDS_REVERSED -> view(0, 1, spec.resolution.widthPx, spec.resolution.heightPx - 1, 2)
             else -> throw IllegalArgumentException("Cannot get top field view as bitmap is not interleaved fields.")
         }
 
@@ -190,7 +199,6 @@ class Bitmap private constructor(
     fun botFieldView(): Bitmap =
         when (spec.content) {
             Content.INTERLEAVED_FIELDS -> view(0, 1, spec.resolution.widthPx, spec.resolution.heightPx - 1, 2)
-            Content.INTERLEAVED_FIELDS_REVERSED -> view(0, 0, spec.resolution.widthPx, spec.resolution.heightPx, 2)
             else -> throw IllegalArgumentException("Cannot get bottom field view as bitmap is not interleaved fields.")
         }
 
@@ -217,7 +225,7 @@ class Bitmap private constructor(
                 else -> throw IllegalArgumentException("Cannot get alpha plane of $depth-bit bitmap.")
             }
         }
-        val viewRep = Representation(PixelFormat.of(viewPixelFormatCode))
+        val viewRep = Representation(PixelFormat.of(viewPixelFormatCode), ColorSpace.of(ColorSpace.Transfer.LINEAR))
         return allocateWithoutBufAndSetup(spec.copy(representation = viewRep)) { viewFrame ->
             requireNotClosed { referenceBuffers(frame, viewFrame) }
             viewFrame.data(0, BytePointer().position(memorySegment(comp.plane).address()))
@@ -245,7 +253,7 @@ class Bitmap private constructor(
     }
 
     fun zero(): Bitmap {
-        checkNotNull(bufferSegment) { "Cannot zero a bitmap that wraps a custom memory segment." }.fill(0)
+        bufferSegment.fill(0)
         return this
     }
 
@@ -263,7 +271,11 @@ class Bitmap private constructor(
         val vecC = ceiling?.let { FloatVector.broadcast(FloatVector.SPECIES_PREFERRED, it) }
         // Notice: We have verified through benchmarks that the JIT successfully lifts the switching over this variable
         // out of the hot loop. Performance matches that of manual lifting.
-        val action = if (ceiling == null) 0 else if (!pixelFormat.hasAlpha || promiseOpaque) 1 else 2
+        val action = when {
+            ceiling == null -> 0
+            promiseOpaque || spec.representation.alpha != Alpha.PREMULTIPLIED -> 1
+            else -> 2
+        }
         if (!pixelFormat.isPlanar) {
             val seg = memorySegment(0)
             val stepsPerLine = ceilDiv(w * pixelFormat.components.size, vecFloats)
@@ -322,6 +334,7 @@ class Bitmap private constructor(
     fun blit(src: Bitmap, srcX: Int, srcY: Int, srcWidth: Int, srcHeight: Int, dstX: Int, dstY: Int, yStep: Int) {
         val (srcSpecWidth, srcSpecHeight) = src.spec.resolution
         val (dstSpecWidth, dstSpecHeight) = spec.resolution
+        val pixelFormat = spec.representation.pixelFormat
         require(spec.representation == src.spec.representation) { "Source and dest bitmap representations differ." }
         require(srcX >= 0) { "Source x coordinate $srcX is < 0." }
         require(srcY >= 0) { "Source y coordinate $srcY is < 0." }
@@ -334,17 +347,20 @@ class Bitmap private constructor(
         require(dstX + srcWidth <= dstSpecWidth) { "$dstX + $srcWidth exceeds dest width $dstSpecWidth." }
         require(srcY + srcHeight <= srcSpecHeight) { "$srcY + $srcHeight exceeds source height $srcSpecHeight." }
         require(dstY + srcHeight <= dstSpecHeight) { "$dstY + $srcHeight exceeds dest height $dstSpecHeight." }
+        require(srcX % (1 shl pixelFormat.hChromaSub) == 0) { "Source x coordinate $srcX misaligns w/ h subsampling." }
+        require(srcY % (1 shl pixelFormat.vChromaSub) == 0) { "Source y coordinate $srcY misaligns w/ v subsampling." }
+        require(dstX % (1 shl pixelFormat.hChromaSub) == 0) { "Dest y coordinate $dstX misaligns w/ h subsampling." }
+        require(dstY % (1 shl pixelFormat.vChromaSub) == 0) { "Dest y coordinate $dstY misaligns w/ v subsampling." }
         if (spec.representation.pixelFormat.vChromaSub != 0)
             require(yStep == 1) { "Under vertical chroma subsampling, the vertical blit step must be 1, not $yStep." }
-        val pixelFormat = spec.representation.pixelFormat
         for (plane in 0..<pixelFormat.planes) {
             val srcSeg = src.memorySegment(plane)
             val dstSeg = memorySegment(plane)
             val srcLs = src.linesize(plane)
             val dstLs = linesize(plane)
             val step = pixelFormat.stepOfPlane(plane).toLong()
-            val hChromaSub = if (plane in 1..2) pixelFormat.hChromaSub else 0
-            val vChromaSub = if (plane in 1..2) pixelFormat.vChromaSub else 0
+            val hChromaSub = pixelFormat.hChromaSubOfPlane(plane)
+            val vChromaSub = pixelFormat.vChromaSubOfPlane(plane)
             var l = 0
             while (l < srcHeight shr vChromaSub) {
                 val srcOffset = ((srcY shr vChromaSub) + l) * srcLs + (srcX shr hChromaSub) * step
@@ -379,6 +395,10 @@ class Bitmap private constructor(
         require(dstComponent in dstPixelFormat.components) { "Dest component does not belong to dest." }
         require(srcComponent.depth == dstComponent.depth) { "Source and dest components have different depths." }
         require(componentSize in 1..2 || componentSize == 4) { "Component has not 1, 2, or 4 bytes." }
+        require(srcPixelFormat.hChromaSubOfPlane(srcComponent.plane) == 0) { "Source has horizontal subsampling." }
+        require(srcPixelFormat.vChromaSubOfPlane(srcComponent.plane) == 0) { "Source has vertical subsampling." }
+        require(dstPixelFormat.hChromaSubOfPlane(dstComponent.plane) == 0) { "Dest has horizontal subsampling." }
+        require(dstPixelFormat.vChromaSubOfPlane(dstComponent.plane) == 0) { "Dest has vertical subsampling." }
         val (width, height) = spec.resolution
         val srcSeg = src.memorySegment(srcComponent.plane)
         val dstSeg = memorySegment(dstComponent.plane)
@@ -409,6 +429,50 @@ class Bitmap private constructor(
             src.spec.representation.pixelFormat.components[srcComponentIndex],
             spec.representation.pixelFormat.components[dstComponentIndex]
         )
+    }
+
+    /** Order of operation: first transpose, then flip. */
+    fun blitReordered(src: Bitmap, flipH: Boolean, flipV: Boolean, transpose: Boolean) {
+        if (!flipH && !flipV && !transpose) {
+            blit(src)
+            return
+        }
+        require(spec.representation == src.spec.representation) { "Source and dest bitmap representations differ." }
+        if (transpose) {
+            require(spec.resolution.heightPx == src.spec.resolution.widthPx) { "Source width and dest height differ." }
+            require(spec.resolution.widthPx == src.spec.resolution.heightPx) { "Source height and dest width differ." }
+        } else
+            require(spec.resolution == src.spec.resolution) { "Source and dest resolutions differ." }
+        val (srcWidth, srcHeight) = src.spec.resolution
+        val pixelFormat = spec.representation.pixelFormat
+        for (plane in 0..<pixelFormat.planes) {
+            val srcSeg = src.memorySegment(plane)
+            val dstSeg = memorySegment(plane)
+            val srcLs = src.linesize(plane)
+            val dstLs = linesize(plane)
+            val step = pixelFormat.stepOfPlane(plane).toLong()
+            val srcPlWidth = srcWidth shr pixelFormat.hChromaSubOfPlane(plane)
+            val srcPlHeight = srcHeight shr pixelFormat.vChromaSubOfPlane(plane)
+            if (!flipH && flipV && !transpose)
+                for (y in 0L..<srcPlHeight)
+                    MemorySegment.copy(srcSeg, y * srcLs, dstSeg, (srcPlHeight - y - 1) * dstLs, srcPlWidth * step)
+            else
+                for (srcY in 0L..<srcPlHeight) {
+                    var s = srcY * srcLs
+                    var d = 0L
+                    if (!transpose)
+                        d = (if (flipV) srcPlHeight - srcY - 1 else srcY) * dstLs + (srcPlWidth - 1) * step
+                    for (srcX in 0..<srcPlWidth) {
+                        if (transpose)
+                            d = (if (flipV) srcPlWidth - srcX - 1 else srcX) * dstLs +
+                                    if (flipH) (srcPlHeight - srcY - 1) * step else srcY * step
+                        MemorySegment.copy(srcSeg, s, dstSeg, d, step)
+                        s += step
+                        if (!transpose)
+                            d -= step
+                    }
+                }
+        }
     }
 
     // Be aware that the following bulk get/put functions don't care about the actual pixel format, and hence can,
@@ -499,20 +563,6 @@ class Bitmap private constructor(
         }
 
         /**
-         * Wraps the given [MemorySegment] into a bitmap, but doesn't make it memory-managed. When the memory is freed,
-         * make sure to also close the bitmap, or otherwise access to it will result in a segfault.
-         */
-        fun wrap(spec: Spec, plane: MemorySegment, linesize: Int): Bitmap {
-            require(plane.address() != 0L) { "Cannot create a bitmap from a null pointer." }
-            return allocateWithoutBufAndSetup(spec) { frame ->
-                frame.data(0, BytePointer().position(plane.address()))
-                frame.linesize(0, linesize)
-                // Note: It is important to leave frame.buf empty! Otherwise, we've observed that FFmpeg does
-                // unpredictable things and tries to free the memory even though it really shouldn't!
-            }
-        }
-
-        /**
          * Allocates a new bitmap with an [aligned][isAligned] buffer following the given spec. Be aware that the
          * content of the bitmap is undefined; if you need it to be zeroed, use [zero].
          */
@@ -556,16 +606,11 @@ class Bitmap private constructor(
                 height(spec.resolution.heightPx)
                 format(spec.representation.pixelFormat.code)
                 color_range(spec.representation.range.code)
-                if (cs == null) {
-                    color_primaries(AVCOL_PRI_UNSPECIFIED)
-                    color_trc(AVCOL_TRC_LINEAR)
-                } else {
-                    color_primaries(if (cs.primaries.hasCode) cs.primaries.code else AVCOL_PRI_UNSPECIFIED)
-                    color_trc(
-                        if (cs.transfer.hasCode) cs.transfer.code(cs.primaries, spec.representation.pixelFormat.depth)
-                        else AVCOL_TRC_UNSPECIFIED
-                    )
-                }
+                color_primaries(if (cs.primaries?.hasCode == true) cs.primaries.code else AVCOL_PRI_UNSPECIFIED)
+                color_trc(
+                    if (cs.transfer.hasCode) cs.transfer.code(cs.primaries, spec.representation.pixelFormat.depth)
+                    else AVCOL_TRC_UNSPECIFIED
+                )
                 when (spec.representation.pixelFormat.family) {
                     PixelFormat.Family.GRAY -> colorspace(AVCOL_SPC_UNSPECIFIED)
                     PixelFormat.Family.RGB -> colorspace(AVCOL_SPC_RGB)
@@ -575,9 +620,11 @@ class Bitmap private constructor(
                 // If the video is interlaced, mark the frame that we send to the encoder accordingly.
                 // If the field order is bff, but we don't specify that for every single frame, the resulting file would
                 // have an additional (and wrong) metadata entry showing "original scan order = tff".
-                if (spec.scan != Scan.PROGRESSIVE) {
-                    interlaced_frame(1)
-                    top_field_first(if (spec.scan == Scan.INTERLACED_TOP_FIELD_FIRST) 1 else 0)
+                if (spec.content == Content.INTERLEAVED_FIELDS) {
+                    var flags = AV_FRAME_FLAG_INTERLACED
+                    if (spec.scan == Scan.INTERLACED_TOP_FIELD_FIRST)
+                        flags = flags or AV_FRAME_FLAG_TOP_FIELD_FIRST
+                    flags(flags)
                 }
             }
         }
@@ -601,9 +648,10 @@ class Bitmap private constructor(
     data class Spec(
         val resolution: Resolution,
         val representation: Representation,
-        val scan: Scan = Scan.PROGRESSIVE,
-        val content: Content = Content.PROGRESSIVE_FRAME
+        val scan: Scan,
+        val content: Content
     ) {
+
         init {
             require(resolution.widthPx > 0 && resolution.heightPx > 0)
             require((scan == Scan.PROGRESSIVE) == (content == Content.PROGRESSIVE_FRAME))
@@ -612,13 +660,17 @@ class Bitmap private constructor(
                 "Interlacing can't be used together with vertical subsampling."
             }
         }
+
+        constructor(resolution: Resolution, representation: Representation) :
+                this(resolution, representation, Scan.PROGRESSIVE, Content.PROGRESSIVE_FRAME)
+
     }
 
 
     data class Representation(
         val pixelFormat: PixelFormat,
         val range: Range,
-        val colorSpace: ColorSpace?,
+        val colorSpace: ColorSpace,
         val yuvCoefficients: YUVCoefficients?,
         /** One of the `AVCHROMA_LOC_*` constants. */
         val chromaLocation: Int,
@@ -627,19 +679,21 @@ class Bitmap private constructor(
 
         init {
             require(chromaLocation in 0..<AVCHROMA_LOC_NB)
-            require((pixelFormat.family == PixelFormat.Family.GRAY) == (colorSpace == null))
+            // Limited range is only well-defined (and well-supported by, e.g., zimg) for integer pixel formats.
+            require(!pixelFormat.isFloat || range == Range.FULL)
+            require((pixelFormat.family == PixelFormat.Family.GRAY) == (colorSpace.primaries == null))
             require((pixelFormat.family == PixelFormat.Family.YUV) == (yuvCoefficients != null))
             require(pixelFormat.hasChromaSub == (chromaLocation != AVCHROMA_LOC_UNSPECIFIED))
             require(pixelFormat.hasAlpha == (alpha != Alpha.OPAQUE))
         }
 
-        constructor(pixelFormat: PixelFormat) :
-                this(pixelFormat, Range.FULL, colorSpace = null, Alpha.OPAQUE)
+        constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace) :
+                this(pixelFormat, Range.FULL, colorSpace, Alpha.OPAQUE)
 
-        constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace?, alpha: Alpha) :
+        constructor(pixelFormat: PixelFormat, colorSpace: ColorSpace, alpha: Alpha) :
                 this(pixelFormat, Range.FULL, colorSpace, alpha)
 
-        constructor(pixelFormat: PixelFormat, range: Range, colorSpace: ColorSpace?, alpha: Alpha) :
+        constructor(pixelFormat: PixelFormat, range: Range, colorSpace: ColorSpace, alpha: Alpha) :
                 this(pixelFormat, range, colorSpace, yuvCoefficients = null, AVCHROMA_LOC_UNSPECIFIED, alpha)
 
     }
@@ -647,7 +701,8 @@ class Bitmap private constructor(
 
     class PixelFormat private constructor(
         /** One of the `AV_PIX_FMT_*` constants. */
-        val code: Int
+        val code: Int,
+        desc: AVPixFmtDescriptor
     ) {
 
         val name: String
@@ -664,14 +719,7 @@ class Bitmap private constructor(
         val planes: Int
 
         init {
-            val desc = av_pix_fmt_desc_get(code)
-                .ffmpegThrowIfNull("Could not retrieve pixel format descriptor")
             val f = desc.flags()
-
-            require(code != AV_PIX_FMT_XYZ12LE && code != AV_PIX_FMT_XYZ12BE) { "XYZ pixel formats are not supported." }
-            require(f and AV_PIX_FMT_FLAG_PAL.toLong() == 0L) { "Palette pixel formats are not supported." }
-            require(f and AV_PIX_FMT_FLAG_BAYER.toLong() == 0L) { "Bayer pixel formats are not supported." }
-            require(f and AV_PIX_FMT_FLAG_HWACCEL.toLong() == 0L) { "Hardware accel pixel formats are not supported." }
 
             name = desc.name().string
             isBitstream = f and AV_PIX_FMT_FLAG_BITSTREAM.toLong() != 0L
@@ -722,6 +770,9 @@ class Bitmap private constructor(
         fun stepOfPlane(plane: Int): Int =
             _planeSteps.getOrElse(plane) { throw IllegalArgumentException("Unknown plane: $plane") }
 
+        fun hChromaSubOfPlane(plane: Int): Int = if (plane in 1..2) hChromaSub else 0
+        fun vChromaSubOfPlane(plane: Int): Int = if (plane in 1..2) vChromaSub else 0
+
         fun isReinterpretableTo(other: PixelFormat): Boolean {
             if (planes < other.planes) return false
             for (plane in 0..<other.planes) if (_planeSteps[plane] != other._planeSteps[plane]) return false
@@ -736,13 +787,27 @@ class Bitmap private constructor(
 
         companion object {
 
-            private val cache = AtomicReferenceArray<PixelFormat>(AV_PIX_FMT_NB)
-
-            fun of(code: Int): PixelFormat {
-                cache.get(code)?.let { return it }
-                cache.compareAndSet(code, null, PixelFormat(code))
-                return cache.get(code)
+            private val LOOKUP = Array(AV_PIX_FMT_NB) { code ->
+                val desc = av_pix_fmt_desc_get(code)
+                    .ffmpegThrowIfNull("Could not retrieve pixel format descriptor")
+                val f = desc.flags()
+                if (f and AV_PIX_FMT_FLAG_XYZ.toLong() != 0L ||
+                    f and AV_PIX_FMT_FLAG_PAL.toLong() != 0L ||
+                    f and AV_PIX_FMT_FLAG_BAYER.toLong() != 0L ||
+                    f and AV_PIX_FMT_FLAG_HWACCEL.toLong() != 0L
+                )
+                    null
+                else
+                    PixelFormat(code, desc)
             }
+
+            val ALL: List<PixelFormat> =
+                LOOKUP.filterNotNull()
+
+            fun of(code: Int): PixelFormat =
+                LOOKUP[code] ?: throw IllegalArgumentException(
+                    "XYZ, palette, Bayer, and hardware acceleration pixel formats are not supported."
+                )
 
         }
 
@@ -784,6 +849,8 @@ class Bitmap private constructor(
             init {
                 populateCodeBased()
             }
+
+            val CODES: List<Int> = CODE_BASED.filterNotNull().map(YUVCoefficients::code)
 
             /** @throws IllegalArgumentException If the [code] does not refer to YUV coefficients. */
             fun of(code: Int): YUVCoefficients =
@@ -847,10 +914,8 @@ class Bitmap private constructor(
         ONLY_TOP_FIELD,
         /** The bitmap contains only the bottom field of an interlaced frame. */
         ONLY_BOT_FIELD,
-        /** The bitmap contains both fields of an interlaced frame, with the top field coded first. */
-        INTERLEAVED_FIELDS,
-        /** The bitmap contains both fields of an interlaced frame, with the bottom field coded first. */
-        INTERLEAVED_FIELDS_REVERSED
+        /** The bitmap contains both fields of an interlaced frame, interleaved in the order top, bottom, top... */
+        INTERLEAVED_FIELDS
     }
 
 

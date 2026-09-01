@@ -2,27 +2,31 @@ package com.loadingbyte.cinecred.ui.styling
 
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.Color4f
+import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.imaging.Transition
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.ui.helper.*
 import kotlinx.collections.immutable.toPersistentList
 import java.util.*
 import javax.swing.Icon
-import javax.swing.SpinnerNumberModel
+import javax.swing.JLabel
 
 
 class StyleForm<S : Style>(
     val styleClass: Class<S>,
     latent: Set<StyleSetting<in S, *>> = emptySet(),
-    insets: Boolean = true,
+    extraFormRows: Map<Int, FormRow> = emptyMap(),
+    insets: String = "18",
     noticeArea: Boolean = true,
     constLabelWidth: Boolean = true
-) : Form.Storable<S>(insets, noticeArea, constLabelWidth) {
+) : Form.Storable<S>(insets, noticeArea, maxLabelWidth = "min(25%, 250)", constLabelWidth) {
 
     private val valueWidgets = LinkedHashMap<StyleSetting<S, *>, Widget<*>>() // must retain order
     private val rootFormRows = mutableListOf<Pair<FormRow, List<StyleSetting<S, *>>>>()
     private val rootFormRowLookup = HashMap<StyleSetting<S, *>, FormRow>()
+    private val externallyManagedLabelsLookup = HashMap<StyleSetting<S, *>, List<JLabel>>()
 
+    private var identity = UUID.randomUUID()
     private val latentValues = latent.associateWithTo(HashMap<StyleSetting<in S, *>, Any?>()) { null }
     private var disableOnChange = false
 
@@ -30,7 +34,9 @@ class StyleForm<S : Style>(
         val widgetSpecs = getStyleWidgetSpecs(styleClass)
         val unionSpecs = widgetSpecs.filterIsInstance<UnionWidgetSpec<S>>()
 
+        var rowIdx = 0
         for (setting in getStyleSettings(styleClass)) {
+            extraFormRows[rowIdx]?.let { addFormRow(it); rowIdx++ }
             if (setting in latent)
                 continue
             val unionSpec = unionSpecs.find { setting in it.settings }
@@ -41,28 +47,33 @@ class StyleForm<S : Style>(
                     addSingleSettingWidget(setting)
                 else
                     addSettingUnionWidget(unionSpec)
+                rowIdx++
             }
         }
     }
 
     private fun addSingleSettingWidget(setting: StyleSetting<S, *>) {
         val valueWidget = makeSettingWidget(setting)
-        val wholeWidth = valueWidget is LayerListWidget<*, *>
-        val formRow = when {
-            wholeWidth -> FormRow("", valueWidget)
-            else -> makeFormRow(setting.name, getUnit(setting), valueWidget)
-        }
         valueWidgets[setting] = valueWidget
-        rootFormRows.add(Pair(formRow, listOf(setting)))
-        rootFormRowLookup[setting] = formRow
-        addFormRow(formRow, wholeWidth = wholeWidth)
-    }
-
-    private fun getUnit(setting: StyleSetting<S, *>): String? {
-        for (widgetSpec in getStyleWidgetSpecs(styleClass))
-            if (widgetSpec is UnitWidgetSpec && setting in widgetSpec.settings)
-                return widgetSpec.unit
-        return null
+        when (valueWidget) {
+            is RowManagingWidget<*> -> externallyManagedLabelsLookup[setting] = addRowManagingWidget(valueWidget)
+            is LayerListWidget<*, *> -> addWholeWidthWidget(valueWidget)
+            else -> {
+                var label: String? = null
+                var desc: String? = null
+                for (widgetSpec in getStyleWidgetSpecs(styleClass))
+                    if (widgetSpec is LabelWidgetSpec && setting in widgetSpec.settings) {
+                        label = label ?: widgetSpec.label ?: widgetSpec.labelL10nKey?.let(::l10n)
+                        desc = desc ?: widgetSpec.descL10nKey?.let(::l10n)
+                    }
+                label = label ?: l10n(l10nKey(setting.name))
+                desc = desc ?: desc(setting.name)
+                val formRow = makeFormRow(label, desc, valueWidget)
+                rootFormRows.add(Pair(formRow, listOf(setting)))
+                rootFormRowLookup[setting] = formRow
+                addFormRow(formRow)
+            }
+        }
     }
 
     private fun addSettingUnionWidget(spec: UnionWidgetSpec<S>) {
@@ -72,18 +83,15 @@ class StyleForm<S : Style>(
             val valueWidget = makeSettingWidget(setting)
             wrappedWidgets.add(valueWidget)
             valueWidgets[setting] = valueWidget
-            wrappedLabels?.add(
-                if (idx !in spec.settingLabels) null else {
-                    var wrappedLabel = l10n(l10nKey(setting.name))
-                    spec.settingUnits?.getOrNull(idx)?.let { wrappedLabel += " [$it]" }
-                    wrappedLabel
-                })
+            wrappedLabels?.add(if (idx !in spec.settingLabels) null else l10n(l10nKey(setting.name)))
         }
         val unionWidget = UnionWidget(
             wrappedWidgets, wrappedLabels, spec.settingIcons, spec.settingGaps, spec.settingNewlines
         )
         val unionName = spec.unionName ?: spec.settings.first().name
-        val formRow = makeFormRow(unionName, spec.unionUnit, unionWidget)
+        val unionLabel = spec.unionLabel ?: spec.unionLabelL10nKey?.let(::l10n) ?: l10n(l10nKey(unionName))
+        val unionDesc = spec.unionDescL10nKey?.let(::l10n) ?: desc(unionName)
+        val formRow = makeFormRow(unionLabel, unionDesc, unionWidget)
         rootFormRows.add(Pair(formRow, spec.settings))
         for (setting in spec.settings)
             rootFormRowLookup[setting] = formRow
@@ -99,6 +107,8 @@ class StyleForm<S : Style>(
                 makeBackingSettingWidget(setting, settingConstraints, settingWidgetSpecs)
             is OptStyleSetting ->
                 OptWidget(makeBackingSettingWidget(setting, settingConstraints, settingWidgetSpecs))
+            is OverrideStyleSetting ->
+                OverrideWidget(makeBackingSettingWidget(setting, settingConstraints, settingWidgetSpecs))
             is ListStyleSetting ->
                 makeListWidget(setting, settingConstraints, settingWidgetSpecs)
         }
@@ -141,6 +151,10 @@ class StyleForm<S : Style>(
                     )
                 else -> TextListWidget(widthSpec)
             }
+            setting.type == GradientStop::class.java -> ColorGradientWidget(
+                widthSpec = widthSpec,
+                minSize = minSizeConstr?.minSize ?: 2
+            )
             layerListWidgetSpec != null -> makeLayerListWidget(
                 @Suppress("UNCHECKED_CAST")
                 (setting as ListStyleSetting<S, LayerStyle>),
@@ -177,7 +191,7 @@ class StyleForm<S : Style>(
                     // the style form.
                     latent = setOf(LayerStyle::name.st(), LayerStyle::collapsed.st()),
                     // Horizontal space in nested forms is scarce, so save where we can.
-                    insets = false, noticeArea = false, constLabelWidth = false
+                    insets = "0", noticeArea = false, constLabelWidth = false
                 )
                 NestedFormWidget(nestedForm)
             },
@@ -212,37 +226,58 @@ class StyleForm<S : Style>(
         val styleNameConstr = settingConstraints.oneOf<StyleNameConstr<S, *>>()
         val colorConstr = settingConstraints.oneOf<ColorConstr<S>>()
         val siblingOrdinalConstr = settingConstraints.oneOf<SiblingOrdinalConstr<*>>()
+        val unitWidgetSpec = settingWidgetSpecs.oneOf<UnitWidgetSpec<S>>()
         val widthWidgetSpec = settingWidgetSpecs.oneOf<WidthWidgetSpec<S>>()
-        val numberWidgetSpec = settingWidgetSpecs.oneOf<NumberWidgetSpec<S>>()
+        val numberWidgetSpec = settingWidgetSpecs.oneOf<NumberWidgetSpec<S, Number>>()
         val toggleButtonGroupWidgetSpec = settingWidgetSpecs.oneOf<ToggleButtonGroupWidgetSpec<S, *>>()
-        val multiplierWidgetSpec = settingWidgetSpecs.oneOf<MultiplierWidgetSpec<S>>()
         val timecodeWidgetSpec = settingWidgetSpecs.oneOf<TimecodeWidgetSpec<S>>()
 
         val widthSpec = widthWidgetSpec?.widthSpec
 
-        val widget = when (setting.type) {
+        val widget = if ((fixedChoiceConstr != null || dynChoiceConstr != null || styleNameConstr != null) &&
+            toggleButtonGroupWidgetSpec == null
+        )
+            InconsistentComboBoxWidget(
+                setting.type,
+                items = fixedChoiceConstr?.run { choices.toList().requireIsInstance(setting.type) }
+                    ?: emptyList(),
+                toString = { item ->
+                    when (item) {
+                        is Enum<*> -> item.label
+                        is Number if numberWidgetSpec?.toString != null -> numberWidgetSpec.toString(item)
+                        else -> item.toString()
+                    }
+                },
+                widthSpec
+            )
+        else when (setting.type) {
             Int::class.javaPrimitiveType, Int::class.javaObjectType -> {
-                val min = intConstr?.min
-                val max = intConstr?.max
-                val step = numberWidgetSpec?.step ?: 1
-                val model = SpinnerNumberModel(min ?: max ?: 0, min, max, step)
+                val limiter = Scrubber.NumberLimiter(intConstr?.min, intConstr?.max, intConstr?.atom, intConstr?.mod)
                 if (siblingOrdinalConstr != null) {
                     // See makeListWidget() for a comment on why we need an inconsistent widget for sibling ordinals.
                     InconsistentComboBoxWidget(Int::class.javaObjectType, items = emptyList(), widthSpec = widthSpec)
-                } else if (timecodeWidgetSpec != null)
-                    TimecodeWidget(model, FPS(1, 1), TimecodeFormat.entries[0], widthSpec)
-                else
-                    SpinnerWidget(Int::class.javaObjectType, model, widthSpec = widthSpec)
+                } else if (timecodeWidgetSpec != null) {
+                    val scheme = Scrubber.FramesAsTimecodeScheme(FPS(1, 1), TimecodeFormat.entries[0])
+                    TimecodeWidget(scheme, limiter, widthSpec)
+                } else {
+                    // StyleFormAdjuster needs NumberWidgetSpecs to automatically adjust the sensitivity.
+                    requireNotNull(numberWidgetSpec?.sensitivity) { "$setting misses sensitivity WidgetSpec." }
+                    val unit = unitWidgetSpec?.unit
+                    val softAtom = numberWidgetSpec.softAtom as Int?
+                    val scheme = Scrubber.NumericScheme(Int::class.javaObjectType, unit = unit, softAtom = softAtom)
+                    ScrubberWidget(scheme, limiter, widthSpec = widthSpec)
+                }
             }
             Double::class.javaPrimitiveType, Double::class.javaObjectType -> {
-                val min = doubleConstr?.let { if (it.minInclusive) it.min else it.min?.plus(0.0001) }
-                val max = doubleConstr?.let { if (it.maxInclusive) it.max else it.max?.minus(0.0001) }
-                val step = numberWidgetSpec?.step ?: 1.0
-                val model = SpinnerNumberModel(min ?: max ?: 0.0, min, max, step)
-                if (multiplierWidgetSpec != null)
-                    MultipliedSpinnerWidget(model, widthSpec = widthSpec)
-                else
-                    SpinnerWidget(Double::class.javaObjectType, model, widthSpec = widthSpec)
+                // StyleFormAdjuster needs NumberWidgetSpecs to automatically adjust the sensitivity.
+                requireNotNull(numberWidgetSpec?.sensitivity) { "$setting misses sensitivity WidgetSpec." }
+                val min = doubleConstr?.let { if (it.minInclusive) it.min else it.min?.plus(0.001) }
+                val max = doubleConstr?.let { if (it.maxInclusive) it.max else it.max?.minus(0.001) }
+                val limiter = Scrubber.NumberLimiter(min, max, doubleConstr?.atom, doubleConstr?.mod)
+                val unit = unitWidgetSpec?.unit
+                val softAtom = numberWidgetSpec.softAtom as Double?
+                val scheme = Scrubber.NumericScheme(Double::class.javaObjectType, unit = unit, softAtom = softAtom)
+                ScrubberWidget(scheme, limiter, widthSpec = widthSpec)
             }
             Boolean::class.javaPrimitiveType, Boolean::class.javaObjectType -> when {
                 toggleButtonGroupWidgetSpec != null -> makeToggleButtonGroupWidget(
@@ -254,15 +289,7 @@ class StyleForm<S : Style>(
                 )
                 else -> CheckBoxWidget()
             }
-            String::class.java -> when {
-                fixedChoiceConstr != null || dynChoiceConstr != null || styleNameConstr != null ->
-                    InconsistentComboBoxWidget(
-                        String::class.java,
-                        items = fixedChoiceConstr?.run { choices.toList().requireIsInstance() } ?: emptyList(),
-                        widthSpec = widthSpec
-                    )
-                else -> TextWidget(widthSpec)
-            }
+            String::class.java -> TextWidget(widthSpec)
             Locale::class.java -> InconsistentComboBoxWidget(
                 Locale::class.java,
                 Locale.getAvailableLocales()
@@ -276,6 +303,7 @@ class StyleForm<S : Style>(
             FontRef::class.java -> FontChooserWidget(widthSpec)
             PictureRef::class.java -> RefComboBoxWidget(setting.type, emptyList(), { it.name }, ::PictureRef, widthSpec)
             TapeRef::class.java -> RefComboBoxWidget(setting.type, emptyList(), { it.name }, ::TapeRef, widthSpec)
+            FontVariations::class.java -> FontVariationsWidget()
             FontFeature::class.java -> FontFeatureWidget()
             Transition::class.java -> TransitionWidget()
             TapeSlice::class.java -> TapeSliceWidget()
@@ -288,12 +316,6 @@ class StyleForm<S : Style>(
                         getFixedIcon = toggleButtonGroupWidgetSpec.getFixedIcon,
                         dynIcons = toggleButtonGroupWidgetSpec.getDynIcon != null,
                         inconsistent = dynChoiceConstr != null
-                    )
-                    fixedChoiceConstr != null || dynChoiceConstr != null -> InconsistentComboBoxWidget(
-                        setting.type,
-                        items = fixedChoiceConstr?.run { choices.toList().requireIsInstance(setting.type) }
-                            ?: emptyList(),
-                        toString = { (it as Enum<*>).label }, widthSpec
                     )
                     else -> ComboBoxWidget(
                         setting.type, setting.type.enumConstants.asList(), toString = { (it as Enum<*>).label },
@@ -344,23 +366,24 @@ class StyleForm<S : Style>(
         inconsistent
     )
 
-    private fun makeFormRow(name: String, unit: String?, widget: Widget<*>): FormRow {
-        val l10nKey = l10nKey(name)
-        var label = l10n(l10nKey)
-        if (unit != null)
-            label += " [$unit]"
+    private fun makeFormRow(label: String, desc: String?, widget: Widget<*>): FormRow {
         val formRow = FormRow(label, widget)
-        try {
-            formRow.notice = Notice(Severity.INFO, l10n("$l10nKey.desc"))
-        } catch (_: MissingResourceException) {
-            // No desc specified for this row.
-        }
+        if (desc != null)
+            formRow.notice = Notice(Severity.INFO, desc)
         return formRow
     }
 
     private fun l10nKey(name: String) = "ui.styling." +
             styleClass.simpleName.removeSuffix("Style").replaceFirstChar(Char::lowercaseChar) +
             ".$name"
+
+    private fun desc(name: String) =
+        try {
+            l10n("${l10nKey(name)}.desc")
+        } catch (_: MissingResourceException) {
+            // No desc specified for this row.
+            null
+        }
 
     fun <T : Style> castToStyle(styleClass: Class<T>): StyleForm<T> {
         if (styleClass.isAssignableFrom(this.styleClass))
@@ -372,12 +395,20 @@ class StyleForm<S : Style>(
     fun getWidgetFor(setting: StyleSetting<S, *>): Widget<*> =
         valueWidgets.getValue(setting)
 
-    fun getFormRowFor(setting: StyleSetting<S, *>): FormRow =
-        rootFormRowLookup.getValue(setting)
+    fun <SUBJ : Any> getWidgetFor(setting: OverrideStyleSetting<S, SUBJ>): OverrideWidget<SUBJ> =
+        @Suppress("UNCHECKED_CAST")
+        (valueWidgets.getValue(setting) as OverrideWidget<SUBJ>)
+
+    fun getFormRowFor(setting: StyleSetting<S, *>): FormRow? =
+        rootFormRowLookup[setting]
+
+    fun getExternallyManagedLabelsFor(setting: StyleSetting<S, *>): List<JLabel> =
+        externallyManagedLabelsLookup[setting] ?: emptyList()
 
     override fun open(stored /* style */: S) {
         disableOnChange = true
         try {
+            identity = stored.identity
             for ((setting, widget) in valueWidgets)
                 @Suppress("UNCHECKED_CAST")
                 (widget as Widget<Any>).value = setting.get(stored)
@@ -388,10 +419,7 @@ class StyleForm<S : Style>(
         }
     }
 
-    fun <SUBJ : Any> openSingleSetting(setting: DirectStyleSetting<S, SUBJ>, value: SUBJ) = openSingle(setting, value)
-    fun <SUBJ : Any> openSingleSetting(setting: OptStyleSetting<S, SUBJ>, value: Opt<SUBJ>) = openSingle(setting, value)
-
-    private fun openSingle(setting: StyleSetting<S, *>, value: Any) {
+    fun <SUBJ : Any> openSingleSetting(setting: DirectStyleSetting<S, SUBJ>, value: SUBJ) {
         disableOnChange = true
         try {
             @Suppress("UNCHECKED_CAST")
@@ -404,7 +432,7 @@ class StyleForm<S : Style>(
     }
 
     override fun save(): S =
-        newStyleUnsafe(styleClass, getStyleSettings(styleClass).map { setting ->
+        newStyleUnsafe(styleClass, identity, getStyleSettings(styleClass).map { setting ->
             val value = valueWidgets[setting]?.value ?: latentValues[setting]!!
             if (value is List<*>) value.toPersistentList() else value
         })
@@ -422,6 +450,11 @@ class StyleForm<S : Style>(
                     }
                     is OptStyleSetting -> {
                         val formWidget = (valueWidgets[setting] as OptWidget<*>).wrapped as NestedFormWidget
+                        nestedForms.add(formWidget.form as StyleForm)
+                        nestedStyles.add(setting.get(style).value as NestedStyle)
+                    }
+                    is OverrideStyleSetting -> {
+                        val formWidget = (valueWidgets[setting] as OverrideWidget<*>).wrapped as NestedFormWidget
                         nestedForms.add(formWidget.form as StyleForm)
                         nestedStyles.add(setting.get(style).value as NestedStyle)
                     }
@@ -465,41 +498,51 @@ class StyleForm<S : Style>(
             }
             formRow.setAffixVisible(rowStatus != 2)
             formRow.setAffixEnabled(rowStatus != 1)
-            // For each widget individually, find its status and apply it. Separating this from the row status is
-            // relevant for UnionWidgets.
-            for (setting in settings) {
-                val settingStatus =
-                    if (setting in hiddenSettings) 2
-                    else status(ineffectiveSettings.getOrDefault(setting, Effectivity.EFFECTIVE))
-                val widget = valueWidgets.getValue(setting)
-                widget.isVisible = settingStatus != 2
-                widget.isEnabled = settingStatus != 1
-            }
+        }
+
+        // For each widget individually, find its status and apply it. Separating this from the row status is
+        // relevant for UnionWidgets, and cases like whole width widgets, which do not have a proper form row.
+        for ((setting, widget) in valueWidgets) {
+            val settingStatus =
+                if (setting in hiddenSettings) 2
+                else status(ineffectiveSettings.getOrDefault(setting, Effectivity.EFFECTIVE))
+            widget.isVisible = settingStatus != 2
+            widget.isEnabled = settingStatus != 1
         }
     }
 
     fun clearIssues() {
         for ((formRow, _) in rootFormRows)
             formRow.noticeOverride = null
-        for (widget in valueWidgets.values)
+        for (widget in valueWidgets.values) {
+            if (widget is RowManagingWidget<*>)
+                widget.clearNoticeOverrides()
             widget.setSeverity(-1, null)
+        }
     }
 
     fun showIssueIfMoreSevere(setting: StyleSetting<*, *>, subjectIndex: Int, issue: Notice) {
-        // Only show the notice message if there isn't already a notice with the same or a higher severity.
-        val formRow = rootFormRowLookup[setting]!!
-        val prevNoticeOverride = formRow.noticeOverride
-        if (prevNoticeOverride == null || issue.severity > prevNoticeOverride.severity)
-            formRow.noticeOverride = issue
-        // Only increase and not decrease the severity on the widget.
         val widget = valueWidgets[setting]!!
+        // Only show the notice message if there isn't already a notice with the same or a higher severity.
+        if (widget is RowManagingWidget<*>) {
+            // Note: We make the assumption that every subject is on its own row.
+            val prevNoticeOverride = widget.getNoticeOverride(subjectIndex)
+            if (prevNoticeOverride == null || issue.severity > prevNoticeOverride.severity)
+                widget.setNoticeOverride(subjectIndex, issue)
+        } else {
+            val formRow = rootFormRowLookup[setting] ?: return
+            val prevNoticeOverride = formRow.noticeOverride
+            if (prevNoticeOverride == null || issue.severity > prevNoticeOverride.severity)
+                formRow.noticeOverride = issue
+        }
+        // Only increase and not decrease the severity on the widget.
         val prevSeverity = widget.getSeverity(subjectIndex)
         if (prevSeverity == null || issue.severity > prevSeverity)
             widget.setSeverity(subjectIndex, issue.severity)
     }
 
     fun setSwatchColors(swatchColors: List<Color4f>) {
-        val configurator = { w: Widget<*> -> if (w is ColorWellWidget) w.swatchColors = swatchColors }
+        val configurator = { w: Widget<*> -> if (w is AbstractColorWidget) w.swatchColors = swatchColors }
         for (widget in valueWidgets.values)
             widget.applyConfigurator(configurator)
     }
@@ -510,14 +553,11 @@ class StyleForm<S : Style>(
             widget.applyConfigurator(configurator)
     }
 
-    fun setChoices(setting: StyleSetting<*, *>, choices: List<Any>, unique: Boolean = false) {
-        val remaining = if (unique) choices.toMutableList() else choices
+    fun setChoices(setting: StyleSetting<*, *>, choices: List<Any>) {
         valueWidgets[setting]!!.applyConfigurator { widget ->
             if (widget is Choice<*>) {
                 @Suppress("UNCHECKED_CAST")
-                (widget as Choice<Any>).items = remaining
-                if (unique)
-                    (remaining as MutableList).remove(widget.value)
+                (widget as Choice<Any>).items = choices
             }
         }
     }
@@ -541,18 +581,46 @@ class StyleForm<S : Style>(
         }
     }
 
+    fun setSensitivity(setting: StyleSetting<S, *>, sensitivity: Double) {
+        valueWidgets.getValue(setting).applyConfigurator { widget ->
+            if (widget is ScrubberWidget)
+                widget.sensitivity = sensitivity
+        }
+    }
+
     fun setMultiplier(setting: StyleSetting<S, *>, multiplier: Double) {
         valueWidgets.getValue(setting).applyConfigurator { widget ->
-            if (widget is MultipliedSpinnerWidget)
-                widget.multiplier = multiplier
+            if (widget is ScrubberWidget) {
+                @Suppress("UNCHECKED_CAST")
+                widget as ScrubberWidget<Double>
+                val scheme = widget.scheme
+                if (scheme is Scrubber.NumericScheme && scheme.valueClass == Double::class.javaObjectType)
+                    widget.scheme = scheme.copy(multiplier = multiplier)
+            }
         }
     }
 
     fun setTimecodeFPSAndFormat(setting: StyleSetting<S, *>, fps: FPS, timecodeFormat: TimecodeFormat) {
         valueWidgets.getValue(setting).applyConfigurator { widget ->
-            if (widget is TimecodeWidget) {
-                widget.fps = fps
-                widget.timecodeFormat = timecodeFormat
+            if (widget is TimecodeWidget)
+                widget.scheme = Scrubber.FramesAsTimecodeScheme(fps, timecodeFormat)
+        }
+    }
+
+    fun setFontAxes(setting: StyleSetting<S, *>, axes: List<Font.Axis>) {
+        valueWidgets.getValue(setting).applyConfigurator { widget ->
+            if (widget is FontVariationsWidget)
+                widget.axes = axes
+        }
+    }
+
+    fun setFontFacets(setting: StyleSetting<S, *>, facets: List<Font.Facet>) {
+        val remaining = facets.toMutableList()
+        valueWidgets[setting]!!.applyConfigurator { widget ->
+            if (widget is FontFeatureWidget) {
+                widget.facets = remaining.toMutableList()  // Pass in a copy because we're modifying the list.
+                val tag = widget.value.tag
+                remaining.removeIf { it.tag == tag }
             }
         }
     }
@@ -573,6 +641,13 @@ class StyleForm<S : Style>(
         valueWidgets.getValue(setting).applyConfigurator { widget ->
             if (widget is AbstractListWidget<*, *>)
                 widget.elementCount = size
+        }
+    }
+
+    fun setGradientInterpolation(setting: ListStyleSetting<S, *>, interpolation: GradientInterpolation) {
+        valueWidgets.getValue(setting).applyConfigurator { widget ->
+            if (widget is ColorGradientWidget)
+                widget.interpolation = interpolation
         }
     }
 

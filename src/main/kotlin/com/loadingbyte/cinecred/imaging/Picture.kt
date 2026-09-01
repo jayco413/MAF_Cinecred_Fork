@@ -2,6 +2,7 @@ package com.loadingbyte.cinecred.imaging
 
 import com.formdev.flatlaf.util.SystemInfo
 import com.loadingbyte.cinecred.common.*
+import com.loadingbyte.cinecred.imaging.Bitmap.Alpha
 import com.loadingbyte.cinecred.imaging.pdf.PDFDrawer
 import com.loadingbyte.cinecred.ui.helper.newLabelEditorPane
 import com.loadingbyte.cinecred.ui.helper.tryBrowse
@@ -10,8 +11,7 @@ import org.apache.pdfbox.multipdf.LayerUtility
 import org.apache.pdfbox.pdmodel.PDDocument
 import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject
 import org.apache.pdfbox.pdmodel.graphics.form.PDTransparencyGroupAttributes
-import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_GBRAPF32
-import org.bytedeco.ffmpeg.global.avutil.AV_PIX_FMT_GBRPF32
+import org.bytedeco.ffmpeg.global.avutil.*
 import org.slf4j.LoggerFactory
 import org.w3c.dom.Attr
 import org.w3c.dom.Document
@@ -19,6 +19,8 @@ import org.w3c.dom.Element
 import org.w3c.dom.Text
 import org.w3c.dom.traversal.NodeFilter.SHOW_ELEMENT
 import org.w3c.dom.traversal.NodeFilter.SHOW_TEXT
+import java.awt.Rectangle
+import java.awt.Shape
 import java.awt.geom.AffineTransform
 import java.awt.geom.Rectangle2D
 import java.io.ByteArrayInputStream
@@ -26,6 +28,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.StringWriter
 import java.nio.file.Path
+import java.util.*
 import java.util.concurrent.locks.ReentrantLock
 import javax.imageio.ImageIO
 import javax.swing.FocusManager
@@ -38,8 +41,11 @@ import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.stream.StreamResult
 import kotlin.concurrent.withLock
 import kotlin.io.path.*
+import kotlin.jvm.optionals.getOrElse
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 
 /** An abstraction over all the kinds of input images that a [DeferredImage] can work with: Raster, SVG, and PDF. */
@@ -48,35 +54,72 @@ sealed interface Picture : AutoCloseable {
     val width: Double
     val height: Double
 
-    fun drawTo(canvas: Canvas, transform: AffineTransform? = null)
+    /**
+     * @param crop Crops the picture to this rectangle prior to any processing.
+     * @param resamplingFilter Only has an effect for raster pictures.
+     * @throws Exception
+     */
+    fun drawTo(
+        canvas: Canvas,
+        crop: Rectangle2D? = null,
+        transform: AffineTransform? = null,
+        resamplingFilter: BitmapConverter.ResamplingFilter = BitmapConverter.ResamplingFilter.DEFAULT,
+        clip: List<Shape> = emptyList(),
+        cache: Boolean = false
+    )
 
-    fun prepareAsBitmap(canvas: Canvas, transform: AffineTransform?, cached: Canvas.PreparedBitmap?):
-            Canvas.PreparedBitmap?
+    /**
+     * @return If null, the picture is fully blank.
+     * @throws Exception
+     */
+    fun nonBlankBounds(crop: Rectangle2D? = null, transform: AffineTransform? = null): Rectangle2D?
 
 
-    class Raster private constructor(
+    class Raster(
         /**
-         * A planar float32 RBG(A) bitmap with full range, linear transfer characteristics, and premultiplied alpha.
+         * A progressive planar float32 RBG(A) bitmap.
          *
          * We have chosen that format as it can directly be understood by zimg, which we use for scaling and other
-         * transformations before passing the result to Skia for blitting. We use premultiplied alpha because scaling is
-         * performed with premultiplied alpha, so we want the picture to already be in the correct format for that.
+         * transformations before passing the result to Skia for blitting.
          */
         val bitmap: Bitmap
     ) : Picture {
 
+        private val canvasCache = Canvas.Cache()
+        private val nonBlankBoundaryPointsCache = lazy { DisposableCache<Rectangle, DoubleArray>() }
+
+        init {
+            val pixFmtCode = bitmap.spec.representation.pixelFormat.code
+            require(pixFmtCode == AV_PIX_FMT_GBRPF32 || pixFmtCode == AV_PIX_FMT_GBRAPF32)
+            require(bitmap.spec.scan == Bitmap.Scan.PROGRESSIVE)
+        }
+
         override val width get() = bitmap.spec.resolution.widthPx.toDouble()
         override val height get() = bitmap.spec.resolution.heightPx.toDouble()
 
-        // If the project that opened the picture has been closed and with it the picture (which is possible because
-        // materialization happens in a background thread), just silently skip the operation.
-        override fun drawTo(canvas: Canvas, transform: AffineTransform?) {
-            bitmap.ifNotClosed { canvas.drawImage(bitmap, transform = transform) }
+        override fun drawTo(
+            canvas: Canvas,
+            crop: Rectangle2D?,
+            transform: AffineTransform?,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
+            clip: List<Shape>,
+            cache: Boolean
+        ) {
+            val cropped = if (crop == null) bitmap.view() else {
+                val c = bitmap.spec.resolution.let { Rectangle(it.widthPx, it.heightPx) }.intersection(
+                    (crop as? Rectangle) ?: Rectangle(
+                        crop.x.roundToInt(), crop.y.roundToInt(), crop.width.roundToInt(), crop.height.roundToInt()
+                    )
+                )
+                bitmap.view(c.x, c.y, c.width, c.height, 1)
+            }
+            cropped.use {
+                canvas.drawImage(
+                    cropped, resamplingFilter = resamplingFilter, transform = transform, clip = clip,
+                    cache = if (cache) canvasCache else null
+                )
+            }
         }
-
-        override fun prepareAsBitmap(
-            canvas: Canvas, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = bitmap.ifNotClosed { canvas.prepareBitmap(bitmap, transform = transform, cached = cached) }
 
         override fun close() {
             try {
@@ -84,21 +127,41 @@ sealed interface Picture : AutoCloseable {
             } catch (_: IllegalStateException) {
                 // If the bitmap is used right now, let the GC collect and close it later.
             }
+            canvasCache.close()
+            if (nonBlankBoundaryPointsCache.isInitialized())
+                nonBlankBoundaryPointsCache.value.close()
+        }
+
+        override fun nonBlankBounds(crop: Rectangle2D?, transform: AffineTransform?): Rectangle2D? {
+            val crop = (crop as? Rectangle)
+                ?: crop?.run { Rectangle(x.roundToInt(), y.roundToInt(), width.roundToInt(), height.roundToInt()) }
+                ?: bitmap.spec.resolution.run { Rectangle(0, 0, widthPx, heightPx) }
+
+            if (!bitmap.spec.representation.pixelFormat.hasAlpha)
+                return Rectangle(crop.width, crop.height).transformedBy(transform).bounds
+
+            val boundaryPoints = nonBlankBoundaryPointsCache.value.get(crop) {
+                val array = findBoundaryPoints(bitmap, crop)
+                SizedValue(array, array.size * 8L)
+            }
+            return findNonBlankBounds(boundaryPoints, transform)
         }
 
         companion object {
 
-            fun compatibleRepresentation(primaries: ColorSpace.Primaries, hasAlpha: Boolean) = Bitmap.Representation(
-                Bitmap.PixelFormat.of(if (hasAlpha) AV_PIX_FMT_GBRAPF32 else AV_PIX_FMT_GBRPF32),
-                ColorSpace.of(primaries, ColorSpace.Transfer.LINEAR),
-                if (hasAlpha) Bitmap.Alpha.PREMULTIPLIED else Bitmap.Alpha.OPAQUE
-            )
+            fun compatibleRepresentation(colorSpace: ColorSpace, alpha: Alpha): Bitmap.Representation =
+                Bitmap.Representation(
+                    Bitmap.PixelFormat.of(if (alpha == Alpha.OPAQUE) AV_PIX_FMT_GBRPF32 else AV_PIX_FMT_GBRAPF32),
+                    // For grayscale, using a color space where white is (1,1,1) ensures that reinterpreting the
+                    // transfer characteristics doesn't introduce a color shift.
+                    colorSpace.withPrimariesIfAbsent(ColorSpace.Primaries.XYZE),
+                    alpha
+                )
 
-            /** After this constructor returns, [bitmap] may be closed without affecting the new picture object. */
-            operator fun invoke(bitmap: Bitmap): Raster {
+            /** After this method returns, [bitmap] may be closed without affecting the new picture object. */
+            fun convert(bitmap: Bitmap): Raster {
                 val (res, rep, scan) = bitmap.spec
-                val cs = requireNotNull(rep.colorSpace) { "Cannot create picture from a bitmap without a color space." }
-                val requiredRep = compatibleRepresentation(cs.primaries, rep.pixelFormat.hasAlpha)
+                val requiredRep = compatibleRepresentation(rep.colorSpace, rep.alpha)
                 val newBitmap = when {
                     rep != requiredRep ->
                         Bitmap.allocate(Bitmap.Spec(res, requiredRep)).also { BitmapConverter.convert(bitmap, it) }
@@ -120,64 +183,74 @@ sealed interface Picture : AutoCloseable {
 
     sealed class Vector : Picture {
 
-        val cropX: Double get() = minBox.x
-        val cropY: Double get() = minBox.y
-        val cropWidth: Double get() = minBox.width
-        val cropHeight: Double get() = minBox.height
+        private val canvasCache = Canvas.Cache()
+        @Volatile private var roughNonBlankBounds: Optional<Rectangle2D>? = null
+        private val nonBlankBoundaryPointsCache = DisposableCache<Rectangle2D, DoubleArray>()
 
-        private val minBox: Rectangle2D by lazy {
-            val origBox = Rectangle2D.Double(0.0, 0.0, width, height)
-            val minBox = empiricallyFindMinBox(origBox)
-            // If the reduction is severe, do a second pass to better identify the exact boundaries.
-            if (minBox.width >= 0.5 * origBox.width && minBox.height >= 0.5 * origBox.height) minBox else
-                empiricallyFindMinBox(minBox.apply { x -= 2.0; y -= 2.0; width += 4.0; height += 4.0 })
+        override fun drawTo(
+            canvas: Canvas,
+            crop: Rectangle2D?,
+            transform: AffineTransform?,
+            resamplingFilter: BitmapConverter.ResamplingFilter,
+            clip: List<Shape>,
+            cache: Boolean
+        ) {
+            var transform = transform
+            var clip = clip
+            val cache = if (cache) canvasCache else null
+            if (crop != null) {
+                transform = AffineTransform.getTranslateInstance(-crop.x, -crop.y)
+                    .apply { transform?.let(::preConcatenate) }
+                clip = clip + crop.transformedBy(transform)
+            }
+            doDrawTo(canvas, transform, clip, cache)
         }
 
-        // This method finds the minimal bounding box by just rendering the picture and looking at the pixels.
-        private fun empiricallyFindMinBox(curBox: Rectangle2D.Double): Rectangle2D.Double {
-            if (curBox.width < 0.001 || curBox.height < 0.001)
-                return curBox
-            val s = 1000.0 / max(curBox.width, curBox.height)
-            val res = Resolution(ceil(curBox.width * s).toInt(), ceil(curBox.height * s).toInt())
+        protected abstract fun doDrawTo(
+            canvas: Canvas, transform: AffineTransform?, clip: List<Shape>, cache: Canvas.Cache?
+        )
+
+        override fun close() {
+            canvasCache.close()
+            nonBlankBoundaryPointsCache.close()
+        }
+
+        override fun nonBlankBounds(crop: Rectangle2D?, transform: AffineTransform?): Rectangle2D? {
+            if (roughNonBlankBounds == null) {
+                val s = 1000.0 / max(width, height)
+                roughNonBlankBounds = render(s, Rectangle2D.Double(0.0, 0.0, width, height))
+                    ?.use { bitmap -> findNonBlankBounds(findBoundaryPoints(bitmap)) }
+                    ?.apply { setRect((x - 2) / s, (y - 2) / s, (width + 4) / s, (height + 4) / s) }
+                    .let(Optional<*>::ofNullable)
+            }
+            val roughNonBlankBounds = roughNonBlankBounds!!.getOrElse { return null }
+
+            val crop = crop ?: Rectangle2D.Double(0.0, 0.0, width, height)
+            val renderCrop = crop.createIntersection(roughNonBlankBounds)
+            val renderScaling = 1000.0 / max(renderCrop.width, renderCrop.height)
+
+            // Note: This cache exactly matches float-based rectangles, but float inaccuracy is not a problem since the
+            // crop directly stems from user configuration without any intermediate computational steps.
+            val boundaryPoints = nonBlankBoundaryPointsCache.get(crop) {
+                val array = render(renderScaling, renderCrop)?.use(::findBoundaryPoints) ?: DoubleArray(0)
+                SizedValue(array, array.size * 8L)
+            }
+            return findNonBlankBounds(boundaryPoints, (transform?.let(::AffineTransform) ?: AffineTransform()).apply {
+                translate(renderCrop.x - crop.x, renderCrop.y - crop.y)
+                scale(1 / renderScaling)
+            })
+        }
+
+        private fun render(scaling: Double, crop: Rectangle2D): Bitmap? {
+            val res = Resolution(ceil(crop.width * scaling).toInt(), ceil(crop.height * scaling).toInt())
             if (res.widthPx <= 0 || res.heightPx <= 0)
-                return curBox
+                return null
             // The sRGB color space is correct for SVGs and a good guess for most PDFs.
             val rep = Canvas.compatibleRepresentation(ColorSpace.SRGB)
-            val tr = AffineTransform.getScaleInstance(s, s).apply { translate(-curBox.x, -curBox.y) }
-            val px = Bitmap.allocate(Bitmap.Spec(res, rep)).use { bitmap ->
-                Canvas.forBitmap(bitmap.zero()).use { canvas -> drawTo(canvas, transform = tr) }
-                bitmap.getF(res.widthPx * 4)
-            }
-            val minX = locateBoundary(px, 0, res.widthPx, 1, res.heightPx, 1, res.widthPx, true)
-            // All pixels are transparent, so just abort.
-            if (minX.isNaN())
-                return curBox
-            val minY = locateBoundary(px, 0, res.heightPx, 1, res.widthPx, res.widthPx, 1, true)
-            val maxX = locateBoundary(px, res.widthPx - 1, -1, -1, res.heightPx, 1, res.widthPx, false)
-            val maxY = locateBoundary(px, res.heightPx - 1, -1, -1, res.widthPx, res.widthPx, 1, false)
-            return Rectangle2D.Double(curBox.x + minX / s, curBox.y + minY / s, (maxX - minX) / s, (maxY - minY) / s)
-        }
-
-        private fun locateBoundary(
-            px: FloatArray, uStart: Int, uEnd: Int, uStep: Int, vEnd: Int, uStride: Int, vStride: Int, invAlpha: Boolean
-        ): Double {
-            var u = uStart
-            while (u != uEnd) {
-                var alpha = 0f
-                var i = u * uStride * 4 + 3
-                for (v in 0..<vEnd) {
-                    alpha = max(alpha, px[i])
-                    i += vStride * 4
-                }
-                // We look at the outermost pixel with non-zero alpha, and then place the boundary at a point inside
-                // that pixel that depends on the pixel's alpha. In other words, we exploit the antialiasing to locate
-                // the boundary at sub-pixel accuracy. Of course, this will give ever so slightly wrong results if the
-                // drawn object is partially transparent, but the deviation is only a fraction of a pixel, so it's fine.
-                if (alpha != 0f)
-                    return u + if (invAlpha) 1.0 - alpha else alpha.toDouble()
-                u += uStep
-            }
-            return Double.NaN
+            val tr = AffineTransform.getScaleInstance(scaling, scaling).apply { translate(-crop.x, -crop.y) }
+            val bitmap = Bitmap.allocate(Bitmap.Spec(res, rep))
+            Canvas.forBitmap(bitmap.zero()).use { canvas -> drawTo(canvas, transform = tr) }
+            return bitmap
         }
 
     }
@@ -192,22 +265,18 @@ sealed interface Picture : AutoCloseable {
 
         private val lock = ReentrantLock()
 
-        // If the project that opened the picture has been closed and with it the picture (which is possible because
-        // materialization happens in a background thread), just silently skip the operation.
-        override fun drawTo(canvas: Canvas, transform: AffineTransform?) {
-            lock.withLock { if (src.handle.scope().isAlive) canvas.drawSVG(src, transform) }
-        }
-
-        override fun prepareAsBitmap(
-            canvas: Canvas, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = lock.withLock {
-            if (src.handle.scope().isAlive) canvas.prepareSVGAsBitmap(src, transform, cached) else null
+        override fun doDrawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>, cache: Canvas.Cache?) {
+            lock.withLock {
+                check(src.handle.scope().isAlive) { "SVG is already closed." }
+                canvas.drawSVG(src, transform, clip, cache)
+            }
         }
 
         fun import(importer: Document): Element =
             lock.withLock { importer.importNode(doc.documentElement, true) as Element }
 
         override fun close() {
+            super.close()
             lock.withLock(src::close)
         }
 
@@ -352,18 +421,18 @@ sealed interface Picture : AutoCloseable {
 
         private val lock = ReentrantLock()
 
-        // If the project that opened the picture has been closed and with it the picture (which is possible because
-        // materialization happens in a background thread), just silently skip the operation.
-        override fun drawTo(canvas: Canvas, transform: AffineTransform?) {
-            lock.withLock { if (!doc.document.isClosed) canvas.drawPDF(doc, transform) }
+        override fun doDrawTo(canvas: Canvas, transform: AffineTransform?, clip: List<Shape>, cache: Canvas.Cache?) {
+            lock.withLock {
+                check(!doc.document.isClosed) { "PDF document is already closed." }
+                canvas.drawPDF(doc, transform, clip, cache)
+            }
         }
 
-        override fun prepareAsBitmap(
-            canvas: Canvas, transform: AffineTransform?, cached: Canvas.PreparedBitmap?
-        ) = lock.withLock { if (!doc.document.isClosed) canvas.preparePDFAsBitmap(doc, transform, cached) else null }
-
+        /** @throws Exception */
         fun import(importer: LayerUtility): PDFormXObject = lock.withLock {
-            if (!doc.document.isClosed) {
+            if (doc.document.isClosed)
+                throw IllegalStateException("PDF document is already closed.")
+            else {
                 val page = doc.getPage(0)
                 val form = importer.importPageAsForm(doc, page)
                 // The matrix set by LayerUtility does wrong scaling if the page is rotated, so we'll set it ourselves.
@@ -403,11 +472,11 @@ sealed interface Picture : AutoCloseable {
                 if (pdCSRGB != null && !form.group.cosObject.containsKey(COSName.CS))
                     form.group.cosObject.setItem(COSName.CS, pdCSRGB)
                 form
-            } else
-                PDFormXObject(importer.document)
+            }
         }
 
         override fun close() {
+            super.close()
             try {
                 lock.withLock(doc::close)
             } catch (e: IOException) {
@@ -429,7 +498,7 @@ sealed interface Picture : AutoCloseable {
                     throw IOException("PDF has 0 pages.")
                 }
                 val size = PDFDrawer.sizeOfRotatedCropBox(doc.getPage(0))
-                if (size.width < 0.001 || size.height < 0.001f) {
+                if (size.width < 0.001 || size.height < 0.001) {
                     doc.close()
                     throw IOException("PDF's crop box is vanishingly small.")
                 }
@@ -558,6 +627,90 @@ sealed interface Picture : AutoCloseable {
             }
         }
 
+        private fun findBoundaryPoints(bitmap: Bitmap, crop: Rectangle? = null): DoubleArray {
+            val (res, rep) = bitmap.spec
+            val crop = crop ?: Rectangle(0, 0, res.widthPx, res.heightPx)
+            val cropW = crop.width
+            val cropH = crop.height
+            // @formatter:off
+            val plane: Int; val offset: Int; val stride: Int
+            when (rep.pixelFormat.code) {
+                AV_PIX_FMT_GBRAPF32 -> { plane = 3; offset = 0; stride = 4 }
+                AV_PIX_FMT_RGBAF32 -> { plane = 0; offset = 12; stride = 16; }
+                else -> throw IllegalArgumentException("Unsupported pixel format: ${rep.pixelFormat}")
+            }
+            // @formatter:on
+            val ls = bitmap.linesize(plane)
+            val seg = bitmap.memorySegment(plane).asSlice(crop.y * ls.toLong() + crop.x * stride + offset)
+            val lef = IntArray(cropH).apply { fill(Int.MAX_VALUE) }
+            val rig = IntArray(cropH).apply { fill(Int.MIN_VALUE) }
+            val top = IntArray(cropW).apply { fill(Int.MAX_VALUE) }
+            val bot = IntArray(cropW).apply { fill(Int.MIN_VALUE) }
+            for (y in 0..<cropH) {
+                var i = y * ls.toLong()
+                for (x in 0..<cropW) {
+                    if (seg.getFloat(i) /* alpha */ > 0.001f) {
+                        lef[y] = min(lef[y], x)
+                        rig[y] = max(rig[y], x)
+                        top[x] = min(top[x], y)
+                        bot[x] = max(bot[x], y)
+                    }
+                    i += stride
+                }
+            }
+            val bd = DoubleArray(4 * (cropH + cropW))
+            var b = 0
+            for (y in 0..<cropH) {
+                val lx = lef[y]
+                if (lx == Int.MAX_VALUE) continue
+                val rx = rig[y]
+                val sy = y + 0.5
+                bd[b++] = lx.toDouble()
+                bd[b++] = sy
+                bd[b++] = rx + 1.0
+                bd[b++] = sy
+            }
+            for (x in 0..<cropW) {
+                val ty = top[x]
+                if (ty == Int.MAX_VALUE) continue
+                val by = bot[x]
+                val sx = x + 0.5
+                bd[b++] = sx
+                bd[b++] = ty.toDouble()
+                bd[b++] = sx
+                bd[b++] = by + 1.0
+            }
+            return bd.copyOf(b)
+        }
+
+        private fun findNonBlankBounds(boundaryPoints: DoubleArray, transform: AffineTransform? = null): Rectangle2D? {
+            if (boundaryPoints.isEmpty())
+                return null
+
+            val transformedBoundaryPoints: DoubleArray
+            if (transform == null || transform.isIdentity)
+                transformedBoundaryPoints = boundaryPoints
+            else {
+                transformedBoundaryPoints = DoubleArray(boundaryPoints.size)
+                transform.transform(boundaryPoints, 0, transformedBoundaryPoints, 0, boundaryPoints.size / 2)
+            }
+
+            var x0 = Double.POSITIVE_INFINITY
+            var y0 = Double.POSITIVE_INFINITY
+            var x1 = Double.NEGATIVE_INFINITY
+            var y1 = Double.NEGATIVE_INFINITY
+            var i = 0
+            while (i < transformedBoundaryPoints.size) {
+                val x = transformedBoundaryPoints[i++]
+                val y = transformedBoundaryPoints[i++]
+                x0 = min(x0, x)
+                y0 = min(y0, y)
+                x1 = max(x1, x)
+                y1 = max(y1, y)
+            }
+            return Rectangle2D.Double(x0, y0, x1 - x0, y1 - y0)
+        }
+
     }
 
 
@@ -566,9 +719,6 @@ sealed interface Picture : AutoCloseable {
         private val lock = ReentrantLock()
         private var loaded: Any? = null
         private var closed = false
-
-        val isRaster: Boolean
-            get() = file.extension in RASTER_EXTS
 
         /** @throws IllegalStateException */
         val picture: Picture

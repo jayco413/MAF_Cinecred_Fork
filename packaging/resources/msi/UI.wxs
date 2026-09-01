@@ -1,0 +1,62 @@
+﻿<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Fragment>
+    <!-- Adapted from https://github.com/wixtoolset/wix/blob/main/src/ext/UI/wixlib/WixUI_InstallDir.wxs -->
+    <UI Id="UI">
+      <DialogRef Id="BrowseDlg"/>
+      <DialogRef Id="DiskCostDlg"/>
+      <DialogRef Id="ErrorDlg"/>
+      <DialogRef Id="FatalError"/>
+      <DialogRef Id="FilesInUse"/>
+      <DialogRef Id="MsiRMFilesInUse"/>
+      <DialogRef Id="PrepareDlg"/>
+      <DialogRef Id="ProgressDlg"/>
+      <DialogRef Id="ResumeDlg"/>
+      <DialogRef Id="UserExit"/>
+
+      <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8"/>
+      <TextStyle Id="WixUI_Font_Bigger" FaceName="Tahoma" Size="12"/>
+      <TextStyle Id="WixUI_Font_Title" FaceName="Tahoma" Size="9" Bold="yes"/>
+      <TextStyle Id="WixUI_Font_Emphasized" FaceName="Tahoma" Size="8" Bold="yes"/>
+
+      <Property Id="DefaultUIFont" Value="WixUI_Font_Normal"/>
+      <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR"/>
+      <Property Id="SCOPE" Value="PerMachine"/>
+
+      <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999"/>
+
+      <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="ScopeDlg" Condition="NOT Installed"/>
+
+      <Publish Dialog="ScopeDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg"/>
+      <Publish Dialog="ScopeDlg" Control="Next" Property="ALLUSERS" Value="1" Order="1" Condition="SCOPE=&quot;PerMachine&quot;"/>
+      <Publish Dialog="ScopeDlg" Control="Next" Property="ALLUSERS" Value="{}" Order="1" Condition="SCOPE=&quot;PerUser&quot;"/>
+      <Publish Dialog="ScopeDlg" Control="Next" Property="MSIINSTALLPERUSER" Value="{}" Order="2" Condition="SCOPE=&quot;PerMachine&quot;"/>
+      <Publish Dialog="ScopeDlg" Control="Next" Property="MSIINSTALLPERUSER" Value="1" Order="2" Condition="SCOPE=&quot;PerUser&quot;"/>
+      <Publish Dialog="ScopeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Order="3" Condition="SCOPE=&quot;PerMachine&quot;"/>
+      <Publish Dialog="ScopeDlg" Control="Next" Event="NewDialog" Value="ShortcutDlg" Order="3" Condition="SCOPE=&quot;PerUser&quot;"/>
+
+      <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="ScopeDlg"/>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="CheckTargetPath" Value="INSTALLDIR" Order="1"/>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="INSTALLDIR" Order="2"/>
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutDlg" Order="3"/>
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="INSTALLDIR" Order="1"/>
+      <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2"/>
+
+      <Publish Dialog="BrowseDlg" Control="OK" Event="CheckTargetPath" Value="INSTALLDIR" Order="1"/>
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SetTargetPath" Value="[_BrowseProperty]" Order="2"/>
+      <Publish Dialog="BrowseDlg" Control="OK" Event="EndDialog" Value="Return" Order="3"/>
+
+      <Publish Dialog="ShortcutDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Condition="SCOPE=&quot;PerMachine&quot;"/>
+      <Publish Dialog="ShortcutDlg" Control="Back" Event="NewDialog" Value="ScopeDlg" Condition="SCOPE=&quot;PerUser&quot;"/>
+      <Publish Dialog="ShortcutDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg"/>
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutDlg" Condition="NOT Installed"/>
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Condition="Installed"/>
+
+      <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg"/>
+
+      <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg"/>
+      <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg"/>
+      <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg"/>
+    </UI>
+  </Fragment>
+</Wix>

@@ -6,26 +6,31 @@ import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.delivery.*
 import com.loadingbyte.cinecred.demo.*
 import com.loadingbyte.cinecred.project.Global
-import com.loadingbyte.cinecred.project.Opt
-import com.loadingbyte.cinecred.project.PRESET_GLOBAL
+import com.loadingbyte.cinecred.project.Override
+import com.loadingbyte.cinecred.project.presetGlobal
 import com.loadingbyte.cinecred.project.st
-import com.loadingbyte.cinecred.ui.DeliverRenderQueuePanel
-import com.loadingbyte.cinecred.ui.ProjectDialogType
+import com.loadingbyte.cinecred.ui.comms.CreditsId
+import com.loadingbyte.cinecred.ui.comms.DockableId.*
+import com.loadingbyte.cinecred.ui.comms.RenderFormatCategory
+import com.loadingbyte.cinecred.ui.comms.RenderJobInfo
+import com.loadingbyte.cinecred.ui.comms.RenderJobStatus
 import com.loadingbyte.cinecred.ui.helper.DropdownPopupMenuCheckBoxItem
+import com.loadingbyte.cinecred.ui.styling.OverrideWidgetSpec
+import com.loadingbyte.cinecred.ui.view.delivery.DeliveryDockable
 import java.awt.KeyboardFocusManager
 import java.lang.Thread.sleep
-import java.nio.file.Path
+import java.time.Duration
+import javax.swing.JTable
 import javax.swing.JTextField
 import javax.swing.JTree
 import kotlin.io.path.Path
-import kotlin.io.path.readLines
-import kotlin.io.path.writeLines
 
 
 private const val DIR = "home"
 
 val HOME_DEMOS
     get() = listOf(
+        HomeScreenshotDemo,
         HomeScreenshotLiveVisDemo,
         HomeScreenshotStylingDemo,
         HomeScreenshotVideoPreviewDemo,
@@ -34,122 +39,115 @@ val HOME_DEMOS
     )
 
 
-object HomeScreenshotLiveVisDemo : ProjectDemo("$DIR/screenshot-live-vis", Format.PNG) {
-    override fun prepare(projectDir: Path) {
-        // Inject an error into the credits file.
-        val creditsFile = projectDir.resolve("Credits.csv")
-        val lines = creditsFile.readLines().toMutableList()
-        lines[lines.indexOfFirst { "Dirc Director" in it } + 1] = ",,,-1,,,,,,"
-        creditsFile.writeLines(lines)
+object HomeScreenshotDemo : ScreencastDemo("$DIR/screenshot", Format.PNG, 1450, 816, 0.85) {
+    override fun generate() {
+        addProjectWindows(dockedTrees.apply {
+            parent(LOG).ratio = 0.89
+            parent(PLAYBACK).ratio = 0.75
+            parent(DELIVERY).ratio = 0.487
+            leaf(PLAYBACK).collapsed = false
+            leaf(DELIVERY).collapsed = false
+        })
+
+        edt {
+            KeyboardFocusManager.getCurrentKeyboardFocusManager().clearFocusOwner()
+            preDok.leakedPageTabs.selectedIndex = 2
+            prjImagePnl(2).leakedViewportCenterSetter(y = 1055.0)
+            plyCtl.leakedFrameSlider.valueIsAdjusting = true
+            plyCtl.leakedFrameSlider.value = 520
+            plyCtl.setPlaybackDirection(1)
+            dlvDok.leakedConfigForm.leakedDestinationWidgetTemplateMenu.components
+                .filterIsInstance<DropdownPopupMenuCheckBoxItem<*>>().single { it.item == null }.doClick()
+            (dlvDok.leakedConfigForm.leakedDestinationWidget.components[1] as JTextField).text = "/Render.mov"
+            (dlvDok.leakedRenderQueuePanel.viewport.view as JTable).columnModel.apply {
+                getColumn(0).preferredWidth = 220
+                getColumn(5).preferredWidth = 180
+            }
+            dlvDok.addDummyRenderJob(true, VideoContainerRenderJob.FORMATS.first { it.label == "ProRes" })
+            dlvDok.leakedRenderQueuePanel.leakedProgressSetter(0, progress = 800, time = Duration.ofSeconds(83))
+        }
+        selectLastRowWithLabel(styDok.leakedStylingTree, l10n("project.template.contentStyleGutter", locale))
+        sleep(1000)
+
+        sc.frame()
     }
+}
+
+
+object HomeScreenshotLiveVisDemo : ProjectDemo("$DIR/screenshot-live-vis", Format.PNG) {
+    override fun trees() = trees(tree(920, 630, vSplit(0.0, TOOLBAR, PREVIEW)))
 
     override fun generate() {
-        reposition(prjFrame, 920, 610)
         sleep(500)
         edt {
-            prjPanel.leakedSplitPane.setDividerLocation(0.87)
-            prjPanel.leakedPageTabs.selectedIndex = 2
-            prjImagePanel(2).leakedViewportCenterSetter(y = 980.0)
+            preDok.leakedPageTabs.selectedIndex = 2
+            prjImagePanel(2).leakedViewportCenterSetter(y = 982.0)
         }
         sleep(500)
-        write(printWithPopups(prjPanel), "-guides-on")
-        edt { prjPanel.leakedGuidesButton.doClick() }
+        write(printWithPopups(prjFrame.contentPane), "-guides-on")
+        edt { tolDok.leakedGuidesButton.doClick() }
         sleep(500)
-        write(printWithPopups(prjPanel), "-guides-off")
+        write(printWithPopups(prjFrame.contentPane), "-guides-off")
     }
 }
 
 
 object HomeScreenshotStylingDemo : ProjectDemo("$DIR/screenshot-styling", Format.PNG) {
-    override fun generate() {
-        edt { projectCtrl.setDialogVisible(ProjectDialogType.STYLING, true) }
-        sleep(500)
-        reposition(styDialog, 760, 570)
-        sleep(500)
-        edt { styPanel.leakedSplitPane.setDividerLocation(0.26) }
-        sleep(500)
-        selectLastRowWithLabel(styPanel.leakedStylingTree, l10n("project.template.contentStyleGutter", locale))
-        sleep(500)
-        write(printWithPopups(styPanel))
-    }
+    override fun trees() = trees(tree(760, 636, STYLING))
 
-    private fun selectLastRowWithLabel(tree: JTree, label: String) {
-        edt {
-            val rowIdx = (0..<tree.rowCount).last { tree.getPathForRow(it).lastPathComponent.toString() == label }
-            tree.selectionRows = intArrayOf(rowIdx)
-        }
+    override fun generate() {
+        edt { styDok.leakedSplitPane.setDividerLocation(0.26) }
+        sleep(500)
+        selectLastRowWithLabel(styDok.leakedStylingTree, l10n("project.template.contentStyleGutter", locale))
+        sleep(500)
+        write(printWithPopups(prjFrame.contentPane))
     }
 }
 
 
 object HomeScreenshotVideoPreviewDemo : ProjectDemo("$DIR/screenshot-video-preview", Format.PNG) {
+    override fun trees() = trees(tree(900, 460, PLAYBACK))
+
     override fun generate() {
-        edt { projectCtrl.setDialogVisible(ProjectDialogType.VIDEO, true) }
-        sleep(500)
-        reposition(plyDialog, 900, 430)
-        sleep(500)
         edt {
             plyControls.leakedFrameSlider.valueIsAdjusting = true
             plyControls.leakedFrameSlider.value = 520
             plyControls.setPlaybackDirection(1)
         }
         sleep(500)
-        write(printWithPopups(plyPanel))
+        write(printWithPopups(prjFrame.contentPane))
     }
 }
 
 
 object HomeScreenshotDeliveryDemo : ProjectDemo("$DIR/screenshot-delivery", Format.PNG) {
+    override fun trees() = trees(tree(820, 610, DELIVERY))
+
     override fun generate() {
-        edt { projectCtrl.setDialogVisible(ProjectDialogType.DELIVERY, true) }
-        sleep(500)
-        reposition(dlvDialog, 820, 600)
-        sleep(500)
         edt {
             KeyboardFocusManager.getCurrentKeyboardFocusManager().clearFocusOwner()
-            dlvPanel.configurationForm.leakedDestinationWidgetTemplateMenu.components
+            dlvDok.leakedConfigForm.leakedDestinationWidgetTemplateMenu.components
                 .filterIsInstance<DropdownPopupMenuCheckBoxItem<*>>().single { it.item == null }.doClick()
-            (dlvPanel.configurationForm.leakedDestinationWidget.components[1] as JTextField).text = "/Render.mp4"
-            addDummyRenderJob(false, WholePagePDFRenderJob.FORMATS[0])
-            addDummyRenderJob(true, VideoContainerRenderJob.H264)
-            addDummyRenderJob(true, VideoContainerRenderJob.FORMATS.first { it.label == "ProRes" })
-            addDummyRenderJob(true, ImageSequenceRenderJob.FORMATS.first { it.defaultFileExt == "png" })
-            dlvPanel.renderQueuePanel.apply {
+            (dlvDok.leakedConfigForm.leakedDestinationWidget.components[1] as JTextField).text = "/Render.mp4"
+            dlvDok.addDummyRenderJob(false, WholePagePDFRenderJob.FORMATS[0])
+            dlvDok.addDummyRenderJob(true, VideoContainerRenderJob.H264)
+            dlvDok.addDummyRenderJob(true, VideoContainerRenderJob.FORMATS.first { it.label == "ProRes" })
+            dlvDok.addDummyRenderJob(true, ImageSequenceRenderJob.FORMATS.first { it.defaultFileExt == "png" })
+            dlvDok.leakedRenderQueuePanel.apply {
                 leakedProgressSetter(0, isFinished = true)
                 leakedProgressSetter(1, isFinished = true)
-                leakedProgressSetter(2, progress = 800)
+                leakedProgressSetter(2, progress = 800, time = Duration.ofSeconds(83))
             }
         }
         sleep(500)
-        write(printWithPopups(dlvPanel), "-options")
+        write(printWithPopups(prjFrame.contentPane), "-options")
         edt { dlvFormatCB.apply { isPopupVisible = true } }
         sleep(500)
-        write(printWithPopups(dlvPanel), "-formats")
+        write(printWithPopups(prjFrame.contentPane), "-formats")
 
         RenderQueue.cancelAllJobs()
     }
 
-    private fun addDummyRenderJob(videoOrStills: Boolean, format: RenderFormat) {
-        var dest = "Render"
-        if (format.fileSeq) dest += "/Render.#######"
-        dest += "." + format.defaultFileExt
-        val info = DeliverRenderQueuePanel.RenderJobInfo(
-            l10n("project.template.spreadsheetName"),
-            l10n("ui.deliverConfig.pagesAll"),
-            l10n(if (videoOrStills) "ui.deliverConfig.videoFormat" else "ui.deliverConfig.wholePageFormat.short"),
-            format.label,
-            PRESET_GLOBAL.resolution.run { "$widthPx \u00D7 $heightPx" },
-            "${PRESET_GLOBAL.fps}p",
-            "${RenderFormat.Property.PRIMARIES.standardDefault} / ${RenderFormat.Property.TRANSFER.standardDefault}",
-            dest
-        )
-        dlvPanel.renderQueuePanel.addRenderJobToQueue(DummyRenderJob(), info)
-    }
-
-    private class DummyRenderJob : RenderJob {
-        override val prefix get() = Path("")
-        override fun render(progressCallback: (Int) -> Unit) = throw UnsupportedOperationException()
-    }
 }
 
 
@@ -158,10 +156,40 @@ object HomeCreditsRuntimeDemo : StyleSettingsDemo<Global>(
     listOf(Global::runtimeFrames.st()), pageScaling = 0.45, pageWidth = 900, pageHeight = 400
 ) {
     override fun styles() = buildList<Global> {
-        this += TEMPLATE_PROJECT.styling.global.copy(runtimeFrames = Opt(false, 1080))
-        this += last().copy(runtimeFrames = last().runtimeFrames.copy(isActive = true))
+        this += TEMPLATE_PROJECT.styling.global
+        this += last().copy(runtimeFrames = Override(1080))
     }
 
+    override val overrideCtx = OverrideWidgetSpec.Context(1247, emptyMap())
     override val suffixes = listOf("-natural", "-adjusted")
     override fun credits(style: Global) = Pair(style, listOf(TEMPLATE_SCROLL_PAGE_FROM_DOP))
+}
+
+
+private fun selectLastRowWithLabel(tree: JTree, label: String) {
+    edt {
+        val rowIdx = (0..<tree.rowCount).last { tree.getPathForRow(it).lastPathComponent.toString() == label }
+        tree.selectionRows = intArrayOf(rowIdx)
+    }
+}
+
+private fun DeliveryDockable.addDummyRenderJob(videoOrStills: Boolean, format: RenderFormat) {
+    var dest = "Render"
+    if (format.fileSeq) dest += "/Render.#######"
+    dest += "." + format.defaultFileExt
+    val jobInfo = RenderJobInfo(
+        object : RenderJob {
+            override val prefix get() = Path("")
+            override fun render(progressCallback: (Int) -> Unit) = throw UnsupportedOperationException()
+        },
+        CreditsId("${l10nDemo("projectDir")}.xlsx", l10n("project.template.spreadsheetName")),
+        l10n("ui.deliverConfig.pagesAll"),
+        if (videoOrStills) RenderFormatCategory.VIDEO else RenderFormatCategory.WHOLE_PAGE,
+        format.label,
+        presetGlobal().resolution.run { "$widthPx \u00D7 $heightPx" },
+        "${presetGlobal().fps}p",
+        "${RenderFormat.Property.PRIMARIES.standardDefault} / ${RenderFormat.Property.TRANSFER.standardDefault}",
+        dest
+    )
+    leakedRenderQueuePanel.addRenderJobToQueue(jobInfo, RenderJobStatus.Queued)
 }

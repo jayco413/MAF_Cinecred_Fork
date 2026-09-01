@@ -41,24 +41,28 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     @Deprecated("ENCAPSULATION LEAK") val leakedCfgTemplateStrWidget
         get() = configureDeliveryDestTemplateForm.templateStrWidget
     @Deprecated("ENCAPSULATION LEAK") val leakedCfgTemplateDoneButton get() = configureDeliveryDestTemplateDoneButton
+    @Deprecated("ENCAPSULATION LEAK")
+    fun leakedStartWindowLayoutDefaultButton(layoutIdx: Int) =
+        (startWindowLayoutsPanel.getComponent(layoutIdx) as JPanel).components.last() as JToggleButton
     // =========================================
 
     val startPreferencesForm: PreferencesForm
 
     private val cards = CardLayout().also { layout = it }
+    private var card = PreferencesCard.entries.first()
 
     private val startLowerPanel: JPanel
     private val startAccountsPanel: JPanel
     private val startAccountsRemovalButtons = HashMap<Account, JButton>()
+    private val startWindowLayoutsPanel: JPanel
     private val startOverlaysPanel: JPanel
     private val startDeliveryDestTemplatesPanel: JPanel
 
     private val configureAccountForm: ConfigureAccountForm
     private val configureAccountEstablishButton: JButton
-
-    private val establishAccountMsgTextArea: JTextArea
-    private val establishAccountErrorTextArea: JTextArea
-    private val establishAccountResponseTextArea: JTextArea
+    private val configureAccountMsgTextArea: JTextArea
+    private val configureAccountErrorTextArea: JTextArea
+    private val configureAccountResponseTextArea: JTextArea
 
     private val configureOverlayForm: ConfigureOverlayForm
     private val configureOverlayDoneButton: JButton
@@ -77,6 +81,10 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             addActionListener { welcomeCtrl.preferences_start_onClickAddAccount() }
         }
         startAccountsPanel = JPanel(MigLayout("insets 0, wrap 2, fillx", "[sg, fill][sg, fill]")).apply {
+            background = null
+        }
+
+        startWindowLayoutsPanel = JPanel(MigLayout("insets 0, wrap 2, fillx", "[sg, fill][sg, fill]")).apply {
             background = null
         }
 
@@ -100,6 +108,8 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             add(JSeparator(), "growx, pushx, gapy unrel unrel")
             add(startAddAccountButton)
             add(startAccountsPanel, "growx, pushx, gaptop rel")
+            add(JSeparator(), "growx, pushx, gapy unrel unrel")
+            add(startWindowLayoutsPanel, "growx, pushx")
             add(JSeparator(), "growx, pushx, gapy unrel unrel")
             add(startAddOverlayButton)
             add(startOverlaysPanel, "growx, pushx, gaptop rel")
@@ -128,6 +138,13 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         configureAccountForm = ConfigureAccountForm().apply {
             background = null
         }
+        configureAccountMsgTextArea = newLabelTextArea()
+        configureAccountErrorTextArea = newLabelTextArea().apply {
+            putClientProperty(STYLE, "foreground: $PALETTE_RED")
+        }
+        configureAccountResponseTextArea = newLabelTextArea().apply {
+            putClientProperty(STYLE, "foreground: $PALETTE_RED")
+        }
         val configureAccountCancelButton = JButton(l10n("cancel"), CROSS_ICON).apply {
             addActionListener { welcomeCtrl.preferences_configureAccount_onClickCancel() }
         }
@@ -140,34 +157,22 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             welcomeCtrl.preferences_configureAccount_onClickEstablish(
                 configureAccountForm.labelWidget.value,
                 configureAccountForm.serviceWidget.value.get(),
-                configureAccountForm.serverWidget.value
+                configureAccountForm.serverWidget.value,
+                configureAccountForm.usernameWidget.value,
+                configureAccountForm.passwordWidget.value
             )
         }
         configureAccountForm.onChange(configureAccountForm.labelWidget)  // Run validation
-        val configureAccountPanel = JPanel(MigLayout("insets 20, wrap")).apply {
+        val configureAccountPanel = JPanel(MigLayout("hidemode 3, insets 20, wrap")).apply {
             background = null
             add(newLabelTextArea(l10n("ui.preferences.accounts.configure.prompt")), "growx")
-            add(configureAccountForm, "grow, push, gaptop para")
+            add(configureAccountForm, "growx, pushx, gapy para para")
+            add(configureAccountMsgTextArea, "growx")
+            add(configureAccountErrorTextArea, "growx")
+            add(configureAccountResponseTextArea, "growx")
+            add(Box.createGlue(), "grow, push")
             add(configureAccountCancelButton, "split 2, right, bottom")
             add(configureAccountEstablishButton, "gapleft unrel, hidemode 3")
-        }
-
-        establishAccountMsgTextArea = newLabelTextArea()
-        establishAccountErrorTextArea = newLabelTextArea().apply {
-            putClientProperty(STYLE, "foreground: $PALETTE_RED")
-        }
-        establishAccountResponseTextArea = newLabelTextArea().apply {
-            putClientProperty(STYLE, "foreground: $PALETTE_RED")
-        }
-        val establishAccountCancelButton = JButton(l10n("cancel"), CROSS_ICON).apply {
-            addActionListener { welcomeCtrl.preferences_establishAccount_onClickCancel() }
-        }
-        val establishAccountPanel = JPanel(MigLayout("insets 20, wrap", "", "[][][]push[]")).apply {
-            background = null
-            add(establishAccountMsgTextArea, "growx, pushx")
-            add(establishAccountErrorTextArea, "growx")
-            add(establishAccountResponseTextArea, "growx")
-            add(establishAccountCancelButton, "right")
         }
 
         configureOverlayForm = ConfigureOverlayForm().apply {
@@ -238,7 +243,6 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
 
         add(startPanel, PreferencesCard.START.name)
         add(configureAccountPanel, PreferencesCard.CONFIGURE_ACCOUNT.name)
-        add(establishAccountPanel, PreferencesCard.ESTABLISH_ACCOUNT.name)
         add(configureOverlayPanel, PreferencesCard.CONFIGURE_OVERLAY.name)
         add(configureDeliverLocationTemplatePanel, PreferencesCard.CONFIGURE_DELIVERY_LOC_TEMPLATE.name)
 
@@ -253,7 +257,11 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
        ********** COMMS **********
        *************************** */
 
+    fun preferences_getCard() =
+        this.card
+
     fun preferences_setCard(card: PreferencesCard) {
+        this.card = card
         cards.show(this, card.name)
     }
 
@@ -286,6 +294,32 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
 
     fun preferences_start_setAccountRemovalLocked(account: Account, locked: Boolean) {
         startAccountsRemovalButtons[account]?.isEnabled = !locked
+    }
+
+    fun preferences_start_setWindowLayouts(layouts: List<WindowLayout>, defaultLayout: WindowLayout) {
+        startWindowLayoutsPanel.removeAll()
+        val defaultButtonGroup = ButtonGroup()
+        for (layout in layouts) {
+            val removeButton = if (layout !is ConfigurableWindowLayout) null else JButton(TRASH_ICON).apply {
+                addActionListener { welcomeCtrl.preferences_start_onClickRemoveWindowLayout(layout) }
+            }
+            val defaultButton = JToggleButton(CHECK_ICON, layout == defaultLayout).apply {
+                toolTipText = l10n("ui.preferences.windowLayouts.setAsDefault")
+                addActionListener { welcomeCtrl.preferences_start_onClickSetWindowLayoutAsDefault(layout) }
+            }
+            val layoutPanel = JPanel(MigLayout("", "[]push[]" + if (removeButton != null) "[]" else "")).apply {
+                border = FlatRoundBorder()
+                add(JLabel(layout.label, WINDOW_LAYOUT_ICON, JLabel.LEADING).apply {
+                    toolTipText = text
+                }, "wmax 230")
+                removeButton?.let(::add)
+                add(defaultButton)
+            }
+            startWindowLayoutsPanel.add(layoutPanel)
+            defaultButtonGroup.add(defaultButton)
+        }
+        // Without this, when there are two layouts and the user removes one, an afterimage of the removed one remains.
+        startWindowLayoutsPanel.repaint()
     }
 
     fun preferences_start_setOverlays(overlays: List<ConfigurableOverlay>) {
@@ -342,24 +376,45 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             labelWidget.value = ""
             serviceWidget.value = Optional.empty()
             serverWidget.value = "https://"
+            usernameWidget.value = ""
+            passwordWidget.value = ""
         }
     }
 
-    fun preferences_establishAccount_setAction(authorize: Boolean) {
-        if (authorize) {
-            establishAccountMsgTextArea.text = l10n("ui.preferences.accounts.authorize.msg")
-            establishAccountErrorTextArea.text = l10n("ui.preferences.accounts.authorize.error")
-        } else {
-            establishAccountMsgTextArea.text = l10n("ui.preferences.accounts.validate.msg")
-            establishAccountErrorTextArea.text = l10n("ui.preferences.accounts.validate.error")
+    fun preferences_configureAccount_setFormLocked(locked: Boolean) {
+        configureAccountForm.labelWidget.isEnabled = !locked
+        configureAccountForm.serviceWidget.isEnabled = !locked
+        configureAccountForm.serverWidget.isEnabled = !locked
+        configureAccountForm.usernameWidget.isEnabled = !locked
+        configureAccountForm.passwordWidget.isEnabled = !locked
+        configureAccountEstablishButton.isEnabled = !locked
+    }
+
+    fun preferences_configureAccount_clearStatus() {
+        configureAccountMsgTextArea.isVisible = false
+        configureAccountErrorTextArea.isVisible = false
+        configureAccountResponseTextArea.isVisible = false
+    }
+
+    fun preferences_configureAccount_setStatusEstablishing(authorize: Boolean) {
+        configureAccountMsgTextArea.isVisible = true
+        configureAccountErrorTextArea.isVisible = false
+        configureAccountResponseTextArea.isVisible = false
+        configureAccountMsgTextArea.text = when (authorize) {
+            false -> l10n("ui.preferences.accounts.validate.msg")
+            true -> l10n("ui.preferences.accounts.authorize.msg")
         }
     }
 
-    fun preferences_establishAccount_setError(error: String?) {
-        val hasError = error != null
-        establishAccountErrorTextArea.isVisible = hasError
-        establishAccountResponseTextArea.isVisible = hasError
-        establishAccountResponseTextArea.text = error ?: ""
+    fun preferences_configureAccount_setStatusFailed(authorize: Boolean, error: String) {
+        configureAccountMsgTextArea.isVisible = false
+        configureAccountErrorTextArea.isVisible = true
+        configureAccountResponseTextArea.isVisible = true
+        configureAccountErrorTextArea.text = when (authorize) {
+            false -> l10n("ui.preferences.accounts.validate.error")
+            true -> l10n("ui.preferences.accounts.authorize.error")
+        }
+        configureAccountResponseTextArea.text = error
     }
 
     fun preferences_configureOverlay_setForm(
@@ -402,7 +457,7 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     }
 
 
-    private inner class ConfigureAccountForm : EasyForm(insets = false, noticeArea = true, constLabelWidth = false) {
+    private inner class ConfigureAccountForm : EasyForm(insets = "0", noticeArea = true, constLabelWidth = false) {
 
         val labelWidget = addWidget(
             l10n("ui.preferences.accounts.configure.label"),
@@ -434,6 +489,30 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             }
         )
 
+        val usernameWidget = addWidget(
+            l10n("ui.preferences.accounts.configure.username"),
+            TextWidget(),
+            isVisible = {
+                val service = serviceWidget.value.getOrNull()
+                service != null && service.credentialsRequirement != Service.CredentialsRequirement.UNUSED
+            },
+            verify = { username ->
+                welcomeCtrl.preferences_configureAccount_verifyCredential(serviceWidget.value.getOrNull(), username)
+            }
+        )
+
+        val passwordWidget = addWidget(
+            l10n("ui.preferences.accounts.configure.password"),
+            PasswordWidget(),
+            isVisible = {
+                val service = serviceWidget.value.getOrNull()
+                service != null && service.credentialsRequirement != Service.CredentialsRequirement.UNUSED
+            },
+            verify = { password ->
+                welcomeCtrl.preferences_configureAccount_verifyCredential(serviceWidget.value.getOrNull(), password)
+            }
+        )
+
         public override fun onChange(widget: Widget<*>) {
             super.onChange(widget)
             val service = serviceWidget.value.getOrNull()
@@ -450,7 +529,8 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
                 }
             }
             configureAccountEstablishButton.apply {
-                isVisible = isErrorFree
+                isVisible = establishIcon != null
+                isEnabled = isErrorFree
                 text = establishText
                 icon = establishIcon
             }
@@ -459,7 +539,7 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
     }
 
 
-    private inner class ConfigureOverlayForm : EasyForm(insets = false, noticeArea = true, constLabelWidth = false) {
+    private inner class ConfigureOverlayForm : EasyForm(insets = "0", noticeArea = true, constLabelWidth = false) {
 
         val typeWidget = addWidget(
             l10n("ui.preferences.overlays.configure.type"),
@@ -479,8 +559,8 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             }
         )
 
-        val aspectRatioHWidget = makeAspectRatioSpinnerWidget()
-        val aspectRatioVWidget = makeAspectRatioSpinnerWidget()
+        val aspectRatioHWidget = makeAspectRatioScrubberWidget()
+        val aspectRatioVWidget = makeAspectRatioScrubberWidget()
 
         init {
             addWidget(
@@ -500,15 +580,15 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
         )
 
         val linesHWidget = addWidget(
-            l10n("ui.preferences.overlays.configure.linesH") + " [px]",
-            SimpleListWidget(makeElementWidget = ::makeLineSpinnerWidget, newElement = 0, elementsPerRow = 2),
+            l10n("ui.preferences.overlays.configure.linesH"),
+            SimpleListWidget(makeElementWidget = ::makeLineScrubberWidget, newElement = 0, elementsPerRow = 2),
             description = l10n("ui.preferences.overlays.configure.lines.desc"),
             isVisible = { typeWidget.value == LinesOverlay::class.java }
         )
 
         val linesVWidget = addWidget(
-            l10n("ui.preferences.overlays.configure.linesV") + " [px]",
-            SimpleListWidget(makeElementWidget = ::makeLineSpinnerWidget, newElement = 0, elementsPerRow = 2),
+            l10n("ui.preferences.overlays.configure.linesV"),
+            SimpleListWidget(makeElementWidget = ::makeLineScrubberWidget, newElement = 0, elementsPerRow = 2),
             description = l10n("ui.preferences.overlays.configure.lines.desc"),
             isVisible = { typeWidget.value == LinesOverlay::class.java }
         )
@@ -533,12 +613,14 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
             isVisible = { typeWidget.value == ImageOverlay::class.java }
         )
 
-        private fun makeAspectRatioSpinnerWidget() = SpinnerWidget(
-            Double::class.javaObjectType, SpinnerNumberModel(1.0, 1.0, null, 1.0), widthSpec = WidthSpec.LITTLE
+        private fun makeAspectRatioScrubberWidget() = ScrubberWidget(
+            Scrubber.NumericScheme(Double::class.javaObjectType), Scrubber.NumberLimiter(min = 1.0),
+            widthSpec = WidthSpec.LITTLE
         )
 
-        private fun makeLineSpinnerWidget() = SpinnerWidget(
-            Int::class.javaObjectType, SpinnerNumberModel(0, null, null, 1), widthSpec = WidthSpec.LITTLE
+        private fun makeLineScrubberWidget() = ScrubberWidget(
+            Scrubber.NumericScheme(Int::class.javaObjectType, unit = "px"), sensitivity = 1.0,
+            widthSpec = WidthSpec.LITTLE
         )
 
         override fun onChange(widget: Widget<*>) {
@@ -552,7 +634,7 @@ class PreferencesPanel(private val welcomeCtrl: WelcomeCtrlComms) : JPanel() {
 
 
     private inner class ConfigureDeliveryDestTemplateForm :
-        EasyForm(insets = false, noticeArea = true, constLabelWidth = false) {
+        EasyForm(insets = "0", noticeArea = true, constLabelWidth = false) {
 
         val nameWidget = addWidget(
             l10n("ui.preferences.deliveryDestTemplates.configure.name"),

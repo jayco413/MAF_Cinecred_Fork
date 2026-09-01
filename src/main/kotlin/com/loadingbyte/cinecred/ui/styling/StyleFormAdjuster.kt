@@ -1,11 +1,14 @@
 package com.loadingbyte.cinecred.ui.styling
 
+import com.loadingbyte.cinecred.common.caseInsensitiveCollator
+import com.loadingbyte.cinecred.common.sortedWithCollator
 import com.loadingbyte.cinecred.imaging.Color4f
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.ui.helper.FontFamilies
 import com.loadingbyte.cinecred.ui.helper.Form
+import com.loadingbyte.cinecred.ui.helper.ScrubberWidget
 import java.util.*
 import javax.swing.Icon
 
@@ -14,7 +17,6 @@ class StyleFormAdjuster(
     private val forms: List<StyleForm<*>>,
     private val getCurrentStyling: () -> Styling?,
     private val getCurrentStyleInActiveForm: () -> Style?,
-    private val notifyConstraintViolations: (List<ConstraintViolation>) -> Unit,
     // ========== ENCAPSULATION LEAKS ==========
     @Suppress("DEPRECATION")
     private val styleIdxAndSiblingsOverride: StyleIdxAndSiblingsOverride? = null
@@ -28,8 +30,11 @@ class StyleFormAdjuster(
     }
     // =========================================
 
+    // Save the externally provided override context, and initialize it with a dummy one.
+    private var overrideCtx = OverrideWidgetSpec.Context(0, emptyMap())
+    // Save the externally provided constraint violations. When they're non-null, they should match the current Styling.
+    private var constraintViolations: List<ConstraintViolation>? = null
     // Cache the current Styling's constraint violations and all colors used in the current Styling.
-    private var constraintViolations: List<ConstraintViolation> = emptyList()
     private var swatchColors: List<Color4f> = emptyList()
 
     var activeForm: StyleForm<*>? = null
@@ -39,7 +44,7 @@ class StyleFormAdjuster(
         }
 
     fun onLoadStyling() {
-        refreshConstraintViolations()
+        constraintViolations = null
         refreshSwatchColors()
     }
 
@@ -48,7 +53,7 @@ class StyleFormAdjuster(
     }
 
     fun onChangeInActiveForm() {
-        refreshConstraintViolations()
+        constraintViolations = null
         refreshSwatchColors()
         adjustActiveForm()
     }
@@ -58,12 +63,15 @@ class StyleFormAdjuster(
             form.setProjectFontFamilies(projectFamilies)
     }
 
-    fun updatePictureLoaders(pictureLoaders: Collection<Picture.Loader>) {
-        updateExternalChoices(PictureRef::class.java, pictureLoaders.map(::PictureRef))
+    fun updatePictureLoaders(pictureLoaders: Map<String, Picture.Loader>) {
+        val choices =
+            pictureLoaders.entries.sortedWithCollator(caseInsensitiveCollator()) { it.key }.map { PictureRef(it.value) }
+        updateExternalChoices(PictureRef::class.java, choices)
     }
 
-    fun updateTapes(tapes: Collection<Tape>) {
-        updateExternalChoices(TapeRef::class.java, tapes.map(::TapeRef))
+    fun updateTapes(tapes: Map<String, Tape>) {
+        val choices = tapes.entries.sortedWithCollator(caseInsensitiveCollator()) { it.key }.map { TapeRef(it.value) }
+        updateExternalChoices(TapeRef::class.java, choices)
     }
 
     private fun <V : Any> updateExternalChoices(settingType: Class<V>, choices: List<V>) {
@@ -73,9 +81,17 @@ class StyleFormAdjuster(
                     form.setChoices(setting, choices)
     }
 
-    private fun refreshConstraintViolations() {
-        constraintViolations = verifyConstraints(getCurrentStyling() ?: return)
-        notifyConstraintViolations(constraintViolations)
+    fun updateConstraintViolationsAndOverrideCtx(
+        violations: List<ConstraintViolation>?,
+        overrideCtx: OverrideWidgetSpec.Context?
+    ) {
+        if (violations != null && violations != this.constraintViolations ||
+            overrideCtx != null && overrideCtx != this.overrideCtx
+        ) {
+            violations?.let { this.constraintViolations = violations }
+            overrideCtx?.let { this.overrideCtx = overrideCtx }
+            adjustActiveForm()
+        }
     }
 
     private fun refreshSwatchColors() {
@@ -85,11 +101,12 @@ class StyleFormAdjuster(
         colorSet.add(styling.global.grounding)
         for (letterStyle in styling.letterStyles)
             for (layer in letterStyle.layers) {
-                if (layer.coloring != LayerColoring.OFF)
-                    colorSet.add(layer.color1)
+                when (layer.coloring) {
+                    LayerColoring.OFF -> {}
+                    LayerColoring.PLAIN -> colorSet.add(layer.plainColor)
+                    LayerColoring.GRADIENT -> for (stop in layer.gradientStops) colorSet.add(stop.color)
+                }
                 colorSet.addAll(layer.flashColors)
-                if (layer.coloring == LayerColoring.GRADIENT)
-                    colorSet.add(layer.color2)
             }
 
         swatchColors = colorSet.toList().sortedWith { c1, c2 -> Arrays.compare(c1.toHSB(), c2.toHSB()) }
@@ -97,18 +114,17 @@ class StyleFormAdjuster(
 
     private fun adjustActiveForm() {
         val activeForm = this.activeForm ?: return
+        val curStyling = getCurrentStyling() ?: return
         val curStyle = getCurrentStyleInActiveForm() ?: return
-        adjustForm(activeForm.castToStyle(curStyle.javaClass), curStyle)
+        adjustForm(curStyling, activeForm.castToStyle(curStyle.javaClass), curStyle)
     }
 
     private fun <S : Style> adjustForm(
-        curForm: StyleForm<S>, curStyle: S, curStyleIdx: Int = 0, siblingStyles: List<S> = emptyList()
+        styling: Styling, curForm: StyleForm<S>, curStyle: S, curStyleIdx: Int = 0, siblingStyles: List<S> = emptyList()
     ) {
-        val styling = getCurrentStyling() ?: return
-
         // Support for the leaking override.
-        @Suppress("NAME_SHADOWING") var curStyleIdx = curStyleIdx
-        @Suppress("NAME_SHADOWING") var siblingStyles = siblingStyles
+        var curStyleIdx = curStyleIdx
+        var siblingStyles = siblingStyles
         if (styleIdxAndSiblingsOverride != null) {
             val pair = styleIdxAndSiblingsOverride.getStyleIdxAndSiblings(curStyle)
             curStyleIdx = pair.first
@@ -116,13 +132,6 @@ class StyleFormAdjuster(
         }
 
         curForm.ineffectiveSettings = findIneffectiveSettings(styling, curStyle)
-
-        curForm.clearIssues()
-        for (violation in constraintViolations)
-            if (violation.leafStyle == curStyle) {
-                val issue = Form.Notice(violation.severity, violation.msg)
-                curForm.showIssueIfMoreSevere(violation.leafSetting, violation.leafSubjectIndex, issue)
-            }
 
         curForm.setSwatchColors(swatchColors)
 
@@ -140,10 +149,15 @@ class StyleFormAdjuster(
                 for (setting in constr.settings)
                     curForm.setChoices(setting, choices)
             }
-            is FontFeatureConstr -> {
-                val availableTags = constr.getAvailableTags(styling, curStyle).toList()
+            is FontVariationsConstr -> {
+                val availableAxes = constr.getAvailableAxes(styling, curStyle)
                 for (setting in constr.settings)
-                    curForm.setChoices(setting, availableTags, unique = true)
+                    curForm.setFontAxes(setting, availableAxes)
+            }
+            is FontFeatureConstr -> {
+                val availableFacets = constr.getAvailableFacets(styling, curStyle)
+                for (setting in constr.settings)
+                    curForm.setFontFacets(setting, availableFacets)
             }
             is TapeSliceConstr -> {
                 val fps = constr.getFPS(styling, curStyle)
@@ -172,6 +186,18 @@ class StyleFormAdjuster(
         }
 
         for (spec in getStyleWidgetSpecs(curStyle.javaClass)) when (spec) {
+            is NumberWidgetSpec<S, *> -> {
+                for (setting in spec.settings) {
+                    if (curForm.getWidgetFor(setting) is ScrubberWidget && spec.sensitivity == null)
+                        throw IllegalStateException("All scrubber widgets require a sensitivity widget spec.")
+                    val sensitivity = (spec.sensitivity ?: 0.1) * when (setting) {
+                        in SETTINGS_SCALING_WITH_RESOLUTION if setting != Global::resolution.st() ->
+                            styling.global.resolution.order.toDouble()
+                        else -> 1.0
+                    }
+                    curForm.setSensitivity(setting, sensitivity)
+                }
+            }
             is ToggleButtonGroupWidgetSpec<S, *> -> {
                 fun <SUBJ : Any> makeToIcon(spec: ToggleButtonGroupWidgetSpec<S, SUBJ>): ((SUBJ) -> Icon)? =
                     spec.getDynIcon?.let { return fun(item: SUBJ) = it(styling, curStyle, item) }
@@ -189,15 +215,53 @@ class StyleFormAdjuster(
             is TimecodeWidgetSpec -> {
                 val fps = spec.getFPS(styling, curStyle)
                 val timecodeFormat = spec.getTimecodeFormat(styling, curStyle)
-                for (setting in spec.settings)
+                for (setting in spec.settings) {
+                    val sensitivity = when (setting) {
+                        in SETTINGS_SCALING_WITH_FPS -> styling.global.fps.order.toDouble()
+                        in SETTINGS_SCALING_INVERSELY_WITH_FPS -> 1.0 / styling.global.fps.order
+                        else -> 1.0
+                    }
+                    curForm.setSensitivity(setting, sensitivity)
                     curForm.setTimecodeFPSAndFormat(setting, fps, timecodeFormat)
+                }
+            }
+            is OverrideWidgetSpec<S, *> ->
+                updateDefaultValue(curForm, curStyle, spec)
+            is GradientWidgetSpec -> {
+                val interpolation = spec.getInterpolation(styling, curStyle)
+                for (setting in spec.settings)
+                    curForm.setGradientInterpolation(setting, interpolation)
             }
             else -> {}
         }
 
+        // Push the issues AFTER the widgets have been adapted, because the leaf subject order in each widget needs to
+        // match what the constraint verifier saw. Think about the font variations widget and its order of axes.
+        constraintViolations?.let { violations ->
+            curForm.clearIssues()
+            for (violation in violations)
+                if (violation.leafStyle.identity == curStyle.identity) {
+                    val issue = Form.Notice(violation.severity, violation.msg)
+                    curForm.showIssueIfMoreSevere(violation.leafSetting, violation.leafSubjectIndex, issue)
+                }
+        }
+
         val (nestedForms, nestedStyles) = curForm.getNestedFormsAndStyles(curStyle)
         for (idx in nestedForms.indices)
-            adjustForm(nestedForms[idx].castToStyle(nestedStyles[idx].javaClass), nestedStyles[idx], idx, nestedStyles)
+            adjustForm(
+                styling,
+                curForm = nestedForms[idx].castToStyle(nestedStyles[idx].javaClass),
+                curStyle = nestedStyles[idx],
+                curStyleIdx = idx,
+                siblingStyles = nestedStyles
+            )
+    }
+
+    private fun <S : Style, SUBJ : Any> updateDefaultValue(
+        curForm: StyleForm<S>, curStyle: S, spec: OverrideWidgetSpec<S, SUBJ>
+    ) {
+        for (setting in spec.settings)
+            curForm.getWidgetFor(setting).defaultValue = spec.getDefaultValue(overrideCtx, curStyle)
     }
 
 

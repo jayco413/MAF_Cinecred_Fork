@@ -1,5 +1,6 @@
 package com.loadingbyte.cinecred.ui
 
+import com.loadingbyte.cinecred.common.ROOT_CASE_INSENSITIVE_COLLATOR
 import com.loadingbyte.cinecred.common.Resolution
 import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.drawer.*
@@ -14,7 +15,7 @@ import javax.swing.Icon
 
 sealed interface Overlay : DeferredImage.Layer, Comparable<Overlay> {
 
-    val uuid: UUID
+    val identity: UUID
     val label: String
     val icon: Icon get() = icon(javaClass)
 
@@ -72,7 +73,7 @@ class SafeAreasOverlay private constructor(
     private val actionSafe: Int, private val titleSafe: Int, private val l10nKey: String
 ) : Overlay {
 
-    override val uuid: UUID = UUID.randomUUID()
+    override val identity: UUID = UUID.randomUUID()
     override val label get() = l10n(l10nKey, "$actionSafe/$titleSafe")
 
     override fun draw(
@@ -97,7 +98,7 @@ class SafeAreasOverlay private constructor(
 
 
 class AspectRatioOverlay(
-    override val uuid: UUID,
+    override val identity: UUID,
     val h: Double,
     val v: Double
 ) : ConfigurableOverlay {
@@ -122,13 +123,12 @@ class AspectRatioOverlay(
 
 
 class LinesOverlay(
-    override val uuid: UUID,
+    override val identity: UUID,
     val name: String,
     val color: Color4f?,
     val hLines: List<Int>,
     val vLines: List<Int>
-) :
-    ConfigurableOverlay {
+) : ConfigurableOverlay {
 
     override val label get() = name
 
@@ -141,7 +141,7 @@ class LinesOverlay(
     }
 
     override fun compareTo(other: Overlay) = when (other) {
-        is LinesOverlay -> name.compareTo(other.name)
+        is LinesOverlay -> ROOT_CASE_INSENSITIVE_COLLATOR.compare(name, other.name)
         else -> Overlay.TYPES.indexOf(javaClass).compareTo(Overlay.TYPES.indexOf(other.javaClass))
     }
 
@@ -149,7 +149,7 @@ class LinesOverlay(
 
 
 class ImageOverlay(
-    override val uuid: UUID,
+    override val identity: UUID,
     val name: String,
     val raster: Picture.Raster,
     var rasterPersisted: Boolean,
@@ -167,7 +167,7 @@ class ImageOverlay(
     }
 
     override fun compareTo(other: Overlay) = when (other) {
-        is ImageOverlay -> name.compareTo(other.name)
+        is ImageOverlay -> ROOT_CASE_INSENSITIVE_COLLATOR.compare(name, other.name)
         else -> Overlay.TYPES.indexOf(javaClass).compareTo(Overlay.TYPES.indexOf(other.javaClass))
     }
 

@@ -7,8 +7,10 @@ import com.loadingbyte.cinecred.imaging.Bitmap.Alpha.*
 import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.*
 import com.loadingbyte.cinecred.imaging.Bitmap.Range.FULL
 import com.loadingbyte.cinecred.imaging.Bitmap.Range.LIMITED
-import com.loadingbyte.cinecred.imaging.BitmapConverter.Companion.convert
+import com.loadingbyte.cinecred.imaging.BitmapConverter.ResamplingFilter.NEAREST_NEIGHBOR
 import com.loadingbyte.cinecred.imaging.BitmapConverter.StageType.*
+import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.XYZD50
+import com.loadingbyte.cinecred.imaging.ColorSpace.Primaries.Companion.XYZE
 import com.loadingbyte.cinecred.imaging.ColorSpace.Transfer.Companion.LINEAR
 import com.loadingbyte.cinecred.natives.skcms.skcms_Curve
 import com.loadingbyte.cinecred.natives.skcms.skcms_ICCProfile
@@ -54,7 +56,6 @@ import jdk.incubator.vector.ShortVector.fromMemorySegment as vec
  * @param dstAligned Assumes that the destination [Bitmap.isAligned]. This admits certain optimizations.
  * @param promiseOpaque Assumes that the source alpha channel is 1 everywhere. This admits certain optimizations.
  * @param approxTransfer Use faster, but less precise transfer characteristics conversion.
- * @param nearestNeighbor Use very fast nearest neighbor scaling.
  */
 class BitmapConverter(
     private val srcSpec: Bitmap.Spec,
@@ -63,7 +64,7 @@ class BitmapConverter(
     private val dstAligned: Boolean = true,
     promiseOpaque: Boolean = false,
     approxTransfer: Boolean = false,
-    nearestNeighbor: Boolean = false
+    resamplingFilter: ResamplingFilter = ResamplingFilter.DEFAULT
 ) : AutoCloseable {
 
     private val stages = mutableListOf<Stage>()
@@ -83,8 +84,8 @@ class BitmapConverter(
 
     init {
         require(
-            (srcSpec.representation.pixelFormat.family == GRAY) == (dstSpec.representation.pixelFormat.family == GRAY)
-        ) { "Cannot convert between gray and chromatic bitmaps." }
+            !(srcSpec.representation.pixelFormat.family != GRAY && dstSpec.representation.pixelFormat.family == GRAY)
+        ) { "Cannot convert a chromatic to a gray bitmap." }
         val srcC = srcSpec.content
         val dstC = dstSpec.content
         require(
@@ -94,7 +95,7 @@ class BitmapConverter(
         ) { "Cannot convert between a single field and two interleaved fields." }
 
         // Find a pipeline of stages that converts bitmaps between the src and dst spec.
-        val (stageTypes, effSpecs) = Pathfinder(srcSpec, dstSpec, srcAligned, dstAligned, nearestNeighbor).run()
+        val (stageTypes, effSpecs) = Pathfinder(srcSpec, dstSpec, srcAligned, dstAligned, resamplingFilter).run()
 
         // If the first stage (un)premultiplies and/or drops the alpha channel, but the operation actually doesn't do
         // anything apart from copying the data, we can remove the stage and let reinterpretation take care of it.
@@ -120,10 +121,12 @@ class BitmapConverter(
                 PLANAR_FLOAT -> PlanarFloatStage
                 ADD_ALPHA_CHANNEL -> AddAlphaChannelStage
                 UN_PREMUL_OR_DROP_ALPHA_CHANNEL -> UnPremulOrDropAlphaChannelStage(promiseOpaque)
+                SPREAD_GRAY -> SpreadGrayStage
+                DE_INTERLACE -> DeInterlaceStage
                 LIMITED_X2RGB10BE -> LimitedX2RGB10BEStage
                 SWS -> SwsStage(effSpecs[i], effSpecs[i + 1])
                 SKCMS -> SkcmsStage(effSpecs[i], effSpecs[i + 1], promiseOpaque)
-                ZIMG -> ZimgStage(effSpecs[i], effSpecs[i + 1], promiseOpaque, approxTransfer, nearestNeighbor)
+                ZIMG -> ZimgStage(effSpecs[i], effSpecs[i + 1], promiseOpaque, approxTransfer, resamplingFilter)
             }
 
         // Allocate reusable intermediate bitmaps that connect the processors with each other.
@@ -222,10 +225,10 @@ class BitmapConverter(
             dst: Bitmap,
             promiseOpaque: Boolean = false,
             approxTransfer: Boolean = false,
-            nearestNeighbor: Boolean = false
+            resamplingFilter: ResamplingFilter = ResamplingFilter.DEFAULT
         ) {
             BitmapConverter(
-                src.spec, dst.spec, src.isAligned, dst.isAligned, promiseOpaque, approxTransfer, nearestNeighbor
+                src.spec, dst.spec, src.isAligned, dst.isAligned, promiseOpaque, approxTransfer, resamplingFilter
             ).use { it.convert(src, dst) }
         }
 
@@ -241,8 +244,31 @@ class BitmapConverter(
     }
 
 
+    enum class ResamplingFilter(val code: Int, val a: Double = Double.NaN, val b: Double = Double.NaN) {
+
+        NEAREST_NEIGHBOR(ZIMG_RESIZE_POINT()),
+        BILINEAR(ZIMG_RESIZE_BILINEAR()),
+        BICUBIC_MITCHELL_NETRAVALI(ZIMG_RESIZE_BICUBIC(), 1.0 / 3.0, 1.0 / 3.0),
+        LANCZOS(ZIMG_RESIZE_LANCZOS());
+
+        companion object {
+            val DEFAULT = LANCZOS
+        }
+
+    }
+
+
     private enum class StageType {
-        BLIT, PLANAR_FLOAT, ADD_ALPHA_CHANNEL, UN_PREMUL_OR_DROP_ALPHA_CHANNEL, LIMITED_X2RGB10BE, SWS, SKCMS, ZIMG
+        BLIT,
+        PLANAR_FLOAT,
+        ADD_ALPHA_CHANNEL,
+        UN_PREMUL_OR_DROP_ALPHA_CHANNEL,
+        SPREAD_GRAY,
+        DE_INTERLACE,
+        LIMITED_X2RGB10BE,
+        SWS,
+        SKCMS,
+        ZIMG
     }
 
 
@@ -264,7 +290,7 @@ class BitmapConverter(
         private val dstSpec: Bitmap.Spec,
         srcAligned: Boolean,
         dstAligned: Boolean,
-        private val nearestNeighbor: Boolean
+        private val resamplingFilter: ResamplingFilter
     ) {
 
         // Choose sets of formats, primaries, transfer characteristics, contents, and resolutions of the src, dst, and
@@ -293,32 +319,30 @@ class BitmapConverter(
             val srcRep = srcSpec.representation
             val dstRep = dstSpec.representation
 
-            val (srcFullF, srcAny) = setOf(
+            val (srcF, srcAny) = setOf(
                 Fmt(srcRep.pixelFormat, srcRep.range, srcRep.yuvCoefficients, srcRep.chromaLocation),
                 Fmt(ZimgStage.equiv(srcRep.pixelFormat), srcRep.range, srcRep.yuvCoefficients, srcRep.chromaLocation),
-            ).partition(Fmt::isFullF)
-            val (dstFullF, dstAny) = setOf(
+            ).partition(Fmt::isF)
+            val (dstF, dstAny) = setOf(
                 Fmt(dstRep.pixelFormat, dstRep.range, dstRep.yuvCoefficients, dstRep.chromaLocation),
                 Fmt(ZimgStage.equiv(dstRep.pixelFormat), dstRep.range, dstRep.yuvCoefficients, dstRep.chromaLocation),
-            ).partition(Fmt::isFullF)
-            val fullFPool = HashSet<Fmt>()
-            fullFPool += srcFullF
-            fullFPool += dstFullF
-            fullFPool += Fmt(planarFloatEquiv(srcRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
-            fullFPool += Fmt(planarFloatEquiv(dstRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
-            fullFPool += Fmt(interleavedFloatEquiv(srcRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
-            fullFPool += Fmt(interleavedFloatEquiv(dstRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
+            ).partition(Fmt::isF)
+            val fPool = HashSet<Fmt>()
+            fPool += srcF
+            fPool += dstF
+            fPool += Fmt(planarFloatEquiv(srcRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
+            fPool += Fmt(planarFloatEquiv(dstRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
+            fPool += Fmt(interleavedFloatEquiv(srcRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
+            fPool += Fmt(interleavedFloatEquiv(dstRep.pixelFormat), FULL, null, AVCHROMA_LOC_UNSPECIFIED)
             val fmtObjList = mutableListOf<Fmt>()
             fmtObjList += srcAny
-            fmtObjList += fullFPool
+            fmtObjList += fPool
             fmtObjList += dstAny.asReversed()
             fmtObjs = fmtObjList.toTypedArray()
 
-            priObjs = setOf(srcRep.colorSpace?.primaries, dstRep.colorSpace?.primaries).toTypedArray()
-            trcObjs = setOf(LINEAR, srcRep.colorSpace?.transfer, dstRep.colorSpace?.transfer)
-                .filterNotNull().toTypedArray()
-            conObjs = setOf(srcSpec.content, dstSpec.content)
-                .sortedBy { if (it == Bitmap.Content.PROGRESSIVE_FRAME) 1 else 0 }.toTypedArray()
+            priObjs = setOf(srcRep.colorSpace.primaries, dstRep.colorSpace.primaries, XYZE).toTypedArray()
+            trcObjs = setOf(srcRep.colorSpace.transfer, dstRep.colorSpace.transfer, LINEAR).toTypedArray()
+            conObjs = setOf(srcSpec.content, dstSpec.content).toTypedArray()
             resObjs = setOf(srcSpec.resolution, dstSpec.resolution).toTypedArray()
         }
 
@@ -332,8 +356,8 @@ class BitmapConverter(
             return state(
                 ali = isAligned,
                 fmt = if (!lastMatchingFmt) fmtObjs.indexOf(fmtObj) else fmtObjs.lastIndexOf(fmtObj),
-                pri = priObjs.indexOf(rep.colorSpace?.primaries),
-                trc = trcObjs.indexOf(rep.colorSpace?.transfer ?: LINEAR),
+                pri = priObjs.indexOf(rep.colorSpace.primaries),
+                trc = trcObjs.indexOf(rep.colorSpace.transfer),
                 pmu = rep.alpha == PREMULTIPLIED,
                 con = conObjs.indexOf(spec.content),
                 res = resObjs.indexOf(spec.resolution)
@@ -346,21 +370,21 @@ class BitmapConverter(
         fun run(): Pair<MutableList<StageType>, MutableList<Bitmap.Spec>> {
             if (srcState == dstState)
                 return Pair(mutableListOf(BLIT), mutableListOf(srcSpec, dstSpec))
-            table = IntArray(2 * 8 * 2 * 4 * 2 * 2 * 2)
+            table = IntArray(2 /*ali*/ * 8 /*fmt*/ * 4 /*pri*/ * 4 /*trc*/ * 2 /*pmu*/ * 2 /*con*/ * 2 /*res*/) { -1 }
             if (!fillTable())
                 throw IllegalArgumentException("Cannot find conversion pipeline between $srcSpec and $dstSpec.")
             return backtrackThroughTable()
         }
 
         private fun fillTable(): Boolean {
-            val firstFullFFmt = fmtObjs.indexOfFirst(Fmt::isFullF)
-            val fullGBRPFFmt = fmtObjs.indexOfFirst(Fmt::isFullGBRPF)
-            val fullGBRAPFFmt = fmtObjs.indexOfFirst(Fmt::isFullGBRAPF)
+            val firstFFmt = fmtObjs.indexOfFirst(Fmt::isF)
+            val gbrpfFmt = fmtObjs.indexOfFirst(Fmt::isGBRPF)
+            val gbrapfFmt = fmtObjs.indexOfFirst(Fmt::isGBRAPF)
 
             val fromStates = IntList(table.size /* large enough */)
             val newStates = IntList(fromStates.capacity)
 
-            table[srcState] = -1
+            table[srcState] = -2
             fromStates += srcState
 
             for (i in 0..<16 /* infinite loop protection */) {
@@ -379,16 +403,17 @@ class BitmapConverter(
                     val fmtObj = fmtObjs[fmt]
                     val priObj = priObjs[pri]
                     val trcObj = trcObjs[trc]
+                    val conObj = conObjs[con]
 
-                    val firstToFmt = if (fmtObj.isFullF) firstFullFFmt else fmt + 1
+                    val firstToFmt = if (fmtObj.isF) firstFFmt else fmt + 1
 
                     fun link(
                         type: StageType, ali: Boolean, fmt: Int, pri: Int, trc: Int, pmu: Boolean, con: Int, res: Int
                     ) {
                         val toState = state(ali, fmt, pri, trc, pmu, con, res)
                         // Skip the link if toState has already been populated.
-                        if (table[toState] == 0) {
-                            table[toState] = (type.ordinal shl 10) or state
+                        if (table[toState] == -1) {
+                            table[toState] = (type.ordinal shl 11) or state
                             newStates += toState
                         }
                     }
@@ -398,22 +423,25 @@ class BitmapConverter(
                     // states to the next iteration's "next" list.
 
                     // (Un)premultiply or drop alpha channel stage
-                    if (ali && fmtObj.isFullGBRAPF) {
-                        if (fullGBRPFFmt != -1) {
-                            link(UN_PREMUL_OR_DROP_ALPHA_CHANNEL, true, fullGBRPFFmt, pri, trc, false, con, res)
-                            link(UN_PREMUL_OR_DROP_ALPHA_CHANNEL, false, fullGBRPFFmt, pri, trc, false, con, res)
+                    if (ali && fmtObj.isGBRAPF) {
+                        if (gbrpfFmt != -1) {
+                            link(UN_PREMUL_OR_DROP_ALPHA_CHANNEL, true, gbrpfFmt, pri, trc, false, con, res)
+                            link(UN_PREMUL_OR_DROP_ALPHA_CHANNEL, false, gbrpfFmt, pri, trc, false, con, res)
                         }
                         link(UN_PREMUL_OR_DROP_ALPHA_CHANNEL, true, fmt, pri, trc, !pmu, con, res)
                         link(UN_PREMUL_OR_DROP_ALPHA_CHANNEL, false, fmt, pri, trc, !pmu, con, res)
                     }
 
                     // Blit stage
-                    link(BLIT, !ali, fmt, pri, trc, pmu, con, res)
+                    for (toFmt in fmt..fmtObjs.lastIndex)
+                        if (fmtObj == fmtObjs[toFmt]) {
+                            link(BLIT, true, toFmt, pri, trc, pmu, con, res)
+                            link(BLIT, false, toFmt, pri, trc, pmu, con, res)
+                        }
 
-                    // Planar float stage & limited X2RGB10BE stage & SWS stage
+                    // Planar float stage
                     // Note: We first give our planar float stage a chance, because converting to PF is preferred over
                     // letting SWS convert to the zimg-equivalent non-float pixel format and then passing that to zimg.
-                    // In addition, SWS is useful to directly convert between interleaved pixel formats.
                     for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                         val toFmtObj = fmtObjs[toFmt]
                         if (fmtObj.hasSameCompositionAs(toFmtObj) && (
@@ -425,7 +453,9 @@ class BitmapConverter(
                             link(PLANAR_FLOAT, false, toFmt, pri, trc, pmu, con, res)
                         }
                     }
-                    if (fmtObj.isFullRGBF || fmtObj.isFullRGBAF)
+
+                    // Limited X2RGB10BE stage
+                    if (fmtObj.isRGBF || fmtObj.isRGBAF)
                         for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                             val toFmtObj = fmtObjs[toFmt]
                             if (toFmtObj.px.code == AV_PIX_FMT_X2RGB10BE && toFmtObj.range == LIMITED) {
@@ -433,6 +463,9 @@ class BitmapConverter(
                                 link(LIMITED_X2RGB10BE, false, toFmt, pri, trc, pmu, con, res)
                             }
                         }
+
+                    // SWS stage
+                    // Note: SWS is useful to directly convert between interleaved pixel formats.
                     for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                         val toFmtObj = fmtObjs[toFmt]
                         if (fmtObj.hasSameCompositionAs(toFmtObj) && (
@@ -446,32 +479,53 @@ class BitmapConverter(
                         }
                     }
 
+                    // Spread gray stage
+                    if (ali && fmtObj.isGF)
+                        for (toFmt in firstToFmt..fmtObjs.lastIndex) {
+                            val toFmtObj = fmtObjs[toFmt]
+                            if (toFmtObj.isGBRPF || toFmtObj.isGBRAPF)
+                                for ((toPri, toPriObj) in priObjs.withIndex())
+                                    if (toPriObj == XYZE)
+                                        link(SPREAD_GRAY, true, toFmt, toPri, trc, pmu, con, res)
+                        }
+
                     // Zimg stage
                     // Note: By virtue of the max(), we disallow zimg to output in the source format,
                     // because that could lead to information loss.
                     if (ali && fmtObj.isSupportedByZimg)
-                        for (toFmt in max(firstToFmt, firstFullFFmt)..fmtObjs.lastIndex) {
+                        for (toFmt in max(firstToFmt, firstFFmt)..fmtObjs.lastIndex) {
                             val toFmtObj = fmtObjs[toFmt]
                             if (toFmtObj.isSupportedByZimg &&
+                                // While zimg can convert grayscale to chromatic, it is not entirely clear how it's done
+                                // and how predictable it is. Hence, we don't use this feature.
+                                (fmtObj.px.family == GRAY) == (toFmtObj.px.family == GRAY) &&
                                 (fmtObj.px.hasAlpha == toFmtObj.px.hasAlpha || !toFmtObj.px.hasAlpha && !pmu)
                             )
                                 for ((toPri, toPriObj) in priObjs.withIndex())
-                                    if (pri == toPri || priObj!!.hasCode && toPriObj!!.hasCode)
-                                        for (toCon in conObjs.indices)
-                                            if (nearestNeighbor && !pmu) {
+                                    if ((priObj == null) == (toPriObj == null) &&
+                                        (pri == toPri ||
+                                                (priObj?.hasCode != false || priObj == XYZD50) &&
+                                                (toPriObj?.hasCode != false || toPriObj == XYZD50))
+                                    )
+                                        if (fmtObj.px.vChromaSub == 0 && toFmtObj.px.vChromaSub == 0 ||
+                                            conObj == Bitmap.Content.PROGRESSIVE_FRAME
+                                        )
+                                            if (resamplingFilter == NEAREST_NEIGHBOR && !pmu) {
                                                 for ((toTrc, toTrcObj) in trcObjs.withIndex())
-                                                    if (pri == toPri && trc == toTrc || trcObj.hasCode && toTrcObj.hasCode)
+                                                // zimg can convert between TRCs only if the bitmap is non-gray.
+                                                    if (pri == toPri && trc == toTrc || priObj != null && trcObj.hasCode && toTrcObj.hasCode)
                                                         for (toRes in resObjs.indices)
-                                                            link(ZIMG, true, toFmt, toPri, toTrc, false, toCon, toRes)
+                                                            link(ZIMG, true, toFmt, toPri, toTrc, false, con, toRes)
                                             } else {
-                                                link(ZIMG, true, toFmt, toPri, trc, pmu, toCon, res)
+                                                link(ZIMG, true, toFmt, toPri, trc, pmu, con, res)
                                                 if (!pmu)
-                                                    for ((toTrc, toTO) in trcObjs.withIndex())
-                                                        if (pri == toPri && trc == toTrc || trcObj.hasCode && toTO.hasCode)
-                                                            link(ZIMG, true, toFmt, toPri, toTrc, false, toCon, res)
-                                                if (nearestNeighbor || (!toFmtObj.px.hasAlpha || pmu) && trcObj == LINEAR)
+                                                    for ((toTrc, toTrcObj) in trcObjs.withIndex())
+                                                    // zimg can convert between TRCs only if the bitmap is non-gray.
+                                                        if (pri == toPri && trc == toTrc || priObj != null && trcObj.hasCode && toTrcObj.hasCode)
+                                                            link(ZIMG, true, toFmt, toPri, toTrc, false, con, res)
+                                                if (resamplingFilter == NEAREST_NEIGHBOR || (!toFmtObj.px.hasAlpha || pmu) && trcObj == LINEAR)
                                                     for (toRes in resObjs.indices)
-                                                        link(ZIMG, true, toFmt, toPri, trc, pmu, toCon, toRes)
+                                                        link(ZIMG, true, toFmt, toPri, trc, pmu, con, toRes)
                                             }
                         }
 
@@ -480,7 +534,7 @@ class BitmapConverter(
                         for (toFmt in firstToFmt..fmtObjs.lastIndex) {
                             val toFmtObj = fmtObjs[toFmt]
                             if (SkcmsStage.supports(toFmtObj.px) && fmtObj.hasSameCompositionAsExAlpha(toFmtObj))
-                                for (toPri in priObjs.indices)
+                                for ((toPri, toPriObj) in priObjs.withIndex()) if (toPriObj != null)
                                     for ((toTrc, toTrcObj) in trcObjs.withIndex())
                                         if (pri == toPri && trc == toTrc || trcObj.hasCurve && toTrcObj.hasCurve)
                                             if (toFmtObj.px.hasAlpha) {
@@ -494,16 +548,22 @@ class BitmapConverter(
                                             }
                         }
 
+                    // (De)interlace stage
+                    // This should happen as late as possible, because we want most processing to happen under the scan
+                    // interpretation of the source bitmap.
+                    if (con == 0 && conObjs.size == 2 && fmtObj.px.vChromaSub == 0)
+                        link(DE_INTERLACE, ali, fmt, pri, trc, pmu, 1, res)
+
                     // Add alpha channel stage
-                    if (ali && fullGBRAPFFmt != -1 && fmtObj.isFullGBRPF) {
-                        link(ADD_ALPHA_CHANNEL, true, fullGBRAPFFmt, pri, trc, false, con, res)
-                        link(ADD_ALPHA_CHANNEL, true, fullGBRAPFFmt, pri, trc, true, con, res)
+                    if (ali && gbrapfFmt != -1 && fmtObj.isGBRPF) {
+                        link(ADD_ALPHA_CHANNEL, true, gbrapfFmt, pri, trc, false, con, res)
+                        link(ADD_ALPHA_CHANNEL, true, gbrapfFmt, pri, trc, true, con, res)
                     }
                 }
 
                 fromStates.clearThenDrainFrom(newStates)
 
-                if (table[dstState] != 0)
+                if (table[dstState] != -1)
                     return true
             }
 
@@ -516,8 +576,8 @@ class BitmapConverter(
             var state = dstState
             while (state != srcState) {
                 val entry = table[state]
-                state = entry and 1023
-                stageTypes += StageType.entries[entry shr 10]
+                state = entry and 2047
+                stageTypes += StageType.entries[entry shr 11]
                 specs += spec(state)
             }
             stageTypes.reverse()
@@ -527,24 +587,27 @@ class BitmapConverter(
 
         private fun spec(state: Int): Bitmap.Spec {
             val fmt = fmtObjs[fmt(state)]
-            val cs = priObjs[pri(state)]?.let { ColorSpace.of(it, trcObjs[trc(state)]) }
+            val cs = ColorSpace.of(priObjs[pri(state)], trcObjs[trc(state)])
             val alpha = if (!fmt.px.hasAlpha) OPAQUE else if (pmu(state)) PREMULTIPLIED else STRAIGHT
             val rep = Bitmap.Representation(fmt.px, fmt.range, cs, fmt.coeffs, fmt.loc, alpha)
-            return Bitmap.Spec(resObjs[res(state)], rep, srcSpec.scan, srcSpec.content)
+            val content = conObjs[con(state)]
+            val scan = if (content == Bitmap.Content.PROGRESSIVE_FRAME) Bitmap.Scan.PROGRESSIVE else
+                if (srcSpec.scan != Bitmap.Scan.PROGRESSIVE) srcSpec.scan else dstSpec.scan
+            return Bitmap.Spec(resObjs[res(state)], rep, scan, content)
         }
 
         companion object {
 
             private fun state(ali: Boolean, fmt: Int, pri: Int, trc: Int, pmu: Boolean, con: Int, res: Int): Int {
-                var state = (fmt shl 6) or (pri shl 5) or (trc shl 3) or (con shl 1) or res
-                if (ali) state = state or 512
+                var state = (fmt shl 7) or (pri shl 5) or (trc shl 3) or (con shl 1) or res
+                if (ali) state = state or 1024
                 if (pmu) state = state or 4
                 return state
             }
 
-            private fun ali(state: Int) = state and 512 != 0
-            private fun fmt(state: Int) = (state shr 6) and 7
-            private fun pri(state: Int) = (state shr 5) and 1
+            private fun ali(state: Int) = state and 1024 != 0
+            private fun fmt(state: Int) = (state shr 7) and 7
+            private fun pri(state: Int) = (state shr 5) and 3
             private fun trc(state: Int) = (state shr 3) and 3
             private fun pmu(state: Int) = state and 4 != 0
             private fun con(state: Int) = (state shr 1) and 1
@@ -553,6 +616,7 @@ class BitmapConverter(
             private fun interleavedFloatEquiv(pixelFormat: Bitmap.PixelFormat) = Bitmap.PixelFormat.of(
                 when (pixelFormat.components.size) {
                     1 -> AV_PIX_FMT_GRAYF32
+                    2 -> AV_PIX_FMT_YAF32
                     3 -> AV_PIX_FMT_RGBF32
                     4 -> AV_PIX_FMT_RGBAF32
                     else -> throw IllegalArgumentException("Unsupported component count.")
@@ -595,23 +659,19 @@ class BitmapConverter(
             val px: Bitmap.PixelFormat, val range: Bitmap.Range, val coeffs: Bitmap.YUVCoefficients?, val loc: Int
         ) {
 
-            val isFullF = range == FULL && px.code.let {
-                it == AV_PIX_FMT_GRAYF32 || it == AV_PIX_FMT_RGBF32 || it == AV_PIX_FMT_RGBAF32 ||
-                        it == AV_PIX_FMT_GBRPF32 || it == AV_PIX_FMT_GBRAPF32
-            }
-            val isFullRGBF = px.code == AV_PIX_FMT_RGBF32 && range == FULL
-            val isFullRGBAF = px.code == AV_PIX_FMT_RGBAF32 && range == FULL
-            val isFullGBRPF = px.code == AV_PIX_FMT_GBRPF32 && range == FULL
-            val isFullGBRAPF = px.code == AV_PIX_FMT_GBRAPF32 && range == FULL
+            val isGF = px.code == AV_PIX_FMT_GRAYF32
+            val isRGBF = px.code == AV_PIX_FMT_RGBF32
+            val isRGBAF = px.code == AV_PIX_FMT_RGBAF32
+            val isGBRPF = px.code == AV_PIX_FMT_GBRPF32
+            val isGBRAPF = px.code == AV_PIX_FMT_GBRAPF32
+            val isF = isGF || isRGBF || isRGBAF || isGBRPF || isGBRAPF
             val isSupportedByPFAsDirty: Boolean
             // Note: We intentionally only consider native-endian PF pixel formats as clean, as it makes no sense
             // to convert from a dirty pixel format to a PF one with an endianness that no other stage supports.
-            val isSupportedByPFAsClean = px.code.let {
-                it == AV_PIX_FMT_GRAYF32 || it == AV_PIX_FMT_GBRPF32 || it == AV_PIX_FMT_GBRAPF32
-            }
+            val isSupportedByPFAsClean = isGF || isGBRPF || isGBRAPF
             val isSupportedBySwsAsInput = sws_isSupportedInput(px.code) != 0
             val isSupportedBySwsAsOutput = sws_isSupportedOutput(px.code) != 0
-            val isSupportedByZimg: Boolean
+            val isSupportedByZimg = px in ZimgStage.SUPPORTED_PIXEL_FORMATS
 
             init {
                 val depth = px.components[0].depth
@@ -631,15 +691,13 @@ class BitmapConverter(
                                         )
                             }
                 isSupportedByPFAsDirty = isCanonical && numComps != 2 && px.family != YUV
-                isSupportedByZimg = isCanonical && px.isPlanar && px.byteOrder == ByteOrder.nativeOrder()
             }
 
             fun hasSameCompositionAsExAlpha(other: Fmt): Boolean =
                 px.family == other.px.family &&
                         range == other.range &&
                         coeffs == other.coeffs &&
-                        loc == other.loc &&
-                        (range == FULL || px.isFloat == other.px.isFloat)
+                        loc == other.loc
 
             fun hasSameCompositionAs(other: Fmt): Boolean =
                 hasSameCompositionAsExAlpha(other) && px.hasAlpha == other.px.hasAlpha
@@ -654,6 +712,7 @@ class BitmapConverter(
        ************************************************** */
 
 
+    /** This stage blits the source onto the destination, and can also flip coded field order. */
     private object BlitStage : Stage {
 
         override fun process(src: Bitmap, dst: Bitmap) {
@@ -708,7 +767,7 @@ class BitmapConverter(
                     if (inplace) unpremultiplyDontPutAlpha(src, dst) else unpremultiply(src, dst)
                 !promiseOpaque && srcAlpha == PREMULTIPLIED && dstAlpha == OPAQUE ->
                     unpremultiplyDontPutAlpha(src, dst)
-                !src.sharesStorageWith(dst) ->
+                !inplace ->
                     src.reinterpretedView(dst.spec).use(dst::blit)
             }
         }
@@ -759,6 +818,68 @@ class BitmapConverter(
             fun isNoOp(promiseOpaque: Boolean, srcSpec: Bitmap.Spec, dstSpec: Bitmap.Spec) =
                 promiseOpaque || srcSpec.representation.alpha == STRAIGHT && dstSpec.representation.alpha == OPAQUE
         }
+
+    }
+
+
+    /** This stage converts an aligned float32 grayscale bitmap to an aligned planar float32 RGB(A) bitmap. */
+    private object SpreadGrayStage : Stage {
+
+        override fun process(src: Bitmap, dst: Bitmap) {
+            when (dst.spec.representation.pixelFormat.hasAlpha) {
+                false -> spreadWithoutAlpha(src, dst)
+                true -> spreadWithAlpha(src, dst)
+            }
+        }
+
+        private fun spreadWithoutAlpha(src: Bitmap, dst: Bitmap) = exec(src, dst, putAlpha = false)
+        private fun spreadWithAlpha(src: Bitmap, dst: Bitmap) = exec(src, dst, putAlpha = true)
+
+        @Suppress("NOTHING_TO_INLINE")
+        private inline fun exec(src: Bitmap, dst: Bitmap, putAlpha: Boolean) {
+            val srcSeg = src.memorySegment(0)
+            val (dstSegX, dstSegY, dstSegZ) =
+                dst.spec.representation.pixelFormat.components.subList(0, 3).map { dst.memorySegment(it.plane) }
+            val dstSegA = if (!putAlpha) null else
+                dst.memorySegment(dst.spec.representation.pixelFormat.components.last().plane)
+            val srcLs = src.linesize(0)
+            val dstLs = dst.linesize(0)
+            val (w, h) = src.spec.resolution
+            val stepsPerLine = ceilDiv(w, QUART_VLEN)
+            val oneVec = if (!putAlpha) null else FloatVector.broadcast(F, 1f)
+            for (y in 0L..<h.toLong()) {
+                var s = y * srcLs
+                var d = y * dstLs
+                repeat(stepsPerLine) {
+                    val vecG = vec(F, srcSeg, s, NBO)
+                    vecG.intoMemorySegment(dstSegX, d, NBO)
+                    vecG.intoMemorySegment(dstSegY, d, NBO)
+                    vecG.intoMemorySegment(dstSegZ, d, NBO)
+                    if (putAlpha)
+                        oneVec!!.intoMemorySegment(dstSegA, d, NBO)
+                    s += VLEN
+                    d += VLEN
+                }
+            }
+        }
+
+        override fun close() {}
+
+    }
+
+
+    /**
+     * This stage merges two interlaced fields into a progressive frame, or splits a frame into two fields.
+     * Currently, this is implemented as simple reinterpretation or a blit.
+     */
+    private object DeInterlaceStage : Stage {
+
+        override fun process(src: Bitmap, dst: Bitmap) {
+            if (!src.sharesStorageWith(dst))
+                dst.blit(src)
+        }
+
+        override fun close() {}
 
     }
 
@@ -866,10 +987,10 @@ class BitmapConverter(
 
         init {
             setupSafely({
-                srcProfileSeg = buildProfile(skcms_ICCProfile.allocate(arena), srcSpec.representation.colorSpace!!)
-                dstProfileSeg = buildProfile(skcms_ICCProfile.allocate(arena), dstSpec.representation.colorSpace!!)
+                srcProfileSeg = buildProfile(skcms_ICCProfile.allocate(arena), srcSpec.representation.colorSpace)
+                dstProfileSeg = buildProfile(skcms_ICCProfile.allocate(arena), dstSpec.representation.colorSpace)
                 if (srcFlip || dstFlip)
-                    bufSeg = arena.allocateArray(JAVA_INT, srcSpec.resolution.widthPx.toLong())
+                    bufSeg = arena.allocate(JAVA_INT, srcSpec.resolution.widthPx.toLong())
             }, ::close)
         }
 
@@ -903,8 +1024,7 @@ class BitmapConverter(
         companion object {
 
             private val JAVA_INT_FLIPPED_BO = JAVA_INT.withOrder(
-                if (ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN) ByteOrder.BIG_ENDIAN
-                else ByteOrder.LITTLE_ENDIAN
+                if (NBO == ByteOrder.LITTLE_ENDIAN) ByteOrder.BIG_ENDIAN else ByteOrder.LITTLE_ENDIAN
             )
 
             fun supports(pixelFormat: Bitmap.PixelFormat) = skcmsPixelFormat(pixelFormat) != -1
@@ -945,18 +1065,18 @@ class BitmapConverter(
 
             private fun buildProfile(profileSeg: MemorySegment, colorSpace: ColorSpace): MemorySegment {
                 profileSeg.fill(0)
-                skcms_ICCProfile.`data_color_space$set`(profileSeg, skcms_Signature_RGB())
-                skcms_ICCProfile.`pcs$set`(profileSeg, skcms_Signature_XYZ())
-                skcms_ICCProfile.`has_toXYZD50$set`(profileSeg, true)
+                skcms_ICCProfile.data_color_space(profileSeg, skcms_Signature_RGB())
+                skcms_ICCProfile.pcs(profileSeg, skcms_Signature_XYZ())
+                skcms_ICCProfile.has_toXYZD50(profileSeg, true)
 
-                val matrixArr = colorSpace.primaries.toXYZD50.values
-                MemorySegment.copy(matrixArr, 0, skcms_ICCProfile.`toXYZD50$slice`(profileSeg), JAVA_FLOAT, 0L, 9)
-                skcms_ICCProfile.`has_trc$set`(profileSeg, true)
+                val matrixArr = colorSpace.primaries!!.toXYZD50.values
+                MemorySegment.copy(matrixArr, 0, skcms_ICCProfile.toXYZD50(profileSeg), JAVA_FLOAT, 0L, 9)
+                skcms_ICCProfile.has_trc(profileSeg, true)
 
                 val curveArr = (if (colorSpace.transfer.hasCurve) colorSpace.transfer else LINEAR).toLinear.asArray()
-                val trcSeg = skcms_ICCProfile.`trc$slice`(profileSeg)
-                for (c in 0..<3) {
-                    val parametricSeg = skcms_Curve.`parametric$slice`(trcSeg.asSlice(c * skcms_Curve.sizeof()))
+                val trcSeg = skcms_ICCProfile.trc(profileSeg)
+                for (c in 0L..<3L) {
+                    val parametricSeg = skcms_Curve.parametric(skcms_Curve.asSlice(trcSeg, c))
                     MemorySegment.copy(curveArr, 0, parametricSeg, JAVA_FLOAT, 0L, 7)
                 }
 
@@ -1169,7 +1289,19 @@ class BitmapConverter(
         private fun conv3FToPF(src: Bitmap, dst: Bitmap) {
             val srcBO = src.spec.representation.pixelFormat.byteOrder
             val dstBO = dst.spec.representation.pixelFormat.byteOrder
-            iterate1PlaneAnd3FPlanes(src, dst, 12, -1, 0, { _, _, _, _, _, _ ->
+            iterate1PlaneAnd3FPlanes(src, dst, 12, QUART_VLEN, 0, { srcSeg, s, dstSeg1, dstSeg2, dstSeg3, d ->
+                var vecR = FloatVector.zero(F)
+                var vecG = FloatVector.zero(F)
+                var vecB = FloatVector.zero(F)
+                for (l in 0..<QUART_VLEN) {
+                    val sl = s + l * 12L
+                    vecR = vecR.withLane(l, srcSeg.getFloat(sl + 0L, srcBO))
+                    vecG = vecG.withLane(l, srcSeg.getFloat(sl + 4L, srcBO))
+                    vecB = vecB.withLane(l, srcSeg.getFloat(sl + 8L, srcBO))
+                }
+                vecR.intoMemorySegment(dstSeg1, d, dstBO)
+                vecG.intoMemorySegment(dstSeg2, d, dstBO)
+                vecB.intoMemorySegment(dstSeg3, d, dstBO)
             }, { srcSeg, s, dstSeg1, dstSeg2, dstSeg3, d ->
                 dstSeg1.putFloat(d, dstBO, srcSeg.getFloat(s + 0L, srcBO))
                 dstSeg2.putFloat(d, dstBO, srcSeg.getFloat(s + 4L, srcBO))
@@ -1233,7 +1365,22 @@ class BitmapConverter(
         private fun conv4FToPF(src: Bitmap, dst: Bitmap) {
             val srcBO = src.spec.representation.pixelFormat.byteOrder
             val dstBO = dst.spec.representation.pixelFormat.byteOrder
-            iterate1PlaneAnd4FPlanes(src, dst, 16, -1, { _, _, _, _, _, _, _ ->
+            iterate1PlaneAnd4FPlanes(src, dst, 16, QUART_VLEN, { srcSeg, s, dstSeg1, dstSeg2, dstSeg3, dstSeg4, d ->
+                var vecR = FloatVector.zero(F)
+                var vecG = FloatVector.zero(F)
+                var vecB = FloatVector.zero(F)
+                var vecA = FloatVector.zero(F)
+                for (l in 0..<QUART_VLEN) {
+                    val sl = s + l * 16L
+                    vecR = vecR.withLane(l, srcSeg.getFloat(sl + 0L, srcBO))
+                    vecG = vecG.withLane(l, srcSeg.getFloat(sl + 4L, srcBO))
+                    vecB = vecB.withLane(l, srcSeg.getFloat(sl + 8L, srcBO))
+                    vecA = vecA.withLane(l, srcSeg.getFloat(sl + 12L, srcBO))
+                }
+                vecR.intoMemorySegment(dstSeg1, d, dstBO)
+                vecG.intoMemorySegment(dstSeg2, d, dstBO)
+                vecB.intoMemorySegment(dstSeg3, d, dstBO)
+                vecA.intoMemorySegment(dstSeg4, d, dstBO)
             }, { srcSeg, s, dstSeg1, dstSeg2, dstSeg3, dstSeg4, d ->
                 dstSeg1.putFloat(d, dstBO, srcSeg.getFloat(s + 0L, srcBO))
                 dstSeg2.putFloat(d, dstBO, srcSeg.getFloat(s + 4L, srcBO))
@@ -1353,7 +1500,16 @@ class BitmapConverter(
         private fun convPFTo3F(src: Bitmap, dst: Bitmap) {
             val srcBO = src.spec.representation.pixelFormat.byteOrder
             val dstBO = dst.spec.representation.pixelFormat.byteOrder
-            iterate1PlaneAnd3FPlanes(dst, src, 12, -1, 0, { _, _, _, _, _, _ ->
+            iterate1PlaneAnd3FPlanes(dst, src, 12, QUART_VLEN, 0, { dstSeg, d, srcSeg1, srcSeg2, srcSeg3, s ->
+                val vecR = vec(F, srcSeg1, s, srcBO)
+                val vecG = vec(F, srcSeg2, s, srcBO)
+                val vecB = vec(F, srcSeg3, s, srcBO)
+                for (l in 0..<QUART_VLEN) {
+                    val dl = d + l * 12L
+                    dstSeg.putFloat(dl + 0L, dstBO, vecR.lane(l))
+                    dstSeg.putFloat(dl + 4L, dstBO, vecG.lane(l))
+                    dstSeg.putFloat(dl + 8L, dstBO, vecB.lane(l))
+                }
             }, { dstSeg, d, srcSeg1, srcSeg2, srcSeg3, s ->
                 dstSeg.putFloat(d + 0L, dstBO, srcSeg1.getFloat(s, srcBO))
                 dstSeg.putFloat(d + 4L, dstBO, srcSeg2.getFloat(s, srcBO))
@@ -1416,7 +1572,18 @@ class BitmapConverter(
         private fun convPFTo4F(src: Bitmap, dst: Bitmap) {
             val srcBO = src.spec.representation.pixelFormat.byteOrder
             val dstBO = dst.spec.representation.pixelFormat.byteOrder
-            iterate1PlaneAnd4FPlanes(dst, src, 16, -1, { _, _, _, _, _, _, _ ->
+            iterate1PlaneAnd4FPlanes(dst, src, 16, QUART_VLEN, { dstSeg, d, srcSeg1, srcSeg2, srcSeg3, srcSeg4, s ->
+                val vecR = vec(F, srcSeg1, s, srcBO)
+                val vecG = vec(F, srcSeg2, s, srcBO)
+                val vecB = vec(F, srcSeg3, s, srcBO)
+                val vecA = vec(F, srcSeg4, s, srcBO)
+                for (l in 0..<QUART_VLEN) {
+                    val dl = d + l * 16L
+                    dstSeg.putFloat(dl + 0L, dstBO, vecR.lane(l))
+                    dstSeg.putFloat(dl + 4L, dstBO, vecG.lane(l))
+                    dstSeg.putFloat(dl + 8L, dstBO, vecB.lane(l))
+                    dstSeg.putFloat(dl + 12L, dstBO, vecA.lane(l))
+                }
             }, { dstSeg, d, srcSeg1, srcSeg2, srcSeg3, srcSeg4, s ->
                 dstSeg.putFloat(d + 0L, dstBO, srcSeg1.getFloat(s, srcBO))
                 dstSeg.putFloat(d + 4L, dstBO, srcSeg2.getFloat(s, srcBO))
@@ -1597,7 +1764,7 @@ class BitmapConverter(
         dstSpec: Bitmap.Spec,
         promiseOpaque: Boolean,
         approxTransfer: Boolean,
-        nearestNeighbor: Boolean
+        resamplingFilter: ResamplingFilter
     ) : Stage {
 
         private var colorProc: Processor? = null
@@ -1605,9 +1772,11 @@ class BitmapConverter(
 
         init {
             setupSafely({
-                colorProc = Processor(cd(srcSpec), cd(dstSpec), approxTransfer, nearestNeighbor)
-                if (dstSpec.representation.pixelFormat.hasAlpha)
-                    alphaProc = Processor(ad(srcSpec), ad(dstSpec), approxTransfer, nearestNeighbor || promiseOpaque)
+                colorProc = Processor(cd(srcSpec), cd(dstSpec), approxTransfer, resamplingFilter)
+                if (dstSpec.representation.pixelFormat.hasAlpha) {
+                    val alphaResamplingFilter = if (promiseOpaque) NEAREST_NEIGHBOR else resamplingFilter
+                    alphaProc = Processor(ad(srcSpec), ad(dstSpec), approxTransfer, alphaResamplingFilter)
+                }
             }, ::close)
         }
 
@@ -1623,8 +1792,8 @@ class BitmapConverter(
                 vChromaSub = pixFmt.vChromaSub,
                 components = if (pixFmt.hasAlpha) pixFmt.components.dropLast(1) else pixFmt.components,
                 range = rep.range,
-                primaries = rep.colorSpace?.primaries,
-                transfer = rep.colorSpace?.transfer ?: LINEAR,
+                primaries = rep.colorSpace.primaries,
+                transfer = rep.colorSpace.transfer,
                 yuvCoefficients = rep.yuvCoefficients,
                 chromaLocation = rep.chromaLocation,
                 content = spec.content
@@ -1658,7 +1827,7 @@ class BitmapConverter(
         override fun process(src: Bitmap, dst: Bitmap) {
             colorProc!!.process(src, dst)
             alphaProc?.process(src, dst)
-            // Lanczos scaling leads to ringing, which can produce values outside the input range, including values
+            // Scaling can lead to ringing, which can produce values outside the input range, including values
             // below 0 and above 1. While such values are fine for color, they are illegal for alpha and, e.g., mess up
             // premultiplied alpha and make Skia produce strange and undesired artifacts. So if this processor applies
             // scaling and the destination bitmap uses floating point and thus supports out-of-bounds values, clamp the
@@ -1703,7 +1872,7 @@ class BitmapConverter(
             private val srcDesc: Desc,
             private val dstDesc: Desc,
             private val approxTransfer: Boolean,
-            private val nearestNeighbor: Boolean
+            private val resamplingFilter: ResamplingFilter
         ) {
 
             class Desc(
@@ -1722,7 +1891,7 @@ class BitmapConverter(
                 val content: Bitmap.Content
             )
 
-            private class Graph(val handle: MemorySegment, val srcOffset: Int, val dstOffset: Int, val step: Int)
+            private class Graph(val handle: MemorySegment, val offset: Int, val step: Int)
 
             private val arena = Arena.ofShared()
             private val graphs = mutableListOf<Graph>()
@@ -1736,65 +1905,48 @@ class BitmapConverter(
 
             private fun setup() {
                 // Build the zimg filter graph(s).
-                val srcC = srcDesc.content
-                val dstC = dstDesc.content
-                if (srcC == Bitmap.Content.INTERLEAVED_FIELDS || srcC == Bitmap.Content.INTERLEAVED_FIELDS_REVERSED ||
-                    dstC == Bitmap.Content.INTERLEAVED_FIELDS || dstC == Bitmap.Content.INTERLEAVED_FIELDS_REVERSED
-                ) {
-                    var srcTopPar = ZIMG_FIELD_TOP()
-                    var dstTopPar = ZIMG_FIELD_TOP()
-                    var srcBotPar = ZIMG_FIELD_BOTTOM()
-                    var dstBotPar = ZIMG_FIELD_BOTTOM()
-                    var srcTopOffset = if (srcC == Bitmap.Content.INTERLEAVED_FIELDS) 0 else 1
-                    var dstTopOffset = if (dstC == Bitmap.Content.INTERLEAVED_FIELDS) 0 else 1
-                    if (srcC == Bitmap.Content.PROGRESSIVE_FRAME) {
-                        srcTopPar = ZIMG_FIELD_PROGRESSIVE()
-                        srcBotPar = ZIMG_FIELD_PROGRESSIVE()
-                        srcTopOffset = dstTopOffset
-                    }
-                    if (dstC == Bitmap.Content.PROGRESSIVE_FRAME) {
-                        dstTopPar = ZIMG_FIELD_PROGRESSIVE()
-                        dstBotPar = ZIMG_FIELD_PROGRESSIVE()
-                        dstTopOffset = srcTopOffset
-                    }
-                    graphs += buildGraph(srcTopPar, srcTopOffset, dstTopPar, dstTopOffset, step = 2)
-                    graphs += buildGraph(srcBotPar, 1 - srcTopOffset, dstBotPar, 1 - dstTopOffset, step = 2)
+                val content = srcDesc.content
+                if (content == Bitmap.Content.INTERLEAVED_FIELDS) {
+                    graphs += buildGraph(ZIMG_FIELD_TOP(), offset = 0, step = 2)
+                    graphs += buildGraph(ZIMG_FIELD_BOTTOM(), offset = 1, step = 2)
                 } else
-                    graphs += buildGraph(zimgFieldParity(srcC), 0, zimgFieldParity(dstC), 0, step = 1)
+                    graphs += buildGraph(zimgFieldParity(content), offset = 0, step = 1)
 
                 // Populate the buffer structs.
                 srcSeg = zimg_image_buffer_const.allocate(arena)
                 dstSeg = zimg_image_buffer.allocate(arena)
-                zimg_image_buffer_const.`version$set`(srcSeg, ZIMG_API_VERSION())
-                zimg_image_buffer.`version$set`(dstSeg, ZIMG_API_VERSION())
+                zimg_image_buffer_const.version(srcSeg, ZIMG_API_VERSION())
+                zimg_image_buffer.version(dstSeg, ZIMG_API_VERSION())
                 for (plane in 0L..<4L) {
-                    ZIMG_BUF_CONST_MASK.set(srcSeg, plane, ZIMG_BUFFER_MAX())
-                    ZIMG_BUF_MASK.set(dstSeg, plane, ZIMG_BUFFER_MAX())
+                    ZIMG_BUF_CONST_MASK.set(srcSeg, 0L, plane, ZIMG_BUFFER_MAX())
+                    ZIMG_BUF_MASK.set(dstSeg, 0L, plane, ZIMG_BUFFER_MAX())
                 }
 
                 // Find how much temporary memory we need, and allocate it.
                 tmpMem = arena.allocate(graphs.maxOf(::getTmpSize), Bitmap.BYTE_ALIGNMENT.toLong())
             }
 
-            private fun buildGraph(
-                srcFieldParity: Int, srcOffset: Int, dstFieldParity: Int, dstOffset: Int, step: Int
-            ): Graph {
+            private fun buildGraph(fieldParity: Int, offset: Int, step: Int): Graph {
                 // Populate the format structs.
-                val srcFmt = populateImageFormat(srcDesc, srcFieldParity, srcOffset, step)
-                val dstFmt = populateImageFormat(dstDesc, dstFieldParity, dstOffset, step)
+                val srcFmt = populateImageFormat(srcDesc, fieldParity, offset, step)
+                val dstFmt = populateImageFormat(dstDesc, fieldParity, offset, step)
                 // Populate the params struct.
                 val params = zimg_graph_builder_params.allocate(arena)
                 zimg_graph_builder_params_default(params, ZIMG_API_VERSION())
-                val resampleFilter = if (nearestNeighbor) ZIMG_RESIZE_POINT() else ZIMG_RESIZE_LANCZOS()
-                zimg_graph_builder_params.`resample_filter$set`(params, resampleFilter)
-                zimg_graph_builder_params.`resample_filter_uv$set`(params, resampleFilter)
-                zimg_graph_builder_params.`cpu_type$set`(params, ZIMG_CPU_AUTO_64B())
-                zimg_graph_builder_params.`nominal_peak_luminance$set`(params, 203.0)
-                zimg_graph_builder_params.`allow_approximate_gamma$set`(params, if (approxTransfer) 1 else 0)
+                zimg_graph_builder_params.resample_filter(params, resamplingFilter.code)
+                zimg_graph_builder_params.filter_param_a(params, resamplingFilter.a)
+                zimg_graph_builder_params.filter_param_b(params, resamplingFilter.b)
+                zimg_graph_builder_params.resample_filter_uv(params, resamplingFilter.code)
+                zimg_graph_builder_params.filter_param_a_uv(params, resamplingFilter.a)
+                zimg_graph_builder_params.filter_param_b_uv(params, resamplingFilter.b)
+                zimg_graph_builder_params.cpu_type(params, ZIMG_CPU_AUTO_64B())
+                zimg_graph_builder_params.nominal_peak_luminance(params, 203.0)
+                zimg_graph_builder_params.allow_approximate_gamma(params, if (approxTransfer) 1 else 0)
+                zimg_graph_builder_params.chromatic_adaptation(params, 1)
                 // Build the zimg filter graph.
                 val handle = zimg_filter_graph_build(srcFmt, dstFmt, params)
                     .zimgThrowIfNull("Could not build zimg graph")
-                return Graph(handle, srcOffset, dstOffset, step)
+                return Graph(handle, offset, step)
             }
 
             private fun populateImageFormat(desc: Desc, fieldParity: Int, offset: Int, step: Int): MemorySegment {
@@ -1825,7 +1977,7 @@ class BitmapConverter(
                 }
                 val prim = when (val primaries = desc.primaries) {
                     null -> ZIMG_PRIMARIES_UNSPECIFIED()
-                    ColorSpace.Primaries.XYZD50 -> ZIMG_PRIMARIES_XYZ_D50()
+                    XYZD50 -> ZIMG_PRIMARIES_XYZ_D50()
                     else -> zimgPrimaries(primaries)
                 }
                 val range = when (desc.range) {
@@ -1835,22 +1987,22 @@ class BitmapConverter(
 
                 val fmt = zimg_image_format.allocate(arena)
                 zimg_image_format_default(fmt, ZIMG_API_VERSION())
-                zimg_image_format.`width$set`(fmt, width)
-                zimg_image_format.`height$set`(fmt, height)
-                zimg_image_format.`pixel_type$set`(fmt, pixelType)
+                zimg_image_format.width(fmt, width)
+                zimg_image_format.height(fmt, height)
+                zimg_image_format.pixel_type(fmt, pixelType)
                 if (desc.family == YUV) {
-                    zimg_image_format.`subsample_w$set`(fmt, desc.hChromaSub)
-                    zimg_image_format.`subsample_h$set`(fmt, desc.vChromaSub)
+                    zimg_image_format.subsample_w(fmt, desc.hChromaSub)
+                    zimg_image_format.subsample_h(fmt, desc.vChromaSub)
                 }
-                zimg_image_format.`color_family$set`(fmt, colorFam)
-                zimg_image_format.`matrix_coefficients$set`(fmt, matrix)
-                zimg_image_format.`transfer_characteristics$set`(fmt, zimgTransfer(desc.transfer))
-                zimg_image_format.`color_primaries$set`(fmt, prim)
-                zimg_image_format.`depth$set`(fmt, depth)
-                zimg_image_format.`pixel_range$set`(fmt, range)
-                zimg_image_format.`field_parity$set`(fmt, fieldParity)
-                zimg_image_format.`chroma_location$set`(fmt, zimgChroma(desc.chromaLocation))
-                zimg_image_format.`alpha$set`(fmt, ZIMG_ALPHA_NONE())
+                zimg_image_format.color_family(fmt, colorFam)
+                zimg_image_format.matrix_coefficients(fmt, matrix)
+                zimg_image_format.transfer_characteristics(fmt, zimgTransfer(desc.primaries, desc.transfer, depth))
+                zimg_image_format.color_primaries(fmt, prim)
+                zimg_image_format.depth(fmt, depth)
+                zimg_image_format.pixel_range(fmt, range)
+                zimg_image_format.field_parity(fmt, fieldParity)
+                zimg_image_format.chroma_location(fmt, zimgChroma(desc.chromaLocation))
+                zimg_image_format.alpha(fmt, ZIMG_ALPHA_NONE())
                 return fmt
             }
 
@@ -1872,17 +2024,17 @@ class BitmapConverter(
                     for ((i, srcComp) in srcDesc.components.withIndex()) {
                         val srcPlane = srcComp.plane
                         val srcStride = src.linesize(srcPlane).toLong()
-                        val srcData = src.memorySegment(srcPlane).asSlice(graph.srcOffset * srcStride)
-                        ZIMG_BUF_CONST_DATA.set(srcSeg, i.toLong(), srcData)
-                        ZIMG_BUF_CONST_STRIDE.set(srcSeg, i.toLong(), graph.step * srcStride)
+                        val srcData = src.memorySegment(srcPlane).asSlice(graph.offset * srcStride)
+                        ZIMG_BUF_CONST_DATA.set(srcSeg, 0L, i.toLong(), srcData)
+                        ZIMG_BUF_CONST_STRIDE.set(srcSeg, 0L, i.toLong(), graph.step * srcStride)
                     }
 
                     for ((i, dstComp) in dstDesc.components.withIndex()) {
                         val dstPlane = dstComp.plane
                         val dstStride = dst.linesize(dstPlane).toLong()
-                        val dstData = dst.memorySegment(dstPlane).asSlice(graph.dstOffset * dstStride)
-                        ZIMG_BUF_DATA.set(dstSeg, i.toLong(), dstData)
-                        ZIMG_BUF_STRIDE.set(dstSeg, i.toLong(), graph.step * dstStride)
+                        val dstData = dst.memorySegment(dstPlane).asSlice(graph.offset * dstStride)
+                        ZIMG_BUF_DATA.set(dstSeg, 0L, i.toLong(), dstData)
+                        ZIMG_BUF_STRIDE.set(dstSeg, 0L, i.toLong(), graph.step * dstStride)
                     }
 
                     zimg_filter_graph_process(graph.handle, srcSeg, dstSeg, tmpMem, NULL, NULL, NULL, NULL)
@@ -1903,7 +2055,7 @@ class BitmapConverter(
             private fun zimgExcStr(message: String): String {
                 val cStr = arena.allocate(1024)
                 val errnum = zimg_get_last_error(cStr, cStr.byteSize())
-                return "$message: ${cStr.getUtf8String(0)} (zimg error number $errnum)."
+                return "$message: ${cStr.getString(0)} (zimg error number $errnum)."
             }
 
             companion object {
@@ -1917,8 +2069,8 @@ class BitmapConverter(
 
                 init {
                     val planePath = arrayOf(groupElement("plane"), sequenceElement())
-                    val bufC = zimg_image_buffer_const.`$LAYOUT`()
-                    val buf = zimg_image_buffer.`$LAYOUT`()
+                    val bufC = zimg_image_buffer_const.layout()
+                    val buf = zimg_image_buffer.layout()
                     ZIMG_BUF_CONST_DATA = bufC.varHandle(*planePath, groupElement("data")).withInvokeExactBehavior()
                     ZIMG_BUF_CONST_STRIDE = bufC.varHandle(*planePath, groupElement("stride")).withInvokeExactBehavior()
                     ZIMG_BUF_CONST_MASK = bufC.varHandle(*planePath, groupElement("mask")).withInvokeExactBehavior()
@@ -1943,8 +2095,8 @@ class BitmapConverter(
                         else -> throw IllegalArgumentException("Primaries not supported by zimg: $primaries")
                     }
 
-                private fun zimgTransfer(transfer: ColorSpace.Transfer): Int =
-                    if (!transfer.hasCode) ZIMG_TRANSFER_UNSPECIFIED() else when (transfer.canonCode) {
+                private fun zimgTransfer(pri: ColorSpace.Primaries?, transfer: ColorSpace.Transfer, depth: Int): Int =
+                    if (!transfer.hasCode) ZIMG_TRANSFER_UNSPECIFIED() else when (transfer.code(pri, depth)) {
                         AVCOL_TRC_BT709 -> ZIMG_TRANSFER_BT709()
                         AVCOL_TRC_GAMMA22 -> ZIMG_TRANSFER_BT470_M()
                         AVCOL_TRC_GAMMA28 -> ZIMG_TRANSFER_BT470_BG()
@@ -2011,244 +2163,38 @@ class BitmapConverter(
 
         companion object {
 
+            val SUPPORTED_PIXEL_FORMATS: List<Bitmap.PixelFormat> =
+                Bitmap.PixelFormat.ALL.filter { pixFmt ->
+                    val depth = try {
+                        pixFmt.depth
+                    } catch (_: Exception) {
+                        return@filter false
+                    }
+                    val compSize = if (depth <= 8) 1 else if (depth <= 16) 2 else 4
+                    pixFmt.isPlanar && !pixFmt.isBitstream && pixFmt.byteOrder == NBO &&
+                            pixFmt.components.all { it.step == compSize && it.offset == 0 && it.shift == 0 }
+                }
+
+            private val ZIMG_SUPP_EQUIV = IntArray(AV_PIX_FMT_NB) { -1 }
+
+            init {
+                for (pixFmt in Bitmap.PixelFormat.ALL)
+                    SUPPORTED_PIXEL_FORMATS
+                        .filter { suppPixFmt ->
+                            pixFmt.family == suppPixFmt.family &&
+                                    pixFmt.hasAlpha == suppPixFmt.hasAlpha &&
+                                    pixFmt.isFloat == suppPixFmt.isFloat &&
+                                    pixFmt.hChromaSub == suppPixFmt.hChromaSub &&
+                                    pixFmt.vChromaSub == suppPixFmt.vChromaSub &&
+                                    pixFmt.components.size == suppPixFmt.components.size &&
+                                    pixFmt.components.zip(suppPixFmt.components).all { (c, sc) -> c.depth <= sc.depth }
+                        }.minByOrNull { suppPixFmt -> suppPixFmt.depth }
+                        ?.let { suppPixFmt -> ZIMG_SUPP_EQUIV[pixFmt.code] = suppPixFmt.code }
+            }
+
             /** Returns a planar and native-endian pixel format that the given format can be losslessly converted to. */
             fun equiv(pixelFormat: Bitmap.PixelFormat) =
                 Bitmap.PixelFormat.of(ZIMG_SUPP_EQUIV[pixelFormat.code])
-
-            private val ZIMG_SUPP_EQUIV = IntArray(AV_PIX_FMT_NB).also { eq ->
-                eq.fill(-2)
-                eq[AV_PIX_FMT_YUV420P] = AV_PIX_FMT_YUV420P
-                eq[AV_PIX_FMT_YUYV422] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_RGB24] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR24] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_YUV422P] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_YUV444P] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_YUV410P] = AV_PIX_FMT_YUV410P
-                eq[AV_PIX_FMT_YUV411P] = AV_PIX_FMT_YUV411P
-                eq[AV_PIX_FMT_GRAY8] = AV_PIX_FMT_GRAY8
-                eq[AV_PIX_FMT_MONOWHITE] = AV_PIX_FMT_GRAY8
-                eq[AV_PIX_FMT_MONOBLACK] = AV_PIX_FMT_GRAY8
-                eq[AV_PIX_FMT_PAL8] = -1
-                eq[AV_PIX_FMT_YUVJ420P] = AV_PIX_FMT_YUVJ420P
-                eq[AV_PIX_FMT_YUVJ422P] = AV_PIX_FMT_YUVJ422P
-                eq[AV_PIX_FMT_YUVJ444P] = AV_PIX_FMT_YUVJ444P
-                eq[AV_PIX_FMT_UYVY422] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_UYYVYY411] = AV_PIX_FMT_YUV411P
-                eq[AV_PIX_FMT_BGR8] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR4] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR4_BYTE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB8] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB4] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB4_BYTE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_NV12] = AV_PIX_FMT_YUV420P
-                eq[AV_PIX_FMT_NV21] = AV_PIX_FMT_YUV420P
-                eq[AV_PIX_FMT_ARGB] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_RGBA] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_ABGR] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_BGRA] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_GRAY16BE] = AV_PIX_FMT_GRAY16BE
-                eq[AV_PIX_FMT_GRAY16LE] = AV_PIX_FMT_GRAY16LE
-                eq[AV_PIX_FMT_YUV440P] = AV_PIX_FMT_YUV440P
-                eq[AV_PIX_FMT_YUVJ440P] = AV_PIX_FMT_YUVJ440P
-                eq[AV_PIX_FMT_YUVA420P] = AV_PIX_FMT_YUVA420P
-                eq[AV_PIX_FMT_RGB48BE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_RGB48LE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_RGB565BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB565LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB555BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB555LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR565BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR565LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR555BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR555LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_VAAPI] = -1
-                eq[AV_PIX_FMT_YUV420P16LE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_YUV420P16BE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_YUV422P16LE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_YUV422P16BE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_YUV444P16LE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_YUV444P16BE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_DXVA2_VLD] = -1
-                eq[AV_PIX_FMT_RGB444LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB444BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR444LE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR444BE] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_YA8] = -1
-                eq[AV_PIX_FMT_BGR48BE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_BGR48LE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_YUV420P9BE] = AV_PIX_FMT_YUV420P9
-                eq[AV_PIX_FMT_YUV420P9LE] = AV_PIX_FMT_YUV420P9
-                eq[AV_PIX_FMT_YUV420P10BE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_YUV420P10LE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_YUV422P10BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_YUV422P10LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_YUV444P9BE] = AV_PIX_FMT_YUV444P9
-                eq[AV_PIX_FMT_YUV444P9LE] = AV_PIX_FMT_YUV444P9
-                eq[AV_PIX_FMT_YUV444P10BE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_YUV444P10LE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_YUV422P9BE] = AV_PIX_FMT_YUV422P9
-                eq[AV_PIX_FMT_YUV422P9LE] = AV_PIX_FMT_YUV422P9
-                eq[AV_PIX_FMT_GBRP] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_GBRP9BE] = AV_PIX_FMT_GBRP9
-                eq[AV_PIX_FMT_GBRP9LE] = AV_PIX_FMT_GBRP9
-                eq[AV_PIX_FMT_GBRP10BE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_GBRP10LE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_GBRP16BE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_GBRP16LE] = AV_PIX_FMT_GBRP16
-                eq[AV_PIX_FMT_YUVA422P] = AV_PIX_FMT_YUVA422P
-                eq[AV_PIX_FMT_YUVA444P] = AV_PIX_FMT_YUVA444P
-                eq[AV_PIX_FMT_YUVA420P9BE] = AV_PIX_FMT_YUVA420P9
-                eq[AV_PIX_FMT_YUVA420P9LE] = AV_PIX_FMT_YUVA420P9
-                eq[AV_PIX_FMT_YUVA422P9BE] = AV_PIX_FMT_YUVA422P9
-                eq[AV_PIX_FMT_YUVA422P9LE] = AV_PIX_FMT_YUVA422P9
-                eq[AV_PIX_FMT_YUVA444P9BE] = AV_PIX_FMT_YUVA444P9
-                eq[AV_PIX_FMT_YUVA444P9LE] = AV_PIX_FMT_YUVA444P9
-                eq[AV_PIX_FMT_YUVA420P10BE] = AV_PIX_FMT_YUVA420P10
-                eq[AV_PIX_FMT_YUVA420P10LE] = AV_PIX_FMT_YUVA420P10
-                eq[AV_PIX_FMT_YUVA422P10BE] = AV_PIX_FMT_YUVA422P10
-                eq[AV_PIX_FMT_YUVA422P10LE] = AV_PIX_FMT_YUVA422P10
-                eq[AV_PIX_FMT_YUVA444P10BE] = AV_PIX_FMT_YUVA444P10
-                eq[AV_PIX_FMT_YUVA444P10LE] = AV_PIX_FMT_YUVA444P10
-                eq[AV_PIX_FMT_YUVA420P16BE] = AV_PIX_FMT_YUVA420P16
-                eq[AV_PIX_FMT_YUVA420P16LE] = AV_PIX_FMT_YUVA420P16
-                eq[AV_PIX_FMT_YUVA422P16BE] = AV_PIX_FMT_YUVA422P16
-                eq[AV_PIX_FMT_YUVA422P16LE] = AV_PIX_FMT_YUVA422P16
-                eq[AV_PIX_FMT_YUVA444P16BE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_YUVA444P16LE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_VDPAU] = -1
-                eq[AV_PIX_FMT_XYZ12LE] = AV_PIX_FMT_XYZ12
-                eq[AV_PIX_FMT_XYZ12BE] = AV_PIX_FMT_XYZ12
-                eq[AV_PIX_FMT_NV16] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_NV20LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_NV20BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_RGBA64BE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_RGBA64LE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_BGRA64BE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_BGRA64LE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_YVYU422] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_YA16BE] = -1
-                eq[AV_PIX_FMT_YA16LE] = -1
-                eq[AV_PIX_FMT_GBRAP] = AV_PIX_FMT_GBRAP
-                eq[AV_PIX_FMT_GBRAP16BE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_GBRAP16LE] = AV_PIX_FMT_GBRAP16
-                eq[AV_PIX_FMT_QSV] = -1
-                eq[AV_PIX_FMT_MMAL] = -1
-                eq[AV_PIX_FMT_D3D11VA_VLD] = -1
-                eq[AV_PIX_FMT_CUDA] = -1
-                eq[AV_PIX_FMT_0RGB] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_RGB0] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_0BGR] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_BGR0] = AV_PIX_FMT_GBRP
-                eq[AV_PIX_FMT_YUV420P12BE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_YUV420P12LE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_YUV420P14BE] = AV_PIX_FMT_YUV420P14
-                eq[AV_PIX_FMT_YUV420P14LE] = AV_PIX_FMT_YUV420P14
-                eq[AV_PIX_FMT_YUV422P12BE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_YUV422P12LE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_YUV422P14BE] = AV_PIX_FMT_YUV422P14
-                eq[AV_PIX_FMT_YUV422P14LE] = AV_PIX_FMT_YUV422P14
-                eq[AV_PIX_FMT_YUV444P12BE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_YUV444P12LE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_YUV444P14BE] = AV_PIX_FMT_YUV444P14
-                eq[AV_PIX_FMT_YUV444P14LE] = AV_PIX_FMT_YUV444P14
-                eq[AV_PIX_FMT_GBRP12BE] = AV_PIX_FMT_GBRP12
-                eq[AV_PIX_FMT_GBRP12LE] = AV_PIX_FMT_GBRP12
-                eq[AV_PIX_FMT_GBRP14BE] = AV_PIX_FMT_GBRP14
-                eq[AV_PIX_FMT_GBRP14LE] = AV_PIX_FMT_GBRP14
-                eq[AV_PIX_FMT_YUVJ411P] = AV_PIX_FMT_YUVJ411P
-                eq[AV_PIX_FMT_BAYER_BGGR8] = -1
-                eq[AV_PIX_FMT_BAYER_RGGB8] = -1
-                eq[AV_PIX_FMT_BAYER_GBRG8] = -1
-                eq[AV_PIX_FMT_BAYER_GRBG8] = -1
-                eq[AV_PIX_FMT_BAYER_BGGR16LE] = -1
-                eq[AV_PIX_FMT_BAYER_BGGR16BE] = -1
-                eq[AV_PIX_FMT_BAYER_RGGB16LE] = -1
-                eq[AV_PIX_FMT_BAYER_RGGB16BE] = -1
-                eq[AV_PIX_FMT_BAYER_GBRG16LE] = -1
-                eq[AV_PIX_FMT_BAYER_GBRG16BE] = -1
-                eq[AV_PIX_FMT_BAYER_GRBG16LE] = -1
-                eq[AV_PIX_FMT_BAYER_GRBG16BE] = -1
-                eq[AV_PIX_FMT_YUV440P10LE] = AV_PIX_FMT_YUV440P10
-                eq[AV_PIX_FMT_YUV440P10BE] = AV_PIX_FMT_YUV440P10
-                eq[AV_PIX_FMT_YUV440P12LE] = AV_PIX_FMT_YUV440P12
-                eq[AV_PIX_FMT_YUV440P12BE] = AV_PIX_FMT_YUV440P12
-                eq[AV_PIX_FMT_AYUV64LE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_AYUV64BE] = AV_PIX_FMT_YUVA444P16
-                eq[AV_PIX_FMT_VIDEOTOOLBOX] = -1
-                eq[AV_PIX_FMT_P010LE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_P010BE] = AV_PIX_FMT_YUV420P10
-                eq[AV_PIX_FMT_GBRAP12BE] = AV_PIX_FMT_GBRAP12
-                eq[AV_PIX_FMT_GBRAP12LE] = AV_PIX_FMT_GBRAP12
-                eq[AV_PIX_FMT_GBRAP10BE] = AV_PIX_FMT_GBRAP10
-                eq[AV_PIX_FMT_GBRAP10LE] = AV_PIX_FMT_GBRAP10
-                eq[AV_PIX_FMT_MEDIACODEC] = -1
-                eq[AV_PIX_FMT_GRAY12BE] = AV_PIX_FMT_GRAY12
-                eq[AV_PIX_FMT_GRAY12LE] = AV_PIX_FMT_GRAY12
-                eq[AV_PIX_FMT_GRAY10BE] = AV_PIX_FMT_GRAY10
-                eq[AV_PIX_FMT_GRAY10LE] = AV_PIX_FMT_GRAY10
-                eq[AV_PIX_FMT_P016LE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_P016BE] = AV_PIX_FMT_YUV420P16
-                eq[AV_PIX_FMT_D3D11] = -1
-                eq[AV_PIX_FMT_GRAY9BE] = AV_PIX_FMT_GRAY9
-                eq[AV_PIX_FMT_GRAY9LE] = AV_PIX_FMT_GRAY9
-                eq[AV_PIX_FMT_GBRPF32BE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_GBRPF32LE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_GBRAPF32BE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_GBRAPF32LE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_DRM_PRIME] = -1
-                eq[AV_PIX_FMT_OPENCL] = -1
-                eq[AV_PIX_FMT_GRAY14BE] = AV_PIX_FMT_GRAY14
-                eq[AV_PIX_FMT_GRAY14LE] = AV_PIX_FMT_GRAY14
-                eq[AV_PIX_FMT_GRAYF32BE] = AV_PIX_FMT_GRAYF32
-                eq[AV_PIX_FMT_GRAYF32LE] = AV_PIX_FMT_GRAYF32
-                eq[AV_PIX_FMT_YUVA422P12BE] = AV_PIX_FMT_YUVA422P12
-                eq[AV_PIX_FMT_YUVA422P12LE] = AV_PIX_FMT_YUVA422P12
-                eq[AV_PIX_FMT_YUVA444P12BE] = AV_PIX_FMT_YUVA444P12
-                eq[AV_PIX_FMT_YUVA444P12LE] = AV_PIX_FMT_YUVA444P12
-                eq[AV_PIX_FMT_NV24] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_NV42] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_VULKAN] = -1
-                eq[AV_PIX_FMT_Y210BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_Y210LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_X2RGB10LE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_X2RGB10BE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_X2BGR10LE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_X2BGR10BE] = AV_PIX_FMT_GBRP10
-                eq[AV_PIX_FMT_P210BE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_P210LE] = AV_PIX_FMT_YUV422P10
-                eq[AV_PIX_FMT_P410BE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_P410LE] = AV_PIX_FMT_YUV444P10
-                eq[AV_PIX_FMT_P216BE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_P216LE] = AV_PIX_FMT_YUV422P16
-                eq[AV_PIX_FMT_P416BE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_P416LE] = AV_PIX_FMT_YUV444P16
-                eq[AV_PIX_FMT_VUYA] = AV_PIX_FMT_YUVA444P
-                eq[AV_PIX_FMT_RGBAF16BE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_RGBAF16LE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_VUYX] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_P012LE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_P012BE] = AV_PIX_FMT_YUV420P12
-                eq[AV_PIX_FMT_Y212BE] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_Y212LE] = AV_PIX_FMT_YUV422P
-                eq[AV_PIX_FMT_XV30BE] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_XV30LE] = AV_PIX_FMT_YUV444P
-                eq[AV_PIX_FMT_XV36BE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_XV36LE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_RGBF32BE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_RGBF32LE] = AV_PIX_FMT_GBRPF32
-                eq[AV_PIX_FMT_RGBAF32BE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_RGBAF32LE] = AV_PIX_FMT_GBRAPF32
-                eq[AV_PIX_FMT_P212BE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_P212LE] = AV_PIX_FMT_YUV422P12
-                eq[AV_PIX_FMT_P412BE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_P412LE] = AV_PIX_FMT_YUV444P12
-                eq[AV_PIX_FMT_GBRAP14BE] = AV_PIX_FMT_GBRAP14
-                eq[AV_PIX_FMT_GBRAP14LE] = AV_PIX_FMT_GBRAP14
-                eq[AV_PIX_FMT_D3D12] = -1
-                for (code in eq.indices)
-                    if (eq[code] == -2)
-                        throw NotImplementedError("@Developer: please add entry for $code to zimg-equiv pix fmt table.")
-            }
 
         }
 

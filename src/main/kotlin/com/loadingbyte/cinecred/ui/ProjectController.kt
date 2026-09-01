@@ -1,36 +1,40 @@
 package com.loadingbyte.cinecred.ui
 
+import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.common.Severity.ERROR
-import com.loadingbyte.cinecred.common.getBundledFont
-import com.loadingbyte.cinecred.common.getSystemFont
-import com.loadingbyte.cinecred.common.l10n
-import com.loadingbyte.cinecred.drawer.DrawnCredits
-import com.loadingbyte.cinecred.drawer.DrawnProject
-import com.loadingbyte.cinecred.drawer.drawPages
-import com.loadingbyte.cinecred.drawer.drawVideo
+import com.loadingbyte.cinecred.common.Severity.WARN
+import com.loadingbyte.cinecred.drawer.*
+import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.projectio.*
-import com.loadingbyte.cinecred.ui.comms.MasterCtrlComms
-import com.loadingbyte.cinecred.ui.comms.PlaybackCtrlComms
-import com.loadingbyte.cinecred.ui.ctrl.PlaybackCtrl
+import com.loadingbyte.cinecred.ui.Shortcut.*
+import com.loadingbyte.cinecred.ui.comms.*
+import com.loadingbyte.cinecred.ui.ctrl.*
+import com.loadingbyte.cinecred.ui.helper.DockingFrame
 import com.loadingbyte.cinecred.ui.helper.FontFamilies
-import com.loadingbyte.cinecred.ui.helper.JobSlot
-import com.loadingbyte.cinecred.ui.view.playback.PlaybackDialog
+import com.loadingbyte.cinecred.ui.helper.usableBounds
+import com.loadingbyte.cinecred.ui.styling.EditStylingPanel
+import com.loadingbyte.cinecred.ui.view.delivery.DeliveryDockable
+import com.loadingbyte.cinecred.ui.view.log.LogDockable
+import com.loadingbyte.cinecred.ui.view.playback.PlaybackDockable
+import com.loadingbyte.cinecred.ui.view.preview.PreviewDockable
+import com.loadingbyte.cinecred.ui.view.toolbar.ToolbarDockable
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.toPersistentList
-import java.awt.Font
+import java.awt.Dialog
+import java.awt.Frame
 import java.awt.GraphicsConfiguration
 import java.awt.Window
 import java.awt.event.KeyEvent
-import java.awt.event.KeyEvent.*
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
 import java.io.IOException
-import java.net.URI
 import java.nio.file.Path
-import java.util.*
 import java.util.concurrent.atomic.AtomicReference
 import javax.swing.JOptionPane
+import javax.swing.RootPaneContainer
 import javax.swing.SwingUtilities
 import kotlin.io.path.name
 
@@ -39,9 +43,19 @@ import kotlin.io.path.name
 class ProjectController(
     val masterCtrl: MasterCtrlComms,
     val projectDir: Path,
-    val openOnScreen: GraphicsConfiguration,
+    openOnScreen: GraphicsConfiguration?,
+    trees: List<DockingFrame.Tree>?,
     private val onClose: () -> Unit
 ) {
+
+    // ========== ENCAPSULATION LEAKS ==========
+    @Deprecated("ENCAPSULATION LEAK") val leakedToolbarDockable get() = getDockable<ToolbarDockable>()
+    @Deprecated("ENCAPSULATION LEAK") val leakedPreviewDockable get() = getDockable<PreviewDockable>()
+    @Deprecated("ENCAPSULATION LEAK") val leakedLogDockable get() = getDockable<LogDockable>()
+    @Deprecated("ENCAPSULATION LEAK") val leakedPlaybackDockable get() = getDockable<PlaybackDockable>()
+    @Deprecated("ENCAPSULATION LEAK") val leakedDeliveryDockable get() = getDockable<DeliveryDockable>()
+    private inline fun <reified D> getDockable(): D = projectFrame.dockables.first { it is D } as D
+    // =========================================
 
     class ProjectInitializationAbortedException : Exception()
 
@@ -51,30 +65,63 @@ class ProjectController(
     val stylingHistory: StylingHistory
 
     private data class Input(
-        val creditsSpreadsheets: List<Spreadsheet>,
+        val creditsWorkbooks: List<ProjectIntake.CreditsWorkbook>?,
         val ioLog: List<ParserMsg>,
-        val projectFonts: SortedMap<String, Font>?,
-        val pictureLoaders: SortedMap<String, Picture.Loader>?,
-        val tapes: SortedMap<String, Tape>?,
+        val projectFonts: Map<String, Font>?,
+        val pictureLoaders: Map<String, Picture.Loader>?,
+        val tapes: Map<String, Tape>?,
         val styling: Styling?
     )
 
-    private val currentInput = AtomicReference(Input(emptyList(), emptyList(), null, null, null, null))
+    private val currentInput = AtomicReference(Input(null, emptyList(), null, null, null, null))
     private val processingJobSlot = JobSlot()
-    private var processingLog = emptyList<ParserMsg>()
 
     // STEP 1:
     // Create and open the project UI.
 
-    val playbackCtrl: PlaybackCtrlComms = PlaybackCtrl(this)
-    val projectFrame = ProjectFrame(this)
-    val stylingDialog = StylingDialog(this)
-    val playbackDialog = PlaybackDialog(this, playbackCtrl)
-    val deliveryDialog = DeliveryDialog(this)
+    val toolbarCtrl: ToolbarCtrlComms = ToolbarCtrl(this)
+    val previewCtrl: PreviewCtrlComms = PreviewCtrl(this)
+    val logCtrl: LogCtrlComms = LogCtrl()
+    val playbackCtrl: PlaybackCtrlComms = PlaybackCtrl()
+    val deliveryCtrl: DeliveryCtrlComms = DeliveryCtrl(this)
+
+    val stylingDockable = EditStylingPanel(this)
+    val projectFrame: DockingFrame
 
     init {
-        projectFrame.isVisible = true
-        stylingDialog.isVisible = true
+        val toolbarDockable = ToolbarDockable(toolbarCtrl, playbackCtrl)
+        val previewDockable = PreviewDockable(previewCtrl)
+        val logDockable = LogDockable(logCtrl)
+        val playbackDockable = PlaybackDockable(playbackCtrl)
+        val deliveryDockable = DeliveryDockable(deliveryCtrl)
+
+        projectFrame = DockingFrame(
+            listOf(toolbarDockable, previewDockable, logDockable, stylingDockable, playbackDockable, deliveryDockable),
+            configureWindow = { window ->
+                val title = "$projectName \u2013 Cinecred"
+                if (window is Frame) window.title = title
+                if (window is Dialog) window.title = title
+                // On macOS, show the opened project folder in the window title bar.
+                (window as RootPaneContainer).rootPane.putClientProperty("Window.documentFile", projectDir.toFile())
+            }, onChangeCollapsed = { dockableId, collapsed ->
+                setDockableCollapsed(DockableId.valueOf(dockableId), collapsed)
+            }, onBlockedDrag = {
+                toolbarCtrl.flashWindowLayoutLockedButton()
+            })
+        projectFrame.addWindowListener(object : WindowAdapter() {
+            override fun windowClosing(e: WindowEvent) {
+                tryCloseProject()
+            }
+        })
+        projectFrame.setTrees(trees ?: run {
+            val availableLayouts = PresetWindowLayout.ALL + WINDOW_LAYOUTS_PREFERENCE.get()
+            val defaultLayoutName = DEFAULT_WINDOW_LAYOUT_PREFERENCE.get()
+            val bounds = openOnScreen!!.usableBounds
+            (availableLayouts.find { it.name == defaultLayoutName } ?: availableLayouts[0]).trees(bounds)
+        })
+        onChangeWindowLayout()
+
+        toolbarCtrl.ready()
 
         if (PROJECT_HINT_TRACK_PENDING_PREFERENCE.get())
             makeProjectHintTrack(this).play(onPass = { PROJECT_HINT_TRACK_PENDING_PREFERENCE.set(false) })
@@ -82,38 +129,33 @@ class ProjectController(
 
     // STEP 2:
     // Set up the project intake, which will notify us about changes to the credits spreadsheet and auxiliary files.
-    // Upon construction, the intake will immediately push the project fonts, pic loaders, and tapes from this thread.
+    // Upon construction, the intake will immediately push the project fonts, pic loaders, and tapes.
     // This in turn means that those three collections will be initialized before the constructor returns.
 
     private val projectIntake = ProjectIntake(projectDir, object : ProjectIntake.Callbacks {
 
-        override fun creditsPolling(possible: Boolean) {
-            SwingUtilities.invokeLater { projectFrame.panel.updateCreditsPolling(possible) }
+        override fun pushCreditsWorkbooks(
+            creditsWorkbooks: Collection<ProjectIntake.CreditsWorkbook>, log: List<ParserMsg>, pollable: Boolean
+        ) {
+            val creditsWorkbooks = creditsWorkbooks.sortedWithCollator(caseInsensitiveCollator()) { it.fileName }
+            process(currentInput.updateAndGet { it.copy(creditsWorkbooks = creditsWorkbooks, ioLog = log) })
+            SwingUtilities.invokeLater { toolbarCtrl.setCreditsPollable(pollable) }
         }
 
-        override fun pushCreditsSpreadsheets(creditsSpreadsheets: List<Spreadsheet>, uri: URI?, log: List<ParserMsg>) {
-            process(currentInput.updateAndGet { it.copy(creditsSpreadsheets = creditsSpreadsheets, ioLog = log) })
-            SwingUtilities.invokeLater { projectFrame.panel.updateCreditsURI(uri) }
-        }
-
-        override fun pushCreditsSpreadsheetsLog(log: List<ParserMsg>) {
-            doneProcessing(currentInput.updateAndGet { it.copy(ioLog = log) }, null, null)
-        }
-
-        override fun pushProjectFonts(projectFonts: SortedMap<String, Font>) {
+        override fun pushProjectFonts(projectFonts: Map<String, Font>) {
             val projectFamilies = FontFamilies(projectFonts.values)
             process(currentInput.updateAndGet { it.copy(projectFonts = projectFonts) })
-            SwingUtilities.invokeLater { stylingDialog.panel.updateProjectFontFamilies(projectFamilies) }
+            SwingUtilities.invokeLater { stylingDockable.updateProjectFontFamilies(projectFamilies) }
         }
 
-        override fun pushPictureLoaders(pictureLoaders: SortedMap<String, Picture.Loader>) {
+        override fun pushPictureLoaders(pictureLoaders: Map<String, Picture.Loader>) {
             process(currentInput.updateAndGet { it.copy(pictureLoaders = pictureLoaders) })
-            SwingUtilities.invokeLater { stylingDialog.panel.updatePictureLoaders(pictureLoaders.values) }
+            SwingUtilities.invokeLater { stylingDockable.updatePictureLoaders(pictureLoaders) }
         }
 
-        override fun pushTapes(tapes: SortedMap<String, Tape>) {
+        override fun pushTapes(tapes: Map<String, Tape>) {
             process(currentInput.updateAndGet { it.copy(tapes = tapes) })
-            SwingUtilities.invokeLater { stylingDialog.panel.updateTapes(tapes.values) }
+            SwingUtilities.invokeLater { stylingDockable.updateTapes(tapes) }
         }
 
     })
@@ -129,8 +171,9 @@ class ProjectController(
             val input = currentInput.get()
             readStyling(stylingFile, input.projectFonts!!, input.pictureLoaders!!, input.tapes!!)
         } catch (e: IOException) {
+            LOGGER.error("Could not read the styling file '{}'.", stylingFile, e)
             JOptionPane.showMessageDialog(
-                projectFrame, arrayOf(l10n("ui.edit.cannotLoadStyling.msg"), e.message ?: e.toString()),
+                projectFrame, arrayOf(l10n("ui.edit.cannotLoadStyling.msg"), e.userNotification),
                 l10n("ui.edit.cannotLoadStyling.title"), JOptionPane.ERROR_MESSAGE
             )
             tryCloseProject(force = true)
@@ -141,47 +184,65 @@ class ProjectController(
         for (style in styling.tapeStyles)
             style.tape.tape?.loadMetadataInBackground()
         stylingHistory = StylingHistory(styling)
+        // In case the project intake already loaded the workbooks and triggered processing (which then aborted due to
+        // the missing styling), trigger processing again.
         process(currentInput.updateAndGet { it.copy(styling = styling) })
     }
 
     // STEP 4:
-    // Now that the creation of the ProjectController can no longer fail, we can add listeners to the overlays and
-    // delivery location templates preferences, and be sure that they will be removed when the project is closed again.
+    // Now that the creation of the ProjectController can no longer fail, we can add listeners to the window layouts,
+    // overlays and delivery location templates preferences, and be sure that they will be removed when the project is
+    // closed again.
+
+    private val windowLayoutsListener = { layouts: List<ConfigurableWindowLayout> ->
+        val availableLayouts = PresetWindowLayout.ALL + layouts
+        toolbarCtrl.setAvailableWindowLayouts(availableLayouts)
+    }
 
     private val overlaysListener = { overlays: List<ConfigurableOverlay> ->
-        projectFrame.panel.availableOverlays = (Overlay.BUNDLED + overlays).sorted()
+        val availableOverlays = (Overlay.BUNDLED + overlays).sorted()
+        toolbarCtrl.setAvailableOverlays(availableOverlays)
+        previewCtrl.setAvailableOverlays(availableOverlays)
     }
 
     private val deliveryDestTemplatesListener = { templates: List<DeliveryDestTemplate> ->
-        deliveryDialog.panel.configurationForm.updateDeliveryDestTemplates(templates)
+        deliveryCtrl.setDeliveryDestTemplates(templates)
     }
 
+    private val populatedListeners = true
+
     init {
+        WINDOW_LAYOUTS_PREFERENCE.addListener(windowLayoutsListener)
         OVERLAYS_PREFERENCE.addListener(overlaysListener)
-        overlaysListener(OVERLAYS_PREFERENCE.get())
         DELIVERY_DEST_TEMPLATES_PREFERENCE.addListener(deliveryDestTemplatesListener)
+        windowLayoutsListener(WINDOW_LAYOUTS_PREFERENCE.get())
+        overlaysListener(OVERLAYS_PREFERENCE.get())
         deliveryDestTemplatesListener(DELIVERY_DEST_TEMPLATES_PREFERENCE.get())
     }
 
     // END OF INITIALIZATION PROCEDURE
 
     private fun process(input: Input) {
-        val (creditsSpreadsheets, _, projectFonts, pictureLoaders, tapes, origStyling) = input
+        // Execute the reading and drawing in another thread to not block the UI thread.
+        processingJobSlot.submit { doneProcessing(runProcessing(input)) }
+    }
+
+    private fun runProcessing(input: Input): ProcessingResult {
+        val (creditsWorkbooks, _, projectFonts, pictureLoaders, tapes, origStyling) = input
         // If something hasn't been initialized yet, abort reading and drawing the credits.
-        if (creditsSpreadsheets.isEmpty() ||
+        if (creditsWorkbooks == null ||
             projectFonts == null || pictureLoaders == null || tapes == null || origStyling == null
         )
-            return doneProcessing(input, null, null)
+            return ProcessingResult(input, emptyList(), emptyList(), null)
 
-        // Execute the reading and drawing in another thread to not block the UI thread.
-        processingJobSlot.submit {
+        try {
             var styling: Styling = origStyling
 
             // Update references to auxiliary files (fonts, pictures, and tapes) in the styling.
             updateAuxiliaryReferences(
                 styling.letterStyles, LetterStyle::font.st(),
                 FontRef::name, FontRef::font, ::FontRef, ::FontRef,
-                { name -> projectFonts[name] ?: getBundledFont(name) ?: getSystemFont(name) }
+                { name -> projectFonts[name] ?: Font.bundled(name) ?: Font.system(name) }
             )?.let { styling = styling.copy(letterStyles = it) }
             updateAuxiliaryReferences(
                 styling.pictureStyles, PictureStyle::picture.st(),
@@ -194,39 +255,54 @@ class ProjectController(
                 tapes::get
             )?.let { styling = styling.copy(tapeStyles = it) }
 
-            // The following verification needs tape metadata. To avoid the verifier sequentially loading one tape after
-            // the other, we load all of them in parallel in advance.
-            for (style in styling.tapeStyles)
-                style.tape.tape?.loadMetadataInBackground()
+            // The following verification needs picture and tape metadata. To avoid the verifier sequentially loading
+            // one after the other, we load all of them in parallel in advance.
+            loadMediaInBackground(styling)
 
             // If the styling is erroneous, abort and notify the UI about the error.
-            if (verifyConstraints(styling).any { it.severity == ERROR }) {
-                val error = ParserMsg(null, null, null, null, ERROR, l10n("ui.edit.stylingError"))
-                return@submit doneProcessing(input, listOf(error), null)
+            val earlyConstraintViolations = verifyConstraints(styling)
+            if (earlyConstraintViolations.any { it.severity == ERROR }) {
+                val error = ParserMsg(null, null, null, null, null, ERROR, l10n("ui.edit.stylingError"))
+                return ProcessingResult(input, listOf(error), earlyConstraintViolations, null)
             }
 
-            // Parse each credits spreadsheet.
-            val credits = mutableListOf<Credits>()  // retains insertion order
+            // Parse each credits workbook.
             val log = mutableListOf<ParserMsg>()
-            for (spreadsheet in creditsSpreadsheets) {
-                val (curCredits, curLog) = readCredits(spreadsheet, styling, pictureLoaders, tapes)
-                credits += curCredits
-                log += curLog
+            val runtimeGroupSources = HashMap<RuntimeGroup, RuntimeGroupSource>()
+            val creditsBooks = creditsWorkbooks.map { creditsWorkbook ->
+                val credits = mutableListOf<Credits>()  // retains insertion order
+                for (spreadsheet in creditsWorkbook.spreadsheets) {
+                    val (curCredits, curLog, curRuntimeGroupSources) =
+                        readCredits(creditsWorkbook.fileName, spreadsheet, styling, pictureLoaders, tapes)
+                    log += curLog
+                    // If the credits reader found errors, bail on the spreadsheet.
+                    if (curLog.any { it.severity == ERROR })
+                        continue
+                    // If there is not a single page, that's an error.
+                    if (curCredits.pages.isEmpty()) {
+                        log += ParserMsg(
+                            creditsWorkbook.fileName, curCredits.spreadsheetName, null, null, null, ERROR,
+                            l10n("projectIO.credits.noPages")
+                        )
+                        continue
+                    }
+                    credits += curCredits
+                    runtimeGroupSources += curCredits.runtimeGroups.zip(curRuntimeGroupSources)
+                }
+                CreditsBook(creditsWorkbook.fileName, creditsWorkbook.uri, credits.toPersistentList())
             }
-
-            // If the credits are erroneous, abort.
-            if (log.any { it.severity == ERROR })
-                return@submit doneProcessing(input, log, null)
-
-            val usedStyles = findUsedStyles(credits)
 
             // The styling may be updated depending on the credits spreadsheet, namely in the following cases:
             //   - If the sheet refers to a new picture/tape style, automatically add it.
             //   - If the sheet no longer references an automatically added picture/tape style, remove it.
             //   - If a page style has legacy settings which were not used to produce a migration message, clear them.
+            //     But only if there is at least one valid credits sequence, to not prematurely clear legacy settings
+            //     while, e.g., waiting for an online service.
+            val usedStyles = findUsedStyles(creditsBooks.flatMap(CreditsBook::credits))
             addRemovePopupStyles(styling.pictureStyles, usedStyles)?.let { styling = styling.copy(pictureStyles = it) }
             addRemovePopupStyles(styling.tapeStyles, usedStyles)?.let { styling = styling.copy(tapeStyles = it) }
-            clearLegacyPageStyleSettings(styling.pageStyles, log)?.let { styling = styling.copy(pageStyles = it) }
+            if (creditsBooks.any { creditsBook -> creditsBook.credits.isNotEmpty() })
+                clearLegacyPageStyleSettings(styling.pageStyles, log)?.let { styling = styling.copy(pageStyles = it) }
 
             // If any of the above are the case, or if auxiliary references have been updated further up this method,
             // put an updated styling into the history in place of the old styling, but only if the styling didn't
@@ -241,31 +317,76 @@ class ProjectController(
             // need to know the width and height. However, if we lazily loaded those files only once encountering them,
             // we'd load them sequentially. This can take a very long time if many such files are used. To avoid this,
             // we now trigger the loading of all files in parallel background threads.
-            for (style in usedStyles)
-                when (style) {
-                    is PictureStyle -> style.picture.loader?.loadInBackground()
-                    is TapeStyle -> style.tape.tape?.loadMetadataInBackground()
-                    is PageStyle, is ContentStyle, is LetterStyle, is TransitionStyle -> {}
-                }
+            // Even though we already called this method before, we need to call it again because the styling might have
+            // changed, e.g., with newly added popup styles.
+            loadMediaInBackground(styling)
 
             // Draw pages and video for each credits spreadsheet.
-            val project = Project(styling, credits.toPersistentList())
-            val drawnCredits = credits.map { curCredits ->
-                val drawnPages = drawPages(project, curCredits)
+            val crushingStyles = HashMap<Style, MutableList<CreditsId>>()
+            val drawnCreditsBooks = creditsBooks.mapNotNull { creditsBook ->
+                val drawnCredits = creditsBook.credits.mapNotNull { curCredits ->
+                    val (drawnPages, crushedRuntimeGroups) = drawPages(styling, curCredits)
 
-                // Limit each page's height to prevent the program from crashing due to misconfiguration.
-                if (drawnPages.any { it.defImage.height.resolve() > 1_000_000.0 }) {
-                    val sName = curCredits.spreadsheetName
-                    val error = ParserMsg(sName, null, null, null, ERROR, l10n("ui.edit.excessivePageSizeError"))
-                    return@submit doneProcessing(input, log + error, null)
+                    // For each crushed runtime group:
+                    //   - If the group is defined in a sheet, either emit a log message,
+                    //   - If the group stems from a style, record it so that we can show a warning in the styling UI.
+                    for (crushedRuntimeGroup in crushedRuntimeGroups)
+                        when (val source = crushedRuntimeGroup?.let(runtimeGroupSources::get)) {
+                            is RuntimeGroupSource.Style, null ->
+                                crushingStyles.computeIfAbsent(source?.style ?: styling.global) { mutableListOf() } +=
+                                    CreditsId(creditsBook.fileName, curCredits.spreadsheetName)
+                            is RuntimeGroupSource.Sheet ->
+                                log += ParserMsg(
+                                    creditsBook.fileName, curCredits.spreadsheetName, source.recordNo, source.colHeader,
+                                    source.cellValue, WARN, l10n("ui.log.crushedVGaps")
+                                )
+                        }
+
+                    // Limit each page's height to prevent the program from crashing due to misconfiguration.
+                    if (drawnPages.any { it.defImage.height.resolve() > 1_000_000.0 }) {
+                        log += ParserMsg(
+                            creditsBook.fileName, curCredits.spreadsheetName, null, null, null, ERROR,
+                            l10n("ui.edit.excessivePageSizeError")
+                        )
+                        return@mapNotNull null
+                    }
+
+                    val video = drawVideo(styling, drawnPages)
+
+                    // Filter out credits which have 0 runtime to avoid edge cases downstream.
+                    if (video.numFrames == 0) {
+                        log += ParserMsg(
+                            creditsBook.fileName, curCredits.spreadsheetName, null, null, null, ERROR,
+                            l10n("ui.edit.zeroRuntimeError")
+                        )
+                        return@mapNotNull null
+                    }
+
+                    DrawnCredits(curCredits, drawnPages.toPersistentList(), video)
                 }
-
-                val video = drawVideo(project, drawnPages)
-                DrawnCredits(curCredits, drawnPages.toPersistentList(), video)
+                if (drawnCredits.isEmpty()) null else DrawnCreditsBook(creditsBook, drawnCredits.toPersistentList())
             }
 
-            val drawnProject = DrawnProject(project, drawnCredits.toPersistentList())
-            doneProcessing(input, log, drawnProject)
+            // Because the styling might have changed (e.g., with newly added popup styles), rerun the verification.
+            val constraintViolations = verifyConstraints(styling)
+
+            // For each style that crushes a runtime group, show a warning in the styling UI.
+            for ((style, creditsIds) in crushingStyles) {
+                val sett = if (style is Global) Global::runtimeFrames.st() else PageStyle::scrollRuntimeFrames.st()
+                val sheets = l10nEnumQuoted(creditsIds.map { id -> "${id.fileName} \u2192 ${id.spreadsheetName}" })
+                val msg = l10n("ui.styling.page.crushedVGaps", sheets)
+                constraintViolations += ConstraintViolation(style, style, sett, 0, WARN, msg)
+            }
+
+            val project = Project(styling, creditsBooks.toPersistentList())
+            val drawnProject = DrawnProject(project, drawnCreditsBooks.toPersistentList())
+
+            return ProcessingResult(input, log, constraintViolations, drawnProject)
+        } catch (e: Exception) {
+            // If an error occurs during processing, inform the user in the log instead of crashing the program.
+            LOGGER.error("Could not process and draw the project '{}'.", projectDir, e)
+            val error = ParserMsg(null, null, null, null, null, ERROR, e.userNotification)
+            return ProcessingResult(input, listOf(error), emptyList(), null)
         }
     }
 
@@ -292,6 +413,13 @@ class ProjectController(
         return updatedStyles?.toPersistentList()
     }
 
+    private fun loadMediaInBackground(styling: Styling) {
+        for (style in styling.pictureStyles)
+            style.picture.loader?.loadInBackground()
+        for (style in styling.tapeStyles)
+            style.tape.tape?.loadMetadataInBackground()
+    }
+
     private inline fun <reified S : PopupStyle> addRemovePopupStyles(
         styles: List<S>, usedStyles: Set<ListedStyle>
     ): PersistentList<S>? {
@@ -300,7 +428,7 @@ class ProjectController(
         // Remove automatically added styles that aren't used anymore.
         for (idx in styles.lastIndex downTo 0) {
             val style = styles[idx]
-            if (style.volatile && style !in usedStyles) {
+            if (style.volatile && usedStyles.none { it === style }) {
                 if (updatedStyles == null)
                     updatedStyles = styles.toMutableList()
                 updatedStyles.removeAt(idx)
@@ -322,16 +450,17 @@ class ProjectController(
         styles: List<PageStyle>, log: List<ParserMsg>
     ): PersistentList<PageStyle>? {
         fun <SUBJ : Any> clearSetting(style: PageStyle, setting: DirectStyleSetting<PageStyle, SUBJ>): PageStyle =
-            style.copy(setting.notarize(setting.get(PRESET_PAGE_STYLE)))
+            style.copy(setting.notarize(setting.get(presetPageStyle())))
 
         val legacySettings = arrayOf(PageStyle::scrollMeltWithPrev.st(), PageStyle::scrollMeltWithNext.st())
         val usedLegacySettings = log.mapNotNullTo(HashSet(), ParserMsg::migrationDataSource)
+        val presetPageStyle = presetPageStyle()
 
         var clearedStyles: MutableList<PageStyle>? = null
         for ((idx, style) in styles.withIndex()) {
             var clearedStyle = style
             for (st in legacySettings)
-                if (st.get(style) != st.get(PRESET_PAGE_STYLE) && MigrationDataSource(style, st) !in usedLegacySettings)
+                if (st.get(style) != st.get(presetPageStyle) && MigrationDataSource(style, st) !in usedLegacySettings)
                     clearedStyle = clearSetting(clearedStyle, st)
             if (clearedStyle !== style) {
                 if (clearedStyles == null)
@@ -342,63 +471,94 @@ class ProjectController(
         return clearedStyles?.toPersistentList()
     }
 
-    private fun doneProcessing(input: Input, processingLog: List<ParserMsg>?, drawnProject: DrawnProject?) {
+    private data class ProcessingResult(
+        val input: Input,
+        val processingLog: List<ParserMsg>,
+        val constraintViolations: List<ConstraintViolation>,
+        val drawnProject: DrawnProject?
+    )
+
+    private fun doneProcessing(processingResult: ProcessingResult) {
+        val (input, processingLog, constraintViolations, drawnProject) = processingResult
         SwingUtilities.invokeLater {
             val logCmp = compareByDescending(ParserMsg::severity)
-                .thenComparingInt { msg -> input.creditsSpreadsheets.indexOfFirst { it.name == msg.spreadsheetName } }
+                .thenComparingInt { msg -> input.creditsWorkbooks?.indexOfFirst { it.fileName == msg.fileName } ?: -1 }
+                .thenComparingInt { msg ->
+                    (input.creditsWorkbooks?.find { it.fileName == msg.fileName } ?: return@thenComparingInt 0)
+                        .spreadsheets.indexOfFirst { it.name == msg.spreadsheetName }
+                }
                 .thenBy(ParserMsg::spreadsheetName)
                 .thenBy(ParserMsg::recordNo)
-            if (processingLog == null)
-                projectFrame.panel.updateLog((input.ioLog + this.processingLog).sortedWith(logCmp))
-            else {
-                this.processingLog = processingLog
-                projectFrame.panel.updateLog((input.ioLog + processingLog).sortedWith(logCmp))
-                if (drawnProject != null) {
-                    projectFrame.panel.updateProject(drawnProject)
-                    stylingDialog.panel.updateProject(drawnProject)
-                    playbackCtrl.updateProject(drawnProject)
-                    deliveryDialog.panel.configurationForm.updateProject(drawnProject)
-                }
+            val log = (input.ioLog + processingLog).sortedWith(logCmp)
+            previewCtrl.updateLog(log)
+            logCtrl.updateLog(log)
+            stylingDockable.updateProject(constraintViolations, drawnProject)
+            if (drawnProject != null) {
+                toolbarCtrl.updateProject(drawnProject)
+                previewCtrl.updateProject(drawnProject)
+                playbackCtrl.updateProject(drawnProject)
+                deliveryCtrl.updateProject(drawnProject)
             }
         }
     }
 
+    fun isCreditsFile(file: Path): Boolean {
+        val uri = file.toUri()
+        return (currentInput.get().creditsWorkbooks ?: emptyList()).any { it.uri == uri }
+    }
+
     fun tryCloseProject(force: Boolean = false): Boolean {
-        if (!projectFrame.panel.onTryCloseProject(force) ||
-            !deliveryDialog.panel.renderQueuePanel.onTryCloseProject(force)
-        )
+        if (!toolbarCtrl.onTryCloseProject(force) || !deliveryCtrl.onTryCloseProject(force))
             return false
 
-        playbackCtrl.closeProject()
+        try {
+            playbackCtrl.closeProject()
+        } catch (e: Exception) {
+            LOGGER.error("Failed to close playback controller.", e)
+        }
+
         // The listeners might still be null if this method is called during initialization.
-        overlaysListener?.let(OVERLAYS_PREFERENCE::removeListener)
-        deliveryDestTemplatesListener?.let(DELIVERY_DEST_TEMPLATES_PREFERENCE::removeListener)
+        if (populatedListeners) {
+            WINDOW_LAYOUTS_PREFERENCE.removeListener(windowLayoutsListener)
+            OVERLAYS_PREFERENCE.removeListener(overlaysListener)
+            DELIVERY_DEST_TEMPLATES_PREFERENCE.removeListener(deliveryDestTemplatesListener)
+        }
 
         onClose()
-
         projectFrame.dispose()
-        for (type in ProjectDialogType.entries)
-            getDialog(type).dispose()
 
-        projectIntake.close()
+        try {
+            projectIntake.close()
+        } catch (e: Exception) {
+            LOGGER.error("Failed to close project intake.", e)
+        }
 
         return true
     }
 
-    private fun getDialog(type: ProjectDialogType) = when (type) {
-        ProjectDialogType.STYLING -> stylingDialog
-        ProjectDialogType.VIDEO -> playbackDialog
-        ProjectDialogType.DELIVERY -> deliveryDialog
+    var windowLayoutTrees: List<DockingFrame.Tree>
+        get() = projectFrame.getTrees()
+        set(trees) {
+            projectFrame.setTrees(trees)
+            onChangeWindowLayout()
+        }
+
+    fun setDockableCollapsed(dockableId: DockableId, collapsed: Boolean) {
+        projectFrame.setCollapsed(dockableId.name, collapsed)
+        toolbarCtrl.setDockableCollapsed(dockableId, collapsed)
+        when (dockableId) {
+            DockableId.TOOLBAR, DockableId.PREVIEW, DockableId.LOG, DockableId.STYLING -> {}
+            DockableId.PLAYBACK -> playbackCtrl.onShowOrHide(!collapsed)
+            DockableId.DELIVERY -> deliveryCtrl.onShowOrHide(!collapsed)
+        }
     }
 
-    fun setDialogVisible(type: ProjectDialogType, isVisible: Boolean) {
-        getDialog(type).isVisible = isVisible
-        projectFrame.panel.onSetDialogVisible(type, isVisible)
-        if (type == ProjectDialogType.VIDEO)
-            playbackCtrl.setDialogVisibility(isVisible)
-        if (type == ProjectDialogType.DELIVERY && isVisible)
-            projectFrame.panel.selectedSpreadsheetName
-                ?.let(deliveryDialog.panel.configurationForm::setSelectedSpreadsheetName)
+    private fun toggleDockableCollapsed(dockableId: DockableId) =
+        setDockableCollapsed(dockableId, !projectFrame.isCollapsed(dockableId.name))
+
+    private fun onChangeWindowLayout() {
+        for (dockableId in DockableId.entries)
+            setDockableCollapsed(dockableId, projectFrame.isCollapsed(dockableId.name))
     }
 
     fun onGlobalKeyEvent(event: KeyEvent): Boolean {
@@ -409,40 +569,60 @@ class ProjectController(
         // process key events even inside the color picker popup.
         while (window is Window && window.type == Window.Type.POPUP)
             window = window.owner
-        if (window != projectFrame && window != stylingDialog && window != playbackDialog && window != deliveryDialog)
+        if (window !is Window || !projectFrame.isDockingWindow(window) && !playbackCtrl.isFullScreenWindow(window))
             return false
-        if (projectFrame.panel.onKeyEvent(event) || stylingDialog.isVisible && stylingDialog.panel.onKeyEvent(event))
+        if (!projectFrame.isCollapsed(DockableId.STYLING.name) && stylingDockable.onKeyEvent(event))
             return true
-        when (event.modifiersEx) {
-            0 -> when (event.keyCode) {
-                VK_J -> playbackCtrl.rewind()
-                VK_K -> playbackCtrl.pause()
-                VK_L -> playbackCtrl.play()
-                VK_SPACE -> playbackCtrl.togglePlay()
-                VK_LEFT, VK_KP_LEFT -> playbackCtrl.scrubRelativeFrames(-1)
-                VK_RIGHT, VK_KP_RIGHT -> playbackCtrl.scrubRelativeFrames(1)
-                VK_HOME -> playbackCtrl.scrub(0)
-                VK_END -> playbackCtrl.scrub(Int.MAX_VALUE)
-                VK_F11 -> playbackCtrl.toggleFullScreen()
-                VK_ESCAPE -> playbackCtrl.setFullScreen(false)
-                else -> return false
-            }
-            SHIFT_DOWN_MASK -> when (event.keyCode) {
-                // Don't listen for the regular left/right keys here as those are reserved for text fields.
-                VK_KP_LEFT -> playbackCtrl.scrubRelativeSeconds(-1)
-                VK_KP_RIGHT -> playbackCtrl.scrubRelativeSeconds(1)
-                else -> return false
-            }
-            CTRL_DOWN_MASK -> when (event.keyCode) {
-                VK_Q -> tryCloseProject()
-                VK_W -> if (window == projectFrame) tryCloseProject() else
-                    setDialogVisible(ProjectDialogType.entries.first { getDialog(it) == window }, false)
-                VK_B if deliveryDialog.isVisible -> deliveryDialog.panel.configurationForm.addRenderJobToQueue()
-                VK_L -> playbackCtrl.toggleDeckLinkConnected()
-                VK_1 -> playbackCtrl.toggleActualSize()
-                else -> return false
-            }
-            else -> return false
+        when (Shortcut.match(event)) {
+            ESCAPE -> if (!playbackCtrl.setFullScreen(false)) return false
+            CLOSE_WINDOW -> window.dispatchEvent(WindowEvent(window, WindowEvent.WINDOW_CLOSING))
+            QUIT -> tryCloseProject()
+
+            TOOLBAR_POLL_CREDITS -> toolbarCtrl.pollCredits()
+            TOOLBAR_OPEN_CREDITS -> toolbarCtrl.openCredits()
+            TOOLBAR_BROWSE_PROJECT_DIR -> toolbarCtrl.browseProjectDir()
+            TOOLBAR_UNDO_STYLING -> toolbarCtrl.undoStyling()
+            TOOLBAR_REDO_STYLING_1, TOOLBAR_REDO_STYLING_2 -> toolbarCtrl.redoStyling()
+            TOOLBAR_SAVE_STYLING -> toolbarCtrl.saveStyling()
+            TOOLBAR_RESET_STYLING -> toolbarCtrl.resetStyling()
+            TOOLBAR_ZOOM_IN -> toolbarCtrl.zoom(zoomIn = true)
+            TOOLBAR_ZOOM_OUT -> toolbarCtrl.zoom(zoomIn = false)
+            TOOLBAR_ZOOM_RESET -> toolbarCtrl.setZoom(1.0)
+            TOOLBAR_TOGGLE_GUIDES -> toolbarCtrl.toggleGuides()
+            TOOLBAR_OVERLAY_MENU -> toolbarCtrl.toggleOverlaysMenu()
+            TOOLBAR_TOGGLE_STYLING_DOCKABLE -> toggleDockableCollapsed(DockableId.STYLING)
+            TOOLBAR_TOGGLE_PLAYBACK_DOCKABLE -> toggleDockableCollapsed(DockableId.PLAYBACK)
+            TOOLBAR_TOGGLE_DELIVERY_DOCKABLE -> toggleDockableCollapsed(DockableId.DELIVERY)
+            TOOLBAR_HOME -> toolbarCtrl.showWelcomeFrame()
+
+            PREVIEW_SWITCH_CREDITS_BOOK_TAB_LEFT -> previewCtrl.switchCreditsBookTab(false)
+            PREVIEW_SWITCH_CREDITS_BOOK_TAB_RIGHT -> previewCtrl.switchCreditsBookTab(true)
+            PREVIEW_SWITCH_CREDITS_TAB_LEFT -> previewCtrl.switchCreditsTab(false)
+            PREVIEW_SWITCH_CREDITS_TAB_RIGHT -> previewCtrl.switchCreditsTab(true)
+            PREVIEW_SWITCH_PAGE_TAB_LEFT -> previewCtrl.switchPageTab(false)
+            PREVIEW_SWITCH_PAGE_TAB_RIGHT -> previewCtrl.switchPageTab(true)
+            PREVIEW_SCROLL_PAGE_UP -> previewCtrl.scrollBlock(false)
+            PREVIEW_SCROLL_PAGE_DOWN -> previewCtrl.scrollBlock(true)
+
+            PLAYBACK_REWIND -> playbackCtrl.rewind()
+            PLAYBACK_PAUSE -> playbackCtrl.pause()
+            PLAYBACK_PLAY -> playbackCtrl.play()
+            PLAYBACK_TOGGLE_PLAY -> playbackCtrl.togglePlay()
+            PLAYBACK_ONE_FRAME_BACK -> playbackCtrl.scrubRelativeFrames(-1)
+            PLAYBACK_ONE_FRAME_FORWARD -> playbackCtrl.scrubRelativeFrames(1)
+            PLAYBACK_JUMP_TO_START -> playbackCtrl.scrub(0)
+            PLAYBACK_JUMP_TO_END -> playbackCtrl.scrub(Int.MAX_VALUE)
+            PLAYBACK_TOGGLE_FULL_SCREEN -> playbackCtrl.toggleFullScreen()
+            PLAYBACK_ONE_SECOND_BACK -> playbackCtrl.scrubRelativeSeconds(-1)
+            PLAYBACK_ONE_SECOND_FORWARD -> playbackCtrl.scrubRelativeSeconds(1)
+            PLAYBACK_TOGGLE_DECK_LINK_CONNECTED -> playbackCtrl.toggleDeckLinkConnected()
+            PLAYBACK_TOGGLE_ACTUAL_SIZE -> playbackCtrl.toggleActualSize()
+
+            DELIVERY_ADD_RENDER_JOB -> deliveryCtrl.onClickAddRenderJobToQueue()
+
+            STYLING_ADD_PAGE_STYLE, STYLING_ADD_CONTENT_STYLE, STYLING_ADD_LETTER_STYLE, STYLING_ADD_TRANSITION_STYLE,
+            STYLING_ADD_PICTURE_STYLE, STYLING_ADD_TAPE_STYLE, STYLING_DUPLICATE_STYLE, STYLING_REMOVE_STYLE,
+            HIDDEN_SHOW_LOG, null -> return false
         }
         return true
     }
@@ -464,8 +644,9 @@ class ProjectController(
         private var lastEditedMillis = 0L
 
         init {
-            projectFrame.panel.onStylingChange(isUnsaved = false, isUndoable = false, isRedoable = false)
-            stylingDialog.panel.setStyling(saved)
+            toolbarCtrl.setStylingUnsaved(false)
+            toolbarCtrl.setStylingUnReDoable(isUndoable = false, isRedoable = false)
+            stylingDockable.setStyling(saved)
         }
 
         /** Returns false when the new styling is semantically equal to the current one. */
@@ -476,7 +657,7 @@ class ProjectController(
                     history.removeAt(history.lastIndex)
                 // If the user edits the same setting multiple times in quick succession, do not memorize a new
                 // state for each edit, but instead overwrite the last state after each edit. This for example avoids
-                // a new state being created for each increment of a spinner.
+                // a new state being created for each increment of a scrubber.
                 val currMillis = System.currentTimeMillis()
                 val rapidSucc = editedId != null && editedId == lastEditedId && currMillis - lastEditedMillis < 1000
                 lastEditedId = editedId
@@ -512,7 +693,7 @@ class ProjectController(
                 lastEditedId = null
                 process(currentInput.updateAndGet { it.copy(styling = current) })
                 updateHistoryIndicators()
-                stylingDialog.panel.setStyling(current)
+                stylingDockable.setStyling(current)
             }
         }
 
@@ -522,7 +703,7 @@ class ProjectController(
                 lastEditedId = null
                 process(currentInput.updateAndGet { it.copy(styling = current) })
                 updateHistoryIndicators()
-                stylingDialog.panel.setStyling(current)
+                stylingDockable.setStyling(current)
             }
         }
 
@@ -532,7 +713,7 @@ class ProjectController(
 
         fun loadAndRedraw(new: Styling) {
             if (editedAndRedraw(new, null))
-                stylingDialog.panel.setStyling(new)
+                stylingDockable.setStyling(new)
         }
 
         /** Replaces the current styling with [new], and also refreshes the UI. Doesn't trigger a redraw. */
@@ -541,7 +722,7 @@ class ProjectController(
                 history[currentIdx] = new
                 currentInput.updateAndGet { it.copy(styling = new) }
                 updateHistoryIndicators()
-                stylingDialog.panel.setStyling(new)
+                stylingDockable.setStyling(new)
             }
         }
 
@@ -549,22 +730,20 @@ class ProjectController(
             try {
                 writeStyling(stylingFile, current)
             } catch (e: IOException) {
+                LOGGER.error("Could not write the styling file '{}'.", stylingFile, e)
                 JOptionPane.showMessageDialog(
-                    projectFrame, arrayOf(l10n("ui.edit.cannotSaveStyling.msg"), e.message ?: e.toString()),
+                    projectFrame, arrayOf(l10n("ui.edit.cannotSaveStyling.msg"), e.userNotification),
                     l10n("ui.edit.cannotSaveStyling.title"), JOptionPane.ERROR_MESSAGE
                 )
             }
             saved = current
             lastEditedId = null  // Saving should always create a new undo state.
-            projectFrame.panel.onStylingSave()
+            toolbarCtrl.setStylingUnsaved(false)
         }
 
         private fun updateHistoryIndicators() {
-            projectFrame.panel.onStylingChange(
-                isUnsaved = !semanticallyEqual(current, saved),
-                isUndoable = currentIdx != 0,
-                isRedoable = currentIdx != history.lastIndex
-            )
+            toolbarCtrl.setStylingUnsaved(!semanticallyEqual(current, saved))
+            toolbarCtrl.setStylingUnReDoable(isUndoable = currentIdx != 0, isRedoable = currentIdx != history.lastIndex)
         }
 
         private fun semanticallyEqual(a: Styling, b: Styling) =

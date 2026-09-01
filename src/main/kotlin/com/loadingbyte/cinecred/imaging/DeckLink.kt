@@ -146,7 +146,7 @@ class DeckLink(
 
     private fun createFrame(bitmap: Bitmap): MemorySegment? {
         val (res, rep) = bitmap.spec
-        if (res != mode?.resolution || rep.colorSpace == null)
+        if (res != mode?.resolution || rep.colorSpace.primaries == null)
             return null
         val depth = Depth.entries.find { rep == compatibleRepresentation(it, rep.colorSpace) } ?: return null
         val (w, h) = res
@@ -199,10 +199,8 @@ class DeckLink(
 
     companion object {
 
-        fun compatibleRepresentation(depth: Depth, colorSpace: ColorSpace) = Bitmap.Representation(
-            depth.pixelFormat, depth.range, colorSpace,
-            if (depth.pixelFormat.hasAlpha) Bitmap.Alpha.STRAIGHT else Bitmap.Alpha.OPAQUE
-        )
+        fun compatibleRepresentation(depth: Depth, colorSpace: ColorSpace): Bitmap.Representation =
+            Bitmap.Representation(depth.pixelFormat, depth.range, colorSpace, Bitmap.Alpha.OPAQUE)
 
         // Causes the static initializer to be executed, which registers the notification callback.
         fun preload() {}
@@ -315,12 +313,12 @@ class DeckLink(
         private fun getDeviceId(attributesHandle: MemorySegment): String? = Arena.ofConfined().use { arena ->
             val cStr = arena.allocate(1024)
             if (IDeckLinkProfileAttributes_GetDeviceHandle(attributesHandle, cStr, cStr.byteSize()))
-                cStr.getUtf8String(0) else null
+                cStr.getString(0) else null
         }
 
         private fun getDeviceName(deviceHandle: MemorySegment): String = Arena.ofConfined().use { arena ->
             val cStr = arena.allocate(1024)
-            if (IDeckLink_GetDisplayName(deviceHandle, cStr, cStr.byteSize())) cStr.getUtf8String(0) else "???"
+            if (IDeckLink_GetDisplayName(deviceHandle, cStr, cStr.byteSize())) cStr.getString(0) else "???"
         }
 
         private fun getDeviceModes(outputHandle: MemorySegment): List<Mode> {
@@ -365,7 +363,7 @@ class DeckLink(
 
         private fun getModeName(modeHandle: MemorySegment): String? = Arena.ofConfined().use { arena ->
             val cStr = arena.allocate(1024)
-            if (IDeckLinkDisplayMode_GetName(modeHandle, cStr, cStr.byteSize())) cStr.getUtf8String(0) else null
+            if (IDeckLinkDisplayMode_GetName(modeHandle, cStr, cStr.byteSize())) cStr.getString(0) else null
         }
 
     }
@@ -382,7 +380,7 @@ class DeckLink(
 
 
     enum class Depth(val bits: Int, val code: Int, val pixelFormat: Bitmap.PixelFormat, val range: Bitmap.Range) {
-        D8(8, PixelFormat_8BitBGRA(), Bitmap.PixelFormat.of(AV_PIX_FMT_BGRA), Bitmap.Range.FULL),
+        D8(8, PixelFormat_8BitBGRA(), Bitmap.PixelFormat.of(AV_PIX_FMT_BGR0), Bitmap.Range.FULL),
         D10(10, PixelFormat_10BitRGB(), Bitmap.PixelFormat.of(AV_PIX_FMT_X2RGB10BE), Bitmap.Range.LIMITED)
     }
 

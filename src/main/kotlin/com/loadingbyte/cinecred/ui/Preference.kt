@@ -3,9 +3,13 @@ package com.loadingbyte.cinecred.ui
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.imaging.*
 import com.loadingbyte.cinecred.imaging.Bitmap.PixelFormat.Family.RGB
+import com.loadingbyte.cinecred.ui.helper.DockingFrame
+import java.awt.Rectangle
 import java.io.File
 import java.io.IOException
 import java.nio.file.Path
+import java.text.DecimalFormat
+import java.text.DecimalFormatSymbols
 import java.util.*
 import kotlin.io.path.*
 
@@ -24,6 +28,8 @@ val UI_LOCALE_PREFERENCE: Preference<LocaleWish> = LocaleWishPreference("uiLocal
 val CHECK_FOR_UPDATES_PREFERENCE: Preference<Boolean> = BooleanPreference("checkForUpdates", true)
 val WELCOME_HINT_TRACK_PENDING_PREFERENCE: Preference<Boolean> = BooleanPreference("welcomeHintTrackPending", true)
 val PROJECT_HINT_TRACK_PENDING_PREFERENCE: Preference<Boolean> = BooleanPreference("projectHintTrackPending", true)
+val APPLE_SCRIPT_FILE_CHOOSER: Preference<Boolean> = BooleanPreference("appleScriptFileChooser", false)
+val TAPE_PREVIEW_RESOLUTION: Preference<Int> = IntPreference("tapePreviewResolution", 128)
 val DECK_LINK_ID_PREFERENCE: Preference<String> = StringPreference("deckLinkId", "null")
 val DECK_LINK_MODE_PREFERENCE: Preference<String> = StringPreference("deckLinkMode", "null")
 val DECK_LINK_DEPTH_PREFERENCE: Preference<Int> = IntPreference("deckLinkDepth", 8)
@@ -31,6 +37,8 @@ val DECK_LINK_PRI_PREFERENCE: Preference<Int> = IntPreference("deckLinkPrimaries
 val DECK_LINK_TRC_PREFERENCE: Preference<Int> = IntPreference("deckLinkTransfer", ColorSpace.Transfer.BT1886.canonCode)
 val DECK_LINK_CONNECTED_PREFERENCE: Preference<Boolean> = BooleanPreference("deckLinkConnected", false)
 val PROJECT_DIRS_PREFERENCE: Preference<List<Path>> = PathListPreference("projectDirs")
+val DEFAULT_WINDOW_LAYOUT_PREFERENCE: Preference<String> = StringPreference("defaultWindowLayout", "null")
+val WINDOW_LAYOUTS_PREFERENCE: Preference<List<ConfigurableWindowLayout>> = WindowLayoutListPreference("windowLayout")
 val OVERLAYS_PREFERENCE: Preference<List<ConfigurableOverlay>> = OverlayListPreference("overlay")
 val DELIVERY_DEST_TEMPLATES_PREFERENCE: Preference<List<DeliveryDestTemplate>> =
     DeliveryDestTemplateListPreference("deliveryDestinationTemplate")
@@ -116,6 +124,101 @@ private class LocaleWishPreference(override val key: String) : AbstractPreferenc
 }
 
 
+private class WindowLayoutListPreference(override val key: String) :
+    AbstractPreference<List<ConfigurableWindowLayout>>() {
+
+    private val decFmt = DecimalFormat("#.##", DecimalFormatSymbols.getInstance(Locale.ROOT))
+
+    override fun doGet() = (PreferencesToml.get(key) as? List<*> ?: emptyList<Any>()).mapNotNull {
+        if (it !is Map<*, *>) return@mapNotNull null
+        val name = it["name"] as? String ?: return@mapNotNull null
+        val trees = try {
+            parseTreesString(it["layout"] as? String ?: return@mapNotNull null)
+        } catch (_: RuntimeException) {
+            return@mapNotNull null
+        }
+        ConfigurableWindowLayout(name, trees)
+    }
+
+    override fun doSet(value: List<ConfigurableWindowLayout>) =
+        PreferencesToml.set(key, value.map { windowLayout ->
+            mapOf("name" to windowLayout.name, "layout" to buildTreesString(windowLayout.trees))
+        })
+
+    private fun parseTreesString(str: String): List<DockingFrame.Tree> {
+        val trees = mutableListOf<DockingFrame.Tree>()
+        require(str.startsWith("v1 "))
+        var idx = str.indexOf(' ') + 1
+        while (idx < str.lastIndex) {
+            idx += 2
+            val b = IntArray(4)
+            for (i in b.indices) {
+                val end = str.indexOf(' ', idx)
+                b[i] = str.substring(idx, end).toInt()
+                idx = end + 1
+            }
+            val bounds = Rectangle(b[0], b[1], b[2], b[3])
+            val leftRetractable = str[idx] == 'r'; idx += 2
+            val rightRetractable = str[idx] == 'r'; idx += 2
+            val (root, end) = parseTreeString(str, idx)
+            idx = end + 2
+            trees += DockingFrame.Tree(bounds, leftRetractable, rightRetractable, root)
+        }
+        return trees
+    }
+
+    private fun parseTreeString(str: String, idx: Int): Pair<DockingFrame.Node, Int> {
+        val idx1 = idx + 2
+        when (str[idx]) {
+            'l' -> {
+                val idx2 = str.indexOf(' ', idx1) + 1
+                val id = str.substring(idx1, idx2 - 1)
+                val collapsed = str[idx2] == 'c'
+                return Pair(DockingFrame.Node.Leaf(id, collapsed), idx2)
+            }
+            's' -> {
+                val idx2 = idx1 + 2
+                val idx3 = str.indexOf(' ', idx2) + 1
+                val orientation =
+                    if (str[idx1] == 'h') DockingFrame.Orientation.HORIZONTAL else DockingFrame.Orientation.VERTICAL
+                val ratio = str.substring(idx2, idx3 - 1).toDouble()
+                val (left, idx4) = parseTreeString(str, idx3)
+                val (right, idx5) = parseTreeString(str, idx4 + 2)
+                return Pair(DockingFrame.Node.Split(orientation, ratio, left, right), idx5)
+            }
+            else -> throw IllegalArgumentException()
+        }
+    }
+
+    private fun buildTreesString(trees: List<DockingFrame.Tree>): String {
+        val bld = StringBuilder("v1")
+        for (tree in trees) {
+            val b = tree.bounds
+            bld.append(" w ").append(b.x).append(" ").append(b.y).append(" ").append(b.width).append(" ")
+                .append(b.height).append(" ").append(if (tree.leftRetractable) "r" else "n").append(" ")
+                .append(if (tree.rightRetractable) "r" else "n").append(" ")
+            buildTreeString(tree.root, bld)
+        }
+        return bld.toString()
+    }
+
+    private fun buildTreeString(node: DockingFrame.Node, bld: StringBuilder) {
+        when (node) {
+            is DockingFrame.Node.Leaf ->
+                bld.append("l ").append(node.id).append(" ").append(if (node.collapsed) "c" else "e")
+            is DockingFrame.Node.Split -> {
+                bld.append("s ").append(if (node.orientation == DockingFrame.Orientation.HORIZONTAL) 'h' else 'v')
+                    .append(" ").append(decFmt.format(node.ratio)).append(" ")
+                buildTreeString(node.left, bld)
+                bld.append(" ")
+                buildTreeString(node.right, bld)
+            }
+        }
+    }
+
+}
+
+
 private class OverlayListPreference(override val key: String) : AbstractPreference<List<ConfigurableOverlay>>() {
 
     override fun doGet() = (PreferencesToml.get(key) as? List<*> ?: emptyList<Any>()).mapNotNull {
@@ -143,19 +246,19 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
             "image" -> {
                 val name = it["name"] as? String ?: return@mapNotNull null
                 val underlay = it["lay"] == "under"
-                val uuid = try {
+                val identity = try {
                     UUID.fromString(it["image"] as? String ?: return@mapNotNull null)
                 } catch (_: IllegalArgumentException) {
                     return@mapNotNull null
                 }
-                val file = IMAGE_DIR.resolve("$uuid.png")
+                val file = IMAGE_DIR.resolve("$identity.png")
                 val raster = try {
                     Picture.Raster.load(file)
                 } catch (e: IOException) {
                     LOGGER.error("Cannot read overlay image file '{}'.", file, e)
                     return@mapNotNull null
                 }
-                ImageOverlay(uuid, name, raster, rasterPersisted = true, underlay)
+                ImageOverlay(identity, name, raster, rasterPersisted = true, underlay)
             }
             else -> null
         }
@@ -166,8 +269,8 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
         try {
             if (IMAGE_DIR.exists())
                 for (file in IMAGE_DIR.listDirectoryEntries()) {
-                    val fileUUIDStr = file.nameWithoutExtension
-                    if (value.none { overlay -> overlay is ImageOverlay && overlay.uuid.toString() == fileUUIDStr })
+                    val fileIdStr = file.nameWithoutExtension
+                    if (value.none { overlay -> overlay is ImageOverlay && overlay.identity.toString() == fileIdStr })
                         file.deleteIfExists()
                 }
         } catch (e: IOException) {
@@ -176,7 +279,7 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
         // Save overlay image files which have not yet been saved.
         for (overlay in value)
             if (overlay is ImageOverlay) {
-                val file = IMAGE_DIR.resolve("${overlay.uuid}.png")
+                val file = IMAGE_DIR.resolve("${overlay.identity}.png")
                 if (!file.exists() || !overlay.rasterPersisted)
                     try {
                         file.parent.createDirectoriesSafely()
@@ -210,7 +313,7 @@ private class OverlayListPreference(override val key: String) : AbstractPreferen
                     "type" to "image",
                     "name" to overlay.name,
                     "lay" to if (overlay.underlay) "under" else "over",
-                    "image" to overlay.uuid.toString()
+                    "image" to overlay.identity.toString()
                 )
             }
         })
@@ -323,13 +426,14 @@ sealed interface LocaleWish {
 
 
 /** @throws UnrecognizedPlaceholderException */
-class DeliveryDestTemplate(val uuid: UUID, val name: String, str: String) {
+class DeliveryDestTemplate(val identity: UUID, val name: String, str: String) {
 
     enum class Placeholder(private val l10nKey: String? = null, private val fixedTag: String? = null) {
 
-        PROJECT, SPREADSHEET("ui.deliverConfig.spreadsheet"), FIRST_PAGE, LAST_PAGE,
+        PROJECT, CREDITS_FILENAME("ui.projects.create.creditsFilename"),
+        SPREADSHEET("ui.deliverConfig.spreadsheet"), FIRST_PAGE, LAST_PAGE,
         FORMAT_CATEGORY, FORMAT("ui.deliverRenderQueue.format"), BIT_DEPTH("bitDepth"),
-        WIDTH, HEIGHT, FRAME_RATE("ui.styling.global.fps"), SCAN("ui.deliverConfig.scan"),
+        WIDTH("width"), HEIGHT("height"), FRAME_RATE("ui.styling.global.fps"), SCAN("scan"),
         CHANNELS, GAMUT("gamut"), EOTF(fixedTag = "EOTF"),
         YEAR, MONTH, DAY, HOUR, MINUTE, SECOND, TIME_ZONE;
 

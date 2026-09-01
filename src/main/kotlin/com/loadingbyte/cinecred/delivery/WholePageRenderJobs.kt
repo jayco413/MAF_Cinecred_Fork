@@ -72,15 +72,15 @@ class WholePageSequenceRenderJob private constructor(
         val matte = config[TRANSPARENCY] == MATTE
         val family = if (matte) GRAY else RGB
         val spatialScaling = 2.0.pow(config[SPATIAL_SCALING_LOG2])
-        val colorSpace = if (matte) null else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
-        val ceiling = if (config.getOrDefault(HDR) || colorSpace?.transfer?.isHDR == true) null else 1f
+        val colorSpace = if (matte) ColorSpace.of(LINEAR) else ColorSpace.of(config[PRIMARIES], config[TRANSFER])
+        val ceiling = if (config.getOrDefault(HDR) || colorSpace.transfer.isHDR) null else 1f
         val global = styling.global
 
         val bitmapWriter = when (format) {
             PNG -> BitmapWriter.PNG(family, embedAlpha, colorSpace, config[DEPTH])
             TIFF -> BitmapWriter.TIFF(family, embedAlpha, colorSpace, config[DEPTH], config[TIFF_COMPRESSION])
             DPX -> BitmapWriter.DPX(family, embedAlpha, colorSpace, config[DEPTH], config[DPX_COMPRESSION])
-            EXR -> BitmapWriter.EXR(family, embedAlpha, colorSpace?.primaries, config[DEPTH], config[EXR_COMPRESSION])
+            EXR -> BitmapWriter.EXR(family, embedAlpha, colorSpace.primaries, config[DEPTH], config[EXR_COMPRESSION])
             else -> null
         }
 
@@ -95,16 +95,21 @@ class WholePageSequenceRenderJob private constructor(
             when (format) {
                 PNG, TIFF, DPX, EXR -> {
                     val res = Resolution(pageWidth, pageHeight)
-                    val rep = Canvas.compatibleRepresentation(ColorSpace.of(colorSpace?.primaries ?: BT709, BLENDING))
+                    val rep = Canvas.compatibleRepresentation(ColorSpace.of(colorSpace.primaries ?: BT709, BLENDING))
                     Bitmap.allocate(Bitmap.Spec(res, rep)).use { bitmap ->
                         Canvas.forBitmap(bitmap, ceiling).use { canvas ->
                             if (ground) canvas.fill(Canvas.Shader.Solid(global.grounding)) else bitmap.zero()
-                            pageDefImage.materialize(canvas, cache = null, layers = listOf(STATIC, TAPES))
+                            pageDefImage.materialize(
+                                canvas, cachePictures = false, permitTapePreviews = null,
+                                tolerateErroneousMedia = false, layers = listOf(STATIC, TAPES)
+                            )
                         }
                         if (!matte)
                             bitmapWriter!!.convertAndWrite(bitmap, pageFile, promiseOpaque = !embedAlpha)
                         else {
-                            val matteRep = Bitmap.Representation(Bitmap.PixelFormat.of(AV_PIX_FMT_GRAYF32))
+                            val matteRep = Bitmap.Representation(
+                                Bitmap.PixelFormat.of(AV_PIX_FMT_GRAYF32), ColorSpace.of(LINEAR)
+                            )
                             Bitmap.allocate(Bitmap.Spec(res, matteRep)).use { matteBitmap ->
                                 matteBitmap.blitComponent(bitmap, 3, 0)
                                 bitmapWriter!!.convertAndWrite(matteBitmap, pageFile, promiseOpaque = true)
@@ -156,20 +161,20 @@ class WholePageSequenceRenderJob private constructor(
     companion object {
 
         private val PNG = Format(
-            "png",
+            "png", isRaster = true,
             transparencyTimesColorSpace(default = SRGB) * choice(DEPTH, 8, 16)
         )
         private val TIFF = Format(
-            "tiff",
+            "tiff", isRaster = true,
             transparencyTimesColorSpace(default = SRGB) * choice(DEPTH, 8, 16) * choice(TIFF_COMPRESSION)
         )
         private val DPX = Format(
-            "dpx",
+            "dpx", isRaster = true,
             transparencyTimesColorSpace() * choice(DEPTH, 8, 10, 12, 16) * choice(DPX_COMPRESSION) -
                     fixed(DEPTH, 10) * fixed(TRANSPARENCY, TRANSPARENT)
         )
         private val EXR = Format(
-            "exr",
+            "exr", isRaster = true,
             choice(DEPTH, 16, 32, default = 32) * choice(EXR_COMPRESSION) * (
                     choice(TRANSPARENCY, GROUNDED, TRANSPARENT) * choice(PRIMARIES) * fixed(TRANSFER, LINEAR)
                             * choice(HDR)
@@ -177,7 +182,7 @@ class WholePageSequenceRenderJob private constructor(
                     )
         )
         private val SVG = Format(
-            "svg",
+            "svg", isRaster = false,
             choice(TRANSPARENCY, GROUNDED, TRANSPARENT) * fixed(PRIMARIES, BT709) * fixed(TRANSFER, SRGB)
         )
 
@@ -190,9 +195,9 @@ class WholePageSequenceRenderJob private constructor(
     }
 
 
-    private class Format(fileExt: String, configAssortment: Config.Assortment) : RenderFormat(
+    private class Format(fileExt: String, isRaster: Boolean, configAssortment: Config.Assortment) : RenderFormat(
         fileExt.uppercase(), auxLabel = null, fileSeq = true, setOf(fileExt), fileExt,
-        configAssortment * choice(SPATIAL_SCALING_LOG2)
+        configAssortment * choice(SPATIAL_SCALING_LOG2), isRaster
     ) {
         override fun createRenderJob(
             projectDir: Path,
@@ -252,6 +257,8 @@ class WholePagePDFRenderJob private constructor(
             info = id
         })
 
+        val tracker = DeferredImage.PDFTracker(pdfDoc, colorSpace, lossy, lossy, rasterizeSVGs)
+
         for ((idx, unscaledPageDefImage) in pageDefImages.withIndex()) {
             if (Thread.interrupted()) return
 
@@ -266,12 +273,13 @@ class WholePagePDFRenderJob private constructor(
                     if (ground)
                         drawRect(global.grounding, 0.0, 0.0.toY(), page.width, page.height, fill = true)
                     drawDeferredImage(page, 0.0, 0.0.toY())
-                }.materialize(pdfDoc, pdfPage, cs, colorSpace, lossy, lossy, rasterizeSVGs, listOf(STATIC, TAPES))
+                }.materialize(tracker, pdfPage, cs, listOf(STATIC, TAPES))
             }
 
             progressCallback(MAX_RENDER_PROGRESS * (idx + 1) / pageDefImages.size)
         }
 
+        tracker.close()
         pdfDoc.save(file.toFile())
         pdfDoc.close()
     }

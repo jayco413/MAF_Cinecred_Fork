@@ -1,16 +1,15 @@
 package com.loadingbyte.cinecred.ui.view.welcome
 
+import com.formdev.flatlaf.util.SystemInfo
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.comms.WelcomeCtrlComms
-import com.loadingbyte.cinecred.ui.helper.CheckBoxWidget
-import com.loadingbyte.cinecred.ui.helper.ComboBoxWidget
-import com.loadingbyte.cinecred.ui.helper.EasyForm
+import com.loadingbyte.cinecred.ui.helper.*
 import java.util.*
 
 
 class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
-    EasyForm(insets = false, noticeArea = false, constLabelWidth = false) {
+    EasyForm(insets = "0", noticeArea = false, maxLabelWidth = "50%", constLabelWidth = false) {
 
     private val uiLocaleWishWidget = addWidget(
         l10n("ui.preferences.uiLocaleWish"),
@@ -19,6 +18,7 @@ class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
             listOf(LocaleWish.System) + TRANSLATED_LOCALES
                 .sortedWithCollator(ROOT_CASE_INSENSITIVE_COLLATOR) { it.getDisplayName(it) }
                 .map(LocaleWish::Specific),
+            widthSpec = WidthSpec.SQUEEZE,
             toString = { wish ->
                 when (wish) {
                     is LocaleWish.System -> l10n("ui.preferences.uiLocaleWishSystem")
@@ -45,6 +45,20 @@ class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
     private val projectHintTrckPendingWidget = addWidget(
         l10n("ui.preferences.hintTrackPending.project"),
         CheckBoxWidget()
+    )
+
+    private val appleScriptFileChooserWidget = if (!SystemInfo.isMacOS) null else addWidget(
+        l10n("ui.preferences.appleScriptFileChooser"),
+        CheckBoxWidget()
+    )
+
+    private val tapePreviewResolutionWidget = addWidget(
+        l10n("ui.preferences.tapePreviewResolution"),
+        ScrubberWidget(
+            Scrubber.NumericScheme(Int::class.javaObjectType, unit = "px"), Scrubber.NumberLimiter(64, 1024),
+            sensitivity = 1.0, widthSpec = WidthSpec.LITTLE
+        ),
+        description = l10n("ui.preferences.tapePreviewResolution.desc")
     )
 
     private var disableOnChange = false
@@ -74,6 +88,10 @@ class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
                 forward(WELCOME_HINT_TRACK_PENDING_PREFERENCE, welcomeHintTrckPendingWidget.value)
             projectHintTrckPendingWidget ->
                 forward(PROJECT_HINT_TRACK_PENDING_PREFERENCE, projectHintTrckPendingWidget.value)
+            appleScriptFileChooserWidget ->
+                forward(APPLE_SCRIPT_FILE_CHOOSER, appleScriptFileChooserWidget.value)
+            tapePreviewResolutionWidget ->
+                forward(TAPE_PREVIEW_RESOLUTION, tapePreviewResolutionWidget.value)
             else -> throw IllegalStateException("Unknown widget, should never happen.")
         }
         super.onChange(widget)
@@ -94,5 +112,10 @@ class PreferencesForm(private val welcomeCtrl: WelcomeCtrlComms) :
     fun preferences_start_setCheckForUpdates(check: Boolean) = load(checkForUpdatesWidget, check)
     fun preferences_start_setWelcomeHintTrackPending(pending: Boolean) = load(welcomeHintTrckPendingWidget, pending)
     fun preferences_start_setProjectHintTrackPending(pending: Boolean) = load(projectHintTrckPendingWidget, pending)
+    fun preferences_start_setAppleScriptFileChooser(use: Boolean) {
+        appleScriptFileChooserWidget?.let { load(it, use) }
+    }
+
+    fun preferences_start_setTapePreviewResolution(resolution: Int) = load(tapePreviewResolutionWidget, resolution)
 
 }

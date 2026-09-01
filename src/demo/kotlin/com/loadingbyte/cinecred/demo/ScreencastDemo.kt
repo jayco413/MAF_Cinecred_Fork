@@ -1,21 +1,18 @@
 package com.loadingbyte.cinecred.demo
 
-import com.loadingbyte.cinecred.common.BUNDLED_FONTS
 import com.loadingbyte.cinecred.common.FPS
-import com.loadingbyte.cinecred.common.REF_FRC
+import com.loadingbyte.cinecred.common.compositeBundledFont
 import com.loadingbyte.cinecred.project.*
-import com.loadingbyte.cinecred.projectio.CsvFormat
+import com.loadingbyte.cinecred.projectio.XlsxFormat
 import com.loadingbyte.cinecred.projectio.tryCopyTemplate
-import com.loadingbyte.cinecred.ui.ProjectController
-import com.loadingbyte.cinecred.ui.ProjectDialogType
-import com.loadingbyte.cinecred.ui.UIFactory
+import com.loadingbyte.cinecred.ui.*
 import com.loadingbyte.cinecred.ui.ctrl.MasterCtrl
 import com.loadingbyte.cinecred.ui.ctrl.WelcomeCtrl
-import com.loadingbyte.cinecred.ui.helper.withG2
+import com.loadingbyte.cinecred.ui.helper.*
 import com.loadingbyte.cinecred.ui.styling.StyleForm
 import com.loadingbyte.cinecred.ui.view.welcome.WelcomeFrame
-import sun.font.FontUtilities
 import java.awt.*
+import java.awt.font.FontRenderContext
 import java.awt.font.LineBreakMeasurer
 import java.awt.font.TextAttribute
 import java.awt.font.TextLayout
@@ -23,9 +20,10 @@ import java.awt.image.BufferedImage
 import java.lang.Thread.sleep
 import java.nio.file.Path
 import java.text.AttributedString
-import java.util.*
+import java.text.MessageFormat
 import javax.swing.*
 import javax.swing.text.JTextComponent
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 
@@ -33,8 +31,9 @@ import kotlin.math.roundToInt
 abstract class ScreencastDemo(
     filename: String,
     format: Format,
-    private val desktopWidth: Int = 1280,
-    private val desktopHeight: Int = 720,
+    private val imageWidth: Int = 1280,
+    private val imageHeight: Int = 720,
+    private val desktopScale: Double = 1.0,
     protected val hold: Int = 500,
     private val captions: Boolean = false
 ) : Demo(filename, format) {
@@ -44,12 +43,41 @@ abstract class ScreencastDemo(
     override fun doGenerate() {
         withDemoProjectDir { projectDir ->
             this.projectDir = projectDir
-            dt = VirtualDesktop(desktopWidth, desktopHeight - if (captions) 200 else 0)
-            sc = Screencast(::write, format.fps, dt, hold, captionHeight = if (captions) 200 else 0, captionGap = 40)
+            val captionHeight = if (captions) 200 else 0
+            dt = VirtualDesktop(
+                (imageWidth / desktopScale).roundToInt(),
+                ((imageHeight - captionHeight) / desktopScale).roundToInt()
+            )
+            sc = Screencast(::write, format.fps, imageWidth, imageHeight, dt, desktopScale, hold, captionHeight, 40)
             masterCtrl = UIFactory().master() as MasterCtrl
-            generate()
-            edt { Window.getWindows().forEach(Window::dispose) }
-            sleep(100)
+
+            setExtraSystemScaleFactor(desktopScale)
+            setDemoMouseLocCallback(dt::mouse)
+            edt { ToolTipManager.sharedInstance().isEnabled = false }
+            val backedUpProjectDirs = PROJECT_DIRS_PREFERENCE.get()
+            val backedUpDefaultWindowLayout = DEFAULT_WINDOW_LAYOUT_PREFERENCE.get()
+            val backedUpWindowLayouts = WINDOW_LAYOUTS_PREFERENCE.get()
+            val backedUpOverlays = OVERLAYS_PREFERENCE.get()
+            val backedUpDeliveryDestTemplates = DELIVERY_DEST_TEMPLATES_PREFERENCE.get()
+            PROJECT_DIRS_PREFERENCE.set(emptyList())
+            DEFAULT_WINDOW_LAYOUT_PREFERENCE.set("null")
+            WINDOW_LAYOUTS_PREFERENCE.set(emptyList())
+            OVERLAYS_PREFERENCE.set(emptyList())
+            DELIVERY_DEST_TEMPLATES_PREFERENCE.set(emptyList())
+            try {
+                generate()
+                edt { Window.getWindows().forEach(Window::dispose) }
+                sleep(100)
+            } finally {
+                setExtraSystemScaleFactor(1.0)
+                setDemoMouseLocCallback(null)
+                edt { ToolTipManager.sharedInstance().isEnabled = true }
+                PROJECT_DIRS_PREFERENCE.set(backedUpProjectDirs)
+                DEFAULT_WINDOW_LAYOUT_PREFERENCE.set(backedUpDefaultWindowLayout)
+                WINDOW_LAYOUTS_PREFERENCE.set(backedUpWindowLayouts)
+                OVERLAYS_PREFERENCE.set(backedUpOverlays)
+                DELIVERY_DEST_TEMPLATES_PREFERENCE.set(backedUpDeliveryDestTemplates)
+            }
         }
         masterCtrl = null
     }
@@ -59,7 +87,11 @@ abstract class ScreencastDemo(
         welcomeWin = BackedVirtualWindow(welcomeFrame)
         dt.add(welcomeWin)
         sleep(500)
-        edt { welcomeFrame.projects_start_setMemorized(emptyList()) }
+        edt {
+            welcomeFrame.preferences_start_setUILocaleWish(LocaleWish.System)
+            welcomeFrame.preferences_start_setCheckForUpdates(true)
+            welcomeFrame.preferences_start_setAccounts(emptyList())
+        }
         if (fullscreen)
             dt.fullscreen(welcomeWin)
         else
@@ -72,70 +104,48 @@ abstract class ScreencastDemo(
     }
 
     protected fun addProjectWindows(
-        hideStyWin: Boolean = false,
-        setupVidWin: Boolean = false,
-        setupDlvWin: Boolean = false,
-        fullscreenPrjWin: Boolean = false,
-        snapRatio: Double = 0.5,
-        prjWinSplitRatio: Double = if (desktopHeight < 800) 0.85 else 0.9,
+        trees: List<DockingFrame.Tree> = dockedTrees,
+        fullscreenPrjWin: Boolean = true,
         styWinSplitRatio: Double = 0.25,
-        vidWinSize: Dimension? = null,
-        dlvWinSize: Dimension? = null,
         prepareProjectDir: (() -> Unit)? = null
     ) {
-        projectCtrl = masterCtrl!!.leakedProjectCtrls.lastOrNull() ?: run {
-            tryCopyTemplate(projectDir, template(locale), CsvFormat)
+        val existingProjectCtrl = masterCtrl!!.leakedProjectCtrls.lastOrNull()
+        projectCtrl = if (existingProjectCtrl != null) existingProjectCtrl else {
+            tryCopyTemplate(projectDir, template(locale), XlsxFormat)
             prepareProjectDir?.invoke()
-            edt { masterCtrl!!.openProject(projectDir, openOnScreen = gCfg) }
+            if (fullscreenPrjWin)
+                trees[0].bounds = dt.fullscreen
+            edt { masterCtrl!!.openProject(projectDir, null, trees) }
             sleep(1500)
             masterCtrl!!.leakedProjectCtrls.last()
         }
-        prjWin = BackedVirtualWindow(projectCtrl.projectFrame)
-        styWin = BackedVirtualWindow(projectCtrl.stylingDialog)
-        plyWin = BackedVirtualWindow(projectCtrl.playbackDialog)
-        dlvWin = BackedVirtualWindow(projectCtrl.deliveryDialog)
+        prjWin = BackedVirtualWindow(dok)
         dt.add(prjWin)
-        dt.add(styWin)
-        dt.add(plyWin)
-        dt.add(dlvWin)
 
         sleep(500)
-        if (fullscreenPrjWin)
-            dt.fullscreen(prjWin)
-        else {
-            dt.snapToSide(prjWin, rightSide = false, snapRatio)
-            dt.snapToSide(styWin, rightSide = true, 1.0 - snapRatio)
-        }
-        if (setupVidWin) {
-            edt {
-                projectCtrl.setDialogVisible(ProjectDialogType.VIDEO, true)
-                plyCtl.leakedPlayButton.actionListeners.forEach(plyCtl.leakedPlayButton::removeActionListener)
-            }
-            sleep(500)
-            if (vidWinSize != null || desktopWidth < 1500)
-                plyWin.size = vidWinSize ?: Dimension(desktopWidth * 2 / 3, desktopHeight * 2 / 3)
-            dt.center(plyWin)
-        }
-        if (setupDlvWin) {
-            edt { projectCtrl.setDialogVisible(ProjectDialogType.DELIVERY, true) }
-            sleep(500)
-            if (dlvWinSize != null || desktopWidth < 1500)
-                dlvWin.size = dlvWinSize ?: Dimension(desktopWidth * 2 / 3, desktopHeight * 4 / 5)
-            dt.center(dlvWin)
-        }
-        sleep(500)
         edt {
-            prjPnl.leakedSplitPane.setDividerLocation(prjWinSplitRatio)
-            styPnl.leakedSplitPane.setDividerLocation(styWinSplitRatio)
+            plyCtl.leakedPlayButton.actionListeners.forEach(plyCtl.leakedPlayButton::removeActionListener)
+            styDok.leakedSplitPane.setDividerLocation(styWinSplitRatio)
         }
         sleep(500)
-        if (hideStyWin || fullscreenPrjWin)
-            edt { projectCtrl.setDialogVisible(ProjectDialogType.STYLING, false) }
-        if (setupVidWin)
-            edt { projectCtrl.setDialogVisible(ProjectDialogType.VIDEO, false) }
-        if (setupDlvWin)
-            edt { projectCtrl.setDialogVisible(ProjectDialogType.DELIVERY, false) }
-        sleep(500)
+    }
+
+    fun updateUndockedDialogs() {
+        sleep(2000)
+        for (dialog in dok.ownedWindows)
+            if (dialog is JDialog && dok.isDockingWindow(dialog) && dialog !in undockedDialogs) {
+                val win = BackedVirtualWindow(dok.ownedWindows.filterIsInstance<JDialog>().first())
+                undockedWins += win
+                undockedDialogs += dialog
+                dt.add(win)
+                dt.coerce(win)
+            }
+        for ((win, dialog) in undockedWins.zip(undockedDialogs))
+            if (!dok.isVisible) {
+                undockedWins -= win
+                undockedDialogs -= dialog
+                dt.remove(win)
+            }
     }
 
     fun addOptionPaneDialog() {
@@ -165,43 +175,33 @@ abstract class ScreencastDemo(
 
     protected lateinit var projectCtrl: ProjectController; private set
     protected lateinit var prjWin: BackedVirtualWindow; private set
-    protected lateinit var styWin: BackedVirtualWindow; private set
-    protected lateinit var plyWin: BackedVirtualWindow; private set
-    protected lateinit var dlvWin: BackedVirtualWindow; private set
 
-    protected val prjPnl get() = projectCtrl.projectFrame.panel
-    protected val styPnl get() = projectCtrl.stylingDialog.panel
-    protected val plyPnl get() = projectCtrl.playbackDialog.panel
-    protected val dlvPnl get() = projectCtrl.deliveryDialog.panel
-    protected fun prjImagePnl(pageIdx: Int) = prjPnl.leakedImagePanels[pageIdx]
-    protected val prjCtl get() = prjPnl.leakedPlaybackControls
-    protected val plyCtl get() = plyPnl.leakedControlsPanel
-    protected val styTree get() = styPnl.leakedStylingTree
-    protected val styGlobForm get() = styPnl.leakedGlobalForm
-    protected val styPageForm get() = styPnl.leakedPageStyleForm
-    protected val styContForm get() = styPnl.leakedContentStyleForm
-    protected val styLetrForm get() = styPnl.leakedLetterStyleForm
-    protected val styPictForm get() = styPnl.leakedPictureStyleForm
+    protected val dok get() = projectCtrl.projectFrame
+    protected val tolDok get() = projectCtrl.leakedToolbarDockable
+    protected val preDok get() = projectCtrl.leakedPreviewDockable
+    protected val logDok get() = projectCtrl.leakedLogDockable
+    protected val styDok get() = projectCtrl.stylingDockable
+    protected val plyDok get() = projectCtrl.leakedPlaybackDockable
+    protected val dlvDok get() = projectCtrl.leakedDeliveryDockable
+    protected fun collapseBtn(dok: JPanel) = (dok.parent.getComponent(0) as JPanel).getComponent(2) as JButton
+    protected fun prjImagePnl(pageIdx: Int) = preDok.leakedImagePanels[pageIdx]
+    protected val prjCtl get() = tolDok.leakedPlaybackControls
+    protected val plyCtl get() = plyDok.leakedControlsPanel
+    protected val styTree get() = styDok.leakedStylingTree
+    protected val styGlobForm get() = styDok.leakedGlobalForm
+    protected val styPageForm get() = styDok.leakedPageStyleForm
+    protected val styContForm get() = styDok.leakedContentStyleForm
+    protected val styLetrForm get() = styDok.leakedLetterStyleForm
+    protected val styPictForm get() = styDok.leakedPictureStyleForm
     protected fun styLayrForm(i: Int): StyleForm<Layer> =
         ((styLayrPnl(i).getComponent(6) as JPanel).getComponent(0) as StyleForm<*>).castToStyle(Layer::class.java)
 
-    protected val styIncUnitVGap
-        get() = styGlobForm.getWidgetFor(Global::unitVGapPx.st()).components[0].getComponent(0)!!
-    protected val styRuntime get() = styGlobForm.getWidgetFor(Global::runtimeFrames.st()).components[1] as JSpinner
-    protected val styDecRuntime get() = styRuntime.getComponent(1)!!
-    protected val styGridCols get() = styContForm.getWidgetFor(ContentStyle::gridCols.st()).components[0] as JSpinner
-    protected val styIncGridCols get() = styGridCols.getComponent(0)!!
-    protected val styDecGridCols get() = styGridCols.getComponent(1)!!
+    protected val styGridCols get() = styContForm.getWidgetFor(ContentStyle::gridCols.st()).components[0] as Scrubber<*>
     protected val styFlowSep
         get() = styContForm.getWidgetFor(ContentStyle::flowSeparator.st()).components[0] as JTextComponent
     protected val styLetrFormScrollBar get() = (styLetrForm.parent.parent as JScrollPane).verticalScrollBar
-    protected val styIncFontHeight
-        get() = styLetrForm.getWidgetFor(LetterStyle::heightPx.st()).components[0].getComponent(0)!!
     protected val styLayrList
         get() = styLetrForm.getWidgetFor(LetterStyle::layers.st()).components[0] as JPanel
-    protected val styPicHeight
-        get() = ((styPictForm.getWidgetFor(PictureStyle::heightPx.st()).components[1] as JSpinner).editor
-                as JSpinner.NumberEditor).textField
 
     protected fun styLayrAddBtn(i: Int) = styLayrList.let { it.getComponent(it.componentCount - 1 - 2 * i) } as JButton
     protected fun styLayrPnl(i: Int) = styLayrList.let { it.getComponent(it.componentCount - 2 - 2 * i) } as JPanel
@@ -210,14 +210,17 @@ abstract class ScreencastDemo(
     protected fun styLayrAdvancedBtn(i: Int) = styLayrPnl(i).getComponent(3) as JToggleButton
     protected fun styLayrDelBtn(i: Int) = styLayrPnl(i).getComponent(4) as JButton
 
-    protected val dlvFormats get() = dlvPnl.configurationForm.leakedFormatWidget.components[0] as JComboBox<*>
-    protected val dlvProfiles get() = dlvPnl.configurationForm.leakedProfileWidget.components[0] as JComboBox<*>
-    protected val dlvDestTempl get() = dlvPnl.configurationForm.leakedDestinationWidget.components[0] as JButton
-    protected val dlvTranspar get() = dlvPnl.configurationForm.leakedTransparencyWidget.components[0] as JComboBox<*>
-    protected val dlvSpaceScal get() = dlvPnl.configurationForm.leakedSpatialScalingWidget.components[0] as JComboBox<*>
-    protected val dlvScan get() = dlvPnl.configurationForm.leakedScanWidget.components[0] as JComboBox<*>
-    protected val dlvPrimaries get() = dlvPnl.configurationForm.leakedPrimariesWidget.components[0] as JComboBox<*>
-    protected val dlvTransfer get() = dlvPnl.configurationForm.leakedTransferWidget.components[0] as JComboBox<*>
+    protected val dlvFormats get() = dlvDok.leakedConfigForm.leakedFormatWidget.components[0] as JComboBox<*>
+    protected val dlvProfiles get() = dlvDok.leakedConfigForm.leakedProfileWidget.components[0] as JComboBox<*>
+    protected val dlvDestTempl get() = dlvDok.leakedConfigForm.leakedDestinationWidget.components[0] as JButton
+    protected val dlvTranspar get() = dlvDok.leakedConfigForm.leakedTransparencyWidget.components[0] as JComboBox<*>
+    protected val dlvSpaceScal get() = dlvDok.leakedConfigForm.leakedSpatialScalingWidget.components[0] as JComboBox<*>
+    protected val dlvScan get() = dlvDok.leakedConfigForm.leakedScanWidget.components[0] as JComboBox<*>
+    protected val dlvPrimaries get() = dlvDok.leakedConfigForm.leakedPrimariesWidget.components[0] as JComboBox<*>
+    protected val dlvTransfer get() = dlvDok.leakedConfigForm.leakedTransferWidget.components[0] as JComboBox<*>
+
+    protected var undockedWins: List<BackedVirtualWindow> = emptyList(); private set
+    protected var undockedDialogs: List<JDialog> = emptyList(); private set
 
     protected lateinit var optionPaneWin: BackedVirtualWindow; private set
     protected lateinit var optionPaneDialog: JDialog; private set
@@ -228,48 +231,51 @@ abstract class ScreencastDemo(
 class Screencast(
     private val writeFrame: (BufferedImage) -> Unit,
     private val fps: FPS,
+    private val imageWidth: Int,
+    private val imageHeight: Int,
     private val desktop: VirtualDesktop,
+    private val desktopScale: Double,
     private val hold: Int,
-    captionHeight: Int,
+    private val captionHeight: Int,
     private val captionGap: Int
 ) {
 
     companion object {
-        @Suppress("JAVA_MODULE_DOES_NOT_EXPORT_PACKAGE")
-        private val CAPTION_FONT = BUNDLED_FONTS
-            .first { it.getFontName(Locale.ROOT) == "Titillium Regular Upright" }
+        private val CAPTION_FONT: Font = compositeBundledFont("/fonts/Titillium-RegularUpright.otf")
             .deriveFont(48f)
-            .let(FontUtilities::getCompositeFontUIResource)
     }
-
-    private val width = desktop.width
-    private val height = desktop.height + captionHeight
 
     private var caption = mutableListOf<TextLayout>()
 
     fun frame(action: (() -> Unit)? = null) {
         action?.invoke()
         desktop.tick(1.0 / fps.frac)
-        writeFrame(BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
+        val captureHeight = imageHeight - captionHeight
+        // Paint the desktop on a separate image because ScaledGraphics2D doesn't support clip.
+        val capture = BufferedImage(imageWidth, captureHeight, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
             // Paint wallpaper
             g2.color = Color(24, 24, 24)
-            g2.fillRect(0, 0, width, desktop.height)
+            g2.fillRect(0, 0, imageWidth, captureHeight)
             // Paint desktop
-            desktop.paint(g2)
+            desktop.paint(ScaledGraphics2D(g2, desktopScale))
+        }
+        writeFrame(BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_3BYTE_BGR).withG2 { g2 ->
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g2.drawImage(capture, 0, 0, null)
             // Paint caption
             g2.color = Color.WHITE
-            var captionY = (desktop.height + captionGap).toFloat()
+            var captionY = (imageHeight - captionHeight + captionGap).toFloat()
             for (line in caption) {
                 captionY += line.ascent
-                line.draw(g2, (width - line.advance) / 2f, captionY)
+                line.draw(g2, (imageWidth - line.advance) / 2f, captionY)
                 captionY += line.descent + line.leading
             }
         })
     }
 
     fun hold(millis: Int = hold, action: (() -> Unit)? = null) {
-        repeat((fps.frac * millis / 1000.0).roundToInt()) { frame(action) }
+        repeat(ceil(fps.frac * millis / 1000.0).toInt()) { frame(action) }
     }
 
     fun mouseTo(point: Point, holdMillis: Int = hold) {
@@ -279,11 +285,11 @@ class Screencast(
         hold(holdMillis)
     }
 
-    fun click(holdMillis: Int = hold, holdAction: (() -> Unit)? = null) {
+    fun click(holdAfterMillis: Int = hold, holdDuringMillis: Int = 100, holdAction: (() -> Unit)? = null) {
         desktop.mouseDown()
-        hold(100, holdAction)
+        hold(holdDuringMillis, holdAction)
         desktop.mouseUp()
-        hold(holdMillis, holdAction)
+        hold(holdAfterMillis, holdAction)
     }
 
     fun <S : Style> demonstrateSetting(
@@ -331,18 +337,16 @@ class Screencast(
         }
     }
 
-    fun caption(l10nKey: String, holdAction: (() -> Unit)? = null) {
-        val text = l10nDemo(l10nKey)
-        val attrs = mapOf(
-            TextAttribute.FONT to CAPTION_FONT,
-            TextAttribute.KERNING to TextAttribute.KERNING_ON,
-            TextAttribute.LIGATURES to TextAttribute.LIGATURES_ON
-        )
-        for (ratio in floatArrayOf(0.5f, 0.6f, 0.7f, 0.8f)) {
+    fun caption(l10nKey: String, vararg args: String, holdAction: (() -> Unit)? = null) {
+        var text = l10nDemo(l10nKey)
+        if (args.isNotEmpty())
+            text = MessageFormat(text).format(args)
+        val attrs = mapOf(TextAttribute.FONT to CAPTION_FONT)
+        for (ratio in floatArrayOf(0.5f, 0.6f, 0.7f, 0.8f, 0.9f, 1.0f)) {
             caption.clear()
-            val lbm = LineBreakMeasurer(AttributedString(text, attrs).iterator, REF_FRC)
+            val lbm = LineBreakMeasurer(AttributedString(text, attrs).iterator, FontRenderContext(null, true, true))
             while (lbm.position != text.length)
-                caption.add(lbm.nextLayout(width * ratio))
+                caption.add(lbm.nextLayout(imageWidth * ratio))
             if (caption.size <= 2)
                 break
         }

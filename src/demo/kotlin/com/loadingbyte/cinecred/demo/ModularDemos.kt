@@ -12,6 +12,7 @@ import com.loadingbyte.cinecred.imaging.DeferredImage.Companion.TAPES
 import com.loadingbyte.cinecred.imaging.Y.Companion.toY
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.ui.helper.*
+import com.loadingbyte.cinecred.ui.styling.OverrideWidgetSpec
 import com.loadingbyte.cinecred.ui.styling.StyleForm
 import com.loadingbyte.cinecred.ui.styling.StyleFormAdjuster
 import kotlinx.collections.immutable.toPersistentList
@@ -20,8 +21,10 @@ import java.awt.geom.Path2D
 import java.awt.geom.RoundRectangle2D
 import java.awt.image.*
 import java.lang.Thread.sleep
+import java.net.URI
 import javax.swing.JFrame
 import javax.swing.UIManager
+import kotlin.io.path.name
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlinx.collections.immutable.persistentListOf as pl
@@ -68,11 +71,13 @@ abstract class StyleSettingsDemo<S : Style>(
     protected open fun augmentStyling(styling: Styling): Styling = styling
     protected open val pictureLoaders: Collection<Picture.Loader> get() = emptyList()
     protected open val tapes: Collection<Tape> get() = emptyList()
+    protected open val overrideCtx: OverrideWidgetSpec.Context? get() = null
 
     final override fun doGenerate() {
         val styles = styles()
         val settImgs = renderStyleSettings(
-            settings, styles, { credits(it)?.let(::extractStyling) }, ::augmentStyling, pictureLoaders, tapes
+            settings, styles, { credits(it)?.let(::extractStyling) }, ::augmentStyling,
+            pictureLoaders, tapes, overrideCtx
         )
         val pageDefImgsAndGroundings =
             styles.mapNotNull(::credits).map { buildPageDefImgAndGrounding(it, ::augmentStyling, pageScaling) }
@@ -93,8 +98,9 @@ abstract class VideoDemo(filename: String, format: Format) : Demo(filename, form
 
     final override fun doGenerate() {
         val project = buildProject(credits())
-        val video = drawVideo(project, drawPages(project, project.credits.single()))
-        renderDefVideo(video, project.styling.global.grounding).forEach(::write)
+        val styling = project.styling
+        val video = drawVideo(styling, drawPages(styling, project.creditsBooks.single().credits.single()).first)
+        renderDefVideo(video, styling.global.grounding).forEach(::write)
     }
 
 }
@@ -116,11 +122,12 @@ abstract class StyleSettingsVideoDemo<S : Style>(
         settImgs = stackImages(listOf(settImgs.toList()), extendX = listOf(20), extendY = listOf(10))
         styles.zip(settImgs.asIterable()) { style, settImg ->
             val project = buildProject(credits(style))
-            val video = drawVideo(project, drawPages(project, project.credits.single()))
+            val styling = project.styling
+            val video = drawVideo(styling, drawPages(styling, project.creditsBooks.single().credits.single()).first)
             stackImages(buildList {
                 add(List(video.numFrames) { settImg })
                 if (timeline && style is TapeStyle) add(generateTimeline(style, video).asIterable())
-                add(renderDefVideo(video, project.styling.global.grounding).asIterable())
+                add(renderDefVideo(video, styling.global.grounding).asIterable())
             }).forEach(::write)
         }
     }
@@ -128,8 +135,8 @@ abstract class StyleSettingsVideoDemo<S : Style>(
     private fun generateTimeline(style: TapeStyle, video: DeferredVideo): Sequence<BufferedImage> {
         val timeframe = video.numFrames - (style.leftTemporalMarginFrames + style.rightTemporalMarginFrames)
         val avail = style.tape.tape!!.availableRange
-        var slice = (style.slice.outPoint.orElse { avail.endExclusive }.toFrames(video.fps).frames -
-                style.slice.inPoint.orElse { avail.start }.toFrames(video.fps).frames).coerceAtMost(timeframe)
+        val slice = ((style.slice.outPoint ?: avail.endExclusive).toFrames(video.fps).frames -
+                (style.slice.inPoint ?: avail.start).toFrames(video.fps).frames).coerceAtMost(timeframe)
         var leftMargin = style.leftTemporalMarginFrames
         if (style.temporallyJustify == HJustify.CENTER) leftMargin += (timeframe - slice) / 2
         if (style.temporallyJustify == HJustify.RIGHT) leftMargin += timeframe - slice
@@ -194,7 +201,7 @@ private fun buildProject(
     if (augmentStyling != null)
         styling = augmentStyling(styling)
     val credits = Credits("", globalAndPages.second.toPersistentList(), pl())
-    return Project(styling, pl(credits))
+    return Project(styling, pl(CreditsBook("", URI(""), pl(credits))))
 }
 
 
@@ -202,7 +209,8 @@ private fun buildPageDefImgAndGrounding(
     globalAndPages: Pair<Global, List<Page>>, augmentStyling: ((Styling) -> Styling)? = null, scaling: Double = 1.0
 ): Pair<DeferredImage, Color4f> {
     val project = buildProject(globalAndPages, augmentStyling)
-    val pageDefImg = drawPages(project, project.credits.single()).single().defImage.copy(universeScaling = scaling)
+    val pageDefImg = drawPages(project.styling, project.creditsBooks.single().credits.single())
+        .first.single().defImage.copy(universeScaling = scaling)
     return Pair(pageDefImg, project.styling.global.grounding)
 }
 
@@ -251,7 +259,8 @@ private fun <S : Style> renderStyleSettings(
     buildStyling: ((S) -> Styling?)?,
     augmentStyling: ((Styling) -> Styling)? = null,
     pictureLoaders: Collection<Picture.Loader> = emptyList(),
-    tapes: Collection<Tape> = emptyList()
+    tapes: Collection<Tape> = emptyList(),
+    overrideCtx: OverrideWidgetSpec.Context? = null
 ) = sequence<BufferedImage> {
     val styleClass = styles[0].javaClass
 
@@ -282,7 +291,7 @@ private fun <S : Style> renderStyleSettings(
         }
     }
     val formAdjuster = StyleFormAdjuster(
-        listOf(form), { curStyling }, { curStyle }, {},
+        listOf(form), { curStyling }, { curStyle },
         @Suppress("DEPRECATION")
         object : StyleFormAdjuster.StyleIdxAndSiblingsOverride {
             override fun <S : Style> getStyleIdxAndSiblings(style: S): Pair<Int, List<S>> =
@@ -290,8 +299,11 @@ private fun <S : Style> renderStyleSettings(
         }
     )
     formAdjuster.activeForm = form
-    formAdjuster.updatePictureLoaders(pictureLoaders)
-    formAdjuster.updateTapes(tapes)
+    edt {
+        formAdjuster.updatePictureLoaders(pictureLoaders.associateBy { it.file.name })
+        formAdjuster.updateTapes(tapes.associateBy { it.fileOrDir.name })
+        formAdjuster.updateConstraintViolationsAndOverrideCtx(null, overrideCtx)
+    }
     sleep(500)
     edt { KeyboardFocusManager.getCurrentKeyboardFocusManager().clearFocusOwner() }
 
@@ -299,12 +311,12 @@ private fun <S : Style> renderStyleSettings(
     for (style in styles) {
         curStyling = buildStyling?.invoke(style) ?: when (style) {
             is Global -> Styling(style, pl(), pl(), pl(), pl(), pl(), pl())
-            is PageStyle -> Styling(PRESET_GLOBAL, pl(style), pl(), pl(), pl(), pl(), pl())
-            is ContentStyle -> Styling(PRESET_GLOBAL, pl(), pl(style), pl(), pl(), pl(), pl())
-            is LetterStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(style), pl(), pl(), pl())
-            is TransitionStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(), pl(style), pl(), pl())
-            is PictureStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(), pl(), pl(style), pl())
-            is TapeStyle -> Styling(PRESET_GLOBAL, pl(), pl(), pl(), pl(), pl(), pl(style))
+            is PageStyle -> Styling(presetGlobal(), pl(style), pl(), pl(), pl(), pl(), pl())
+            is ContentStyle -> Styling(presetGlobal(), pl(), pl(style), pl(), pl(), pl(), pl())
+            is LetterStyle -> Styling(presetGlobal(), pl(), pl(), pl(style), pl(), pl(), pl())
+            is TransitionStyle -> Styling(presetGlobal(), pl(), pl(), pl(), pl(style), pl(), pl())
+            is PictureStyle -> Styling(presetGlobal(), pl(), pl(), pl(), pl(), pl(style), pl())
+            is TapeStyle -> Styling(presetGlobal(), pl(), pl(), pl(), pl(), pl(), pl(style))
             else -> throw IllegalStateException()
         }
         if (augmentStyling != null)
@@ -315,25 +327,31 @@ private fun <S : Style> renderStyleSettings(
                 .requireIsInstance(styleClass)
             curStyleIdx = siblingStyles.indexOf(style)
         }
-        edt { form.open(style) }
-        formAdjuster.onLoadStyling()
-        formAdjuster.onLoadStyleIntoActiveForm()
+        edt {
+            form.open(style)
+            formAdjuster.onLoadStyling()
+            formAdjuster.onLoadStyleIntoActiveForm()
+        }
 
         // Only remove the notices if they could actually slide into view (which can only happen if there are multiple
         // settings being captures). This is necessary because the uppercase exceptions text area doesn't grow to
         // multiple lines if its notice is removed (... for some reason).
-        if (settings.size > 1)
+        if (settings.size > 1) edt {
             for (sett in settings)
-                form.getFormRowFor(sett).apply {
+                form.getFormRowFor(sett)?.apply {
                     notice = null
                     noticeOverride = null
                 }
+        }
 
-        sleep(500)
+        sleep(50)
 
         val compBounds = Rectangle(0, 0, -1, -1)
         for (sett in settings) {
-            compBounds.add(form.getFormRowFor(sett).labelComp.bounds)
+            form.getFormRowFor(sett)?.labelComp?.let { label -> if (label.isVisible) compBounds.add(label.bounds) }
+            for (label in form.getExternallyManagedLabelsFor(sett))
+                if (label.isVisible)
+                    compBounds.add(label.bounds)
             for (comp in form.getWidgetFor(sett).components)
                 if (comp.isVisible)
                     compBounds.add(comp.bounds)
@@ -511,7 +529,9 @@ private fun defImageToImage(
     val bgr24Bitmap = Bitmap.allocate(Bitmap.Spec(res, BGR24_REPRESENTATION))
     Canvas.forBitmap(canvasBitmap).use { canvas ->
         canvas.fill(Canvas.Shader.Solid(grounding))
-        defImg.materialize(canvas, cache = null, layers)
+        defImg.materialize(
+            canvas, cachePictures = false, permitTapePreviews = null, tolerateErroneousMedia = false, layers
+        )
     }
     BitmapConverter.convert(canvasBitmap, bgr24Bitmap, promiseOpaque = true)
     val img = bgr24BitmapToImage(bgr24Bitmap)

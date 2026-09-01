@@ -1,13 +1,10 @@
 package com.loadingbyte.cinecred.project
 
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.imaging.Color4f
-import com.loadingbyte.cinecred.imaging.Picture
-import com.loadingbyte.cinecred.imaging.Tape
-import com.loadingbyte.cinecred.imaging.Transition
+import com.loadingbyte.cinecred.imaging.*
 import kotlinx.collections.immutable.PersistentList
+import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.persistentListOf
-import java.awt.Font
 import java.util.*
 import kotlin.io.path.name
 
@@ -45,7 +42,10 @@ data class Styling(
 }
 
 
-sealed interface Style
+sealed interface Style {
+    /** This UUID stays the same when the style is modified, and can hence be used to track it through edits. */
+    val identity: UUID
+}
 
 
 sealed interface NamedStyle : Style {
@@ -81,10 +81,11 @@ sealed interface LayerStyle : NamedStyle, NestedStyle {
 
 
 data class Global(
+    override val identity: UUID,
     val resolution: Resolution,
     val fps: FPS,
     val timecodeFormat: TimecodeFormat,
-    val runtimeFrames: Opt<Int>,
+    val runtimeFrames: Override<Int>,
     val blankFirstFrame: Boolean,
     val blankLastFrame: Boolean,
     val grounding: Color4f,
@@ -95,6 +96,7 @@ data class Global(
 
 
 data class PageStyle(
+    override val identity: UUID,
     override val name: String,
     val subsequentGapFrames: Int,
     val behavior: PageBehavior,
@@ -108,7 +110,7 @@ data class PageStyle(
     /** Only retained for backwards compatibility. */
     val scrollMeltWithNext: Boolean,
     val scrollPxPerFrame: Double,
-    val scrollRuntimeFrames: Opt<Int>
+    val scrollRuntimeFrames: Override<Int>
 ) : ListedStyle
 
 
@@ -116,6 +118,7 @@ enum class PageBehavior { CARD, SCROLL }
 
 
 data class ContentStyle(
+    override val identity: UUID,
     override val name: String,
     val blockOrientation: BlockOrientation,
     val spineAttachment: SpineAttachment,
@@ -137,10 +140,12 @@ data class ContentStyle(
     val gridHarmonizeRowHeightAcrossStyles: PersistentList<String>,
     val gridCellHJustifyPerCol: PersistentList<HJustify>,
     val gridCellVJustify: VJustify,
+    val gridTextVJustifyFragments: VTextFragment,
+    val gridTextVJustify: VJustifyText,
     val gridRowGapPx: Double,
     val gridColGapPx: Double,
     val flowDirection: FlowDirection,
-    val flowLineHJustify: LineHJustify,
+    val flowRowHJustify: HJustifyCrumbsStack,
     val flowSquareCells: Boolean,
     val flowForceCellWidthPx: Opt<Double>,
     val flowForceCellHeightPx: Opt<Double>,
@@ -150,45 +155,49 @@ data class ContentStyle(
     val flowHarmonizeCellHeightAcrossStyles: PersistentList<String>,
     val flowCellHJustify: HJustify,
     val flowCellVJustify: VJustify,
-    val flowLineWidthPx: Double,
-    val flowLineGapPx: Double,
-    val flowHGapPx: Double,
+    val flowTextVJustifyFragments: VTextFragment,
+    val flowTextVJustify: VJustifyText,
+    val flowRowWidthPx: Double,
+    val flowRowGapPx: Double,
+    val flowCellHGapPx: Double,
     val flowSeparator: String,
-    val flowSeparatorLetterStyleName: Opt<String>,
-    val flowSeparatorVJustify: AppendageVJustify,
-    val paragraphsLineHJustify: LineHJustify,
+    val flowSeparatorLetterStyleName: Override<String>,
+    val flowSeparatorVJustify: VJustifyText,
+    val paragraphsLineHJustify: HJustifyCrumbsStack,
     val paragraphsLineWidthPx: Double,
     val paragraphsParaGapPx: Double,
     val paragraphsLineGapPx: Double,
     val hasHead: Boolean,
-    val headLetterStyleName: String,
+    val headLetterStyleName: Override<String>,
     val headForceWidthPx: Opt<Double>,
     val headHarmonizeWidth: HarmonizeExtent,
     val headHarmonizeWidthAcrossStyles: PersistentList<String>,
     val headHJustify: HJustify,
-    val headVShelve: AppendageVShelve,
-    val headVJustify: AppendageVJustify,
+    val headVJustifyBodyFragment: VBodyFragment,
+    val headVJustifyHeadFragment: VTextFragment,
+    val headVJustify: VJustifyText,
     val headGapPx: Double,
     val headLeader: String,
-    val headLeaderLetterStyleName: Opt<String>,
-    val headLeaderHJustify: SingleLineHJustify,
-    val headLeaderVJustify: AppendageVJustify,
+    val headLeaderLetterStyleName: Override<String>,
+    val headLeaderHJustify: HJustifyCrumbs,
+    val headLeaderVJustify: VJustifyText,
     val headLeaderMarginLeftPx: Double,
     val headLeaderMarginRightPx: Double,
     val headLeaderSpacingPx: Double,
     val hasTail: Boolean,
-    val tailLetterStyleName: String,
+    val tailLetterStyleName: Override<String>,
     val tailForceWidthPx: Opt<Double>,
     val tailHarmonizeWidth: HarmonizeExtent,
     val tailHarmonizeWidthAcrossStyles: PersistentList<String>,
     val tailHJustify: HJustify,
-    val tailVShelve: AppendageVShelve,
-    val tailVJustify: AppendageVJustify,
+    val tailVJustifyBodyFragment: VBodyFragment,
+    val tailVJustifyTailFragment: VTextFragment,
+    val tailVJustify: VJustifyText,
     val tailGapPx: Double,
     val tailLeader: String,
-    val tailLeaderLetterStyleName: Opt<String>,
-    val tailLeaderHJustify: SingleLineHJustify,
-    val tailLeaderVJustify: AppendageVJustify,
+    val tailLeaderLetterStyleName: Override<String>,
+    val tailLeaderHJustify: HJustifyCrumbs,
+    val tailLeaderVJustify: VJustifyText,
     val tailLeaderMarginLeftPx: Double,
     val tailLeaderMarginRightPx: Double,
     val tailLeaderSpacingPx: Double
@@ -209,10 +218,11 @@ enum class SpineAttachment {
 enum class BodyLayout { GRID, FLOW, PARAGRAPHS }
 enum class HJustify { LEFT, CENTER, RIGHT }
 enum class VJustify { TOP, MIDDLE, BOTTOM }
-enum class SingleLineHJustify { LEFT, CENTER, RIGHT, FULL }
-enum class LineHJustify { LEFT, CENTER, RIGHT, FULL_LAST_LEFT, FULL_LAST_CENTER, FULL_LAST_RIGHT, FULL_LAST_FULL }
-enum class AppendageVShelve { FIRST, OVERALL_MIDDLE, LAST }
-enum class AppendageVJustify { TOP, MIDDLE, BOTTOM, BASELINE }
+enum class HJustifyCrumbs { LEFT, CENTER, RIGHT, FULL }
+enum class HJustifyCrumbsStack { LEFT, CENTER, RIGHT, FULL_LAST_LEFT, FULL_LAST_CENTER, FULL_LAST_RIGHT, FULL_LAST_FULL }
+enum class VJustifyText { TOP, MIDDLE, BOTTOM, BASELINE }
+enum class VTextFragment { ALL_LINES, FIRST_LINE, LAST_LINE }
+enum class VBodyFragment { ALL_ROWS, FIRST_ROW, LAST_ROW, FIRST_ROW_FIRST_LINE, FIRST_ROW_LAST_LINE, LAST_ROW_FIRST_LINE, LAST_ROW_LAST_LINE }
 enum class HarmonizeExtent { OFF, WITHIN_BLOCK, ACROSS_BLOCKS }
 enum class Sort { OFF, ASCENDING, DESCENDING }
 enum class GridFillingOrder { L2R_T2B, R2L_T2B, T2B_L2R, T2B_R2L }
@@ -227,8 +237,10 @@ enum class FlowDirection { L2R, R2L }
 
 
 data class LetterStyle(
+    override val identity: UUID,
     override val name: String,
     val font: FontRef,
+    val variations: FontVariations,
     val heightPx: Double,
     val leadingTopRh: Double,
     val leadingBottomRh: Double,
@@ -259,11 +271,14 @@ data class FontRef(val name: String) {
     var font: Font? = null
         private set
 
-    constructor(font: Font) : this(font.getFontName(Locale.ROOT)) {
+    constructor(font: Font) : this(font.name) {
         this.font = font
     }
 
 }
+
+
+data class FontVariations(private val map: PersistentMap<String, Double>) : PersistentMap<String, Double> by map
 
 
 data class FontFeature(
@@ -273,16 +288,18 @@ data class FontFeature(
 
 
 data class Layer(
+    override val identity: UUID,
     override val name: String,
     override val collapsed: Boolean,
     val coloring: LayerColoring,
-    val color1: Color4f,
+    val plainColor: Color4f,
     val flashColors: PersistentList<Color4f> = persistentListOf(),
     val flashIntervalFrames: Int = 0,
-    val color2: Color4f,
     val gradientAngleDeg: Double,
     val gradientExtentRfh: Double,
     val gradientShiftRfh: Double,
+    val gradientInterpolation: GradientInterpolation,
+    val gradientStops: PersistentList<GradientStop>,
     val shape: LayerShape,
     val stripePreset: StripePreset,
     val stripeHeightRfh: Double,
@@ -319,6 +336,7 @@ data class Layer(
 
 
 enum class LayerColoring { OFF, PLAIN, GRADIENT }
+enum class GradientInterpolation { OKLAB, SRGB }
 enum class LayerShape { TEXT, STRIPE, CLONE }
 enum class StripePreset { BACKGROUND, UNDERLINE, STRIKETHROUGH, CUSTOM }
 enum class LineJoin { MITER, ROUND, BEVEL }
@@ -326,20 +344,36 @@ enum class CoordinateSystem { CARTESIAN, POLAR }
 enum class LayerAnchor { INDIVIDUAL, SIBLING, GLOBAL }
 
 
+data class GradientStop(val color: Color4f, val position: Double)
+
+
 data class TransitionStyle(
+    override val identity: UUID,
     override val name: String,
     val graph: Transition
 ) : ListedStyle
 
 
 data class PictureStyle(
+    override val identity: UUID,
     override val name: String,
     override val volatile: Boolean,
     val picture: PictureRef,
-    val widthPx: Opt<Double>,
-    val heightPx: Opt<Double>,
-    val cropBlankSpace: Boolean
+    val widthPx: Override<Double>,
+    val heightPx: Override<Double>,
+    val cropLeftPx: Double,
+    val cropRightPx: Double,
+    val cropTopPx: Double,
+    val cropBottomPx: Double,
+    val cropBlankSpace: Boolean,
+    val hFlip: Boolean,
+    val vFlip: Boolean,
+    val rotationDeg: Double,
+    val resamplingFilter: ResamplingFilter
 ) : PopupStyle
+
+
+enum class ResamplingFilter { NEAREST_NEIGHBOR, BILINEAR, BICUBIC_MITCHELL_NETRAVALI, LANCZOS }
 
 
 data class PictureRef(val name: String) {
@@ -355,11 +389,20 @@ data class PictureRef(val name: String) {
 
 
 data class TapeStyle(
+    override val identity: UUID,
     override val name: String,
     override val volatile: Boolean,
     val tape: TapeRef,
-    val widthPx: Opt<Int>,
-    val heightPx: Opt<Int>,
+    val widthPx: Override<Int>,
+    val heightPx: Override<Int>,
+    val cropLeftPx: Int,
+    val cropRightPx: Int,
+    val cropTopPx: Int,
+    val cropBottomPx: Int,
+    val hFlip: Boolean,
+    val vFlip: Boolean,
+    val rotationDeg: Int,
+    val resamplingFilter: ResamplingFilter,
     val slice: TapeSlice,
     val loop: Boolean,
     val temporallyJustify: HJustify,
@@ -368,8 +411,19 @@ data class TapeStyle(
     val fadeInFrames: Int,
     val fadeInTransitionStyleName: String,
     val fadeOutFrames: Int,
-    val fadeOutTransitionStyleName: String
+    val fadeOutTransitionStyleName: String,
+    val range: Override<Range>,
+    val primaries: Override<Int>,
+    val transfer: Override<Int>,
+    val yuvCoefficients: Override<Int>,
+    val alpha: Override<Alpha>,
+    val scan: Override<Scan>
 ) : PopupStyle
+
+
+enum class Range { FULL, LIMITED }
+enum class Alpha { STRAIGHT, PREMULTIPLIED }
+enum class Scan { PROGRESSIVE, INTERLACED_TOP_FIELD_FIRST, INTERLACED_BOT_FIELD_FIRST }
 
 
 data class TapeRef(val name: String) {
@@ -384,17 +438,28 @@ data class TapeRef(val name: String) {
 }
 
 
-data class TapeSlice(
-    val inPoint: Opt<Timecode>,
-    val outPoint: Opt<Timecode>
+class TapeSlice(
+    val timecodeFormat: TimecodeFormat,
+    val inPoint: Timecode?,
+    val outPoint: Timecode?
 ) {
+
     init {
-        require(inPoint.value.javaClass == outPoint.value.javaClass)
+        require(inPoint == null || inPoint.format == timecodeFormat)
+        require(outPoint == null || outPoint.format == timecodeFormat)
     }
+
+    override fun equals(other: Any?) =
+        this === other || other is TapeSlice && inPoint == other.inPoint && outPoint == other.outPoint
+
+    override fun hashCode() = 31 * inPoint.hashCode() + outPoint.hashCode()
+    override fun toString() = "TapeSlice(inPoint=$inPoint, outPoint=$outPoint)"
+
 }
 
 
 data class Opt<out E : Any /* non-null */>(val isActive: Boolean, val value: E)
+data class Override<out E : Any /* non-null */>(val value: E?)
 
 inline fun <E : Any> Opt<E>.orElse(block: () -> E): E = if (isActive) value else block()
 
@@ -403,14 +468,24 @@ val Enum<*>.label: String
     get() = when (this) {
         TimecodeFormat.SMPTE_NON_DROP_FRAME -> "SMPTE Non-Drop Frame"
         TimecodeFormat.SMPTE_DROP_FRAME -> "SMPTE Drop Frame"
-        SingleLineHJustify.LEFT, LineHJustify.LEFT -> HJustify.LEFT.label
-        SingleLineHJustify.CENTER, LineHJustify.CENTER -> HJustify.CENTER.label
-        SingleLineHJustify.RIGHT, LineHJustify.RIGHT -> HJustify.RIGHT.label
-        AppendageVJustify.TOP -> VJustify.TOP.label
-        AppendageVJustify.MIDDLE -> VJustify.MIDDLE.label
-        AppendageVJustify.BOTTOM -> VJustify.BOTTOM.label
+        HJustifyCrumbs.LEFT, HJustifyCrumbsStack.LEFT -> HJustify.LEFT.label
+        HJustifyCrumbs.CENTER, HJustifyCrumbsStack.CENTER -> HJustify.CENTER.label
+        HJustifyCrumbs.RIGHT, HJustifyCrumbsStack.RIGHT -> HJustify.RIGHT.label
+        VJustifyText.TOP -> VJustify.TOP.label
+        VJustifyText.MIDDLE -> VJustify.MIDDLE.label
+        VJustifyText.BOTTOM -> VJustify.BOTTOM.label
         GridStructure.SQUARE_CELLS -> l10n("ui.styling.content.flowSquareCells")
         Sort.OFF, SmallCaps.OFF, Superscript.OFF -> l10n("off")
         Superscript.CUSTOM, StripePreset.CUSTOM -> l10n("custom")
+        GradientInterpolation.OKLAB -> "Oklab"
+        GradientInterpolation.SRGB -> "sRGB"
         else -> l10n("project.${javaClass.simpleName}.${name}")
+    }
+
+
+val VBodyFragment.isLine: Boolean
+    get() = when (this) {
+        VBodyFragment.ALL_ROWS, VBodyFragment.FIRST_ROW, VBodyFragment.LAST_ROW -> false
+        VBodyFragment.FIRST_ROW_FIRST_LINE, VBodyFragment.FIRST_ROW_LAST_LINE,
+        VBodyFragment.LAST_ROW_FIRST_LINE, VBodyFragment.LAST_ROW_LAST_LINE -> true
     }

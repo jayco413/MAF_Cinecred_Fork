@@ -5,11 +5,14 @@ import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
 import com.loadingbyte.cinecred.projectio.*
+import com.loadingbyte.cinecred.projectio.ProjectIntake.Companion.hasCreditsFilename
 import com.loadingbyte.cinecred.ui.helper.withG2
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
 import java.awt.Color
+import java.awt.Font
 import java.awt.image.BufferedImage
+import java.net.URI
 import java.nio.file.Path
 import java.util.*
 import javax.imageio.ImageIO
@@ -29,12 +32,12 @@ inline fun <R> withDemoProjectDir(block: (Path) -> R): R {
 
 
 fun template(locale: Locale) =
-    Template(locale, PRESET_GLOBAL.resolution, PRESET_GLOBAL.fps, PRESET_GLOBAL.timecodeFormat, sample = true)
+    Template(locale, presetGlobal().resolution, presetGlobal().fps, presetGlobal().timecodeFormat, sample = true)
 
 val TEMPLATE_SPREADSHEET: Spreadsheet by lazy {
     withDemoProjectDir { projectDir ->
         tryCopyTemplate(projectDir, template(FALLBACK_TRANSLATED_LOCALE), CsvFormat)
-        CsvFormat.read(ProjectIntake.locateCreditsFile(projectDir).first!!, "").first.single()
+        CsvFormat.read(projectDir.listDirectoryEntries().first(::hasCreditsFilename), "").single()
     }
 }
 
@@ -48,41 +51,48 @@ val TEMPLATE_SCROLL_PAGE_FROM_DOP: Page by lazy {
         lines[headerLineNo + 1] = ",,,,Gutter,,,Scroll,\n"
         (dopLineNo - 1 downTo headerLineNo + 2).forEach(lines::removeAt)
         creditsFile.writeLines(lines)
-    }.credits.single().pages.single()
+    }.creditsBooks.single().credits.single().pages.single()
 }
 
 private fun loadTemplateProject(modifyCsv: (Path) -> Unit = {}): Project =
     withDemoProjectDir { projectDir ->
         tryCopyTemplate(projectDir, template(FALLBACK_TRANSLATED_LOCALE), CsvFormat)
-        val creditsFile = ProjectIntake.locateCreditsFile(projectDir).first!!
+        val creditsFile = projectDir.listDirectoryEntries().first(::hasCreditsFilename)
         modifyCsv(creditsFile)
-        val spreadsheet = CsvFormat.read(creditsFile, "").first.single()
+        val spreadsheet = CsvFormat.read(creditsFile, "").single()
         val pictureLoaders = buildMap {
             for (file in projectDir.walkSafely())
                 if (file.isRegularFile())
                     Picture.Loader.recognize(file)?.let { put(file.name, it) }
         }
         val styling = readStyling(projectDir.resolve(STYLING_FILE_NAME), emptyMap(), pictureLoaders, emptyMap())
-        val credits = readCredits(spreadsheet, styling, pictureLoaders, emptyMap()).first
+        val credits = readCredits("", spreadsheet, styling, pictureLoaders, emptyMap()).first
         for (pictureLoader in pictureLoaders.values)
             pictureLoader.close()
-        Project(styling, persistentListOf(credits))
+        Project(styling, persistentListOf(CreditsBook("", URI(""), persistentListOf(credits))))
     }
 
 
-val LOGO_PIC by lazy { useResourcePath("/logo.svg") { Picture.Loader.recognize(it)!!.apply { picture } } }
+val LOGO_PIC: Picture.Loader by lazy {
+    useResourcePath("/branding/logo.svg") { Picture.Loader.recognize(it)!!.apply { picture } }
+}
+
+val SLATE_PIC: Picture.Loader by lazy {
+    useResourcePath("/demoMedia/slate.jpg") { Picture.Loader.recognize(it)!!.apply { picture } }
+}
 
 val RAINBOW_TAPE: Tape by lazy {
     val tmpDir = Path(System.getProperty("java.io.tmpdir")).resolve("cinecred-rainbow")
     tmpDir.toFile().apply { deleteRecursively(); deleteOnExit() }
     val tapeDir = tmpDir.resolve("rainbow").also(Path::createDirectoriesSafely).apply { toFile().deleteOnExit() }
+    val font = useResourceStream("/fonts/Titillium-RegularUpright.otf", Font::createFonts)[0].deriveFont(40f)
     val img = BufferedImage(192, 108, BufferedImage.TYPE_3BYTE_BGR)
     for (frame in 0..<200)
         ImageIO.write(img.withG2 { g2 ->
             g2.color = Color(Color.HSBtoRGB(frame / 2 / 100f, 1f, 1f))
             g2.fillRect(0, 0, img.width, img.height)
             g2.color = Color(0, 0, 0, 100)
-            g2.font = BUNDLED_FONTS.first { it.getFontName(Locale.ROOT) == "Titillium Regular Upright" }.deriveFont(40f)
+            g2.font = font
             val fm = g2.fontMetrics
             val str = "${frame + 1}"
             g2.drawString(str, 6, 7 + fm.ascent)
@@ -108,7 +118,7 @@ fun String.parseCreditsCS(vararg contStyles: ContentStyle, resolution: Resolutio
 
 fun String.parseCreditsLS(vararg letterStyles: LetterStyle): Pair<Global, List<Page>> {
     val styling = Styling(
-        PRESET_GLOBAL, persistentListOf(), persistentListOf(), letterStyles.asList().toPersistentList(),
+        presetGlobal(), persistentListOf(), persistentListOf(), letterStyles.asList().toPersistentList(),
         persistentListOf(), persistentListOf(), persistentListOf()
     )
     return parseCredits(styling)
@@ -129,8 +139,8 @@ fun String.parseCreditsTS(vararg tapeStyles: TapeStyle): Pair<Global, List<Page>
 
 private fun String.parseCredits(styling: Styling): Pair<Global, List<Page>> {
     val spreadsheet = CsvFormat.read(this, "")
-    val picLoaders = if ("logo.svg" in this) mapOf(LOGO_PIC.file.name to LOGO_PIC) else emptyMap()
-    val tapes = if ("rainbow" in this) mapOf(RAINBOW_TAPE.fileOrDir.name to RAINBOW_TAPE) else emptyMap()
-    val pages = readCredits(spreadsheet, styling, picLoaders, tapes).first.pages
+    val picLoaders = if ("logo.svg" in this) mapOf("logo.svg" to LOGO_PIC) else emptyMap()
+    val tapes = if ("rainbow" in this) mapOf("rainbow" to RAINBOW_TAPE) else emptyMap()
+    val pages = readCredits("", spreadsheet, styling, picLoaders, tapes).first.pages
     return Pair(styling.global, pages)
 }

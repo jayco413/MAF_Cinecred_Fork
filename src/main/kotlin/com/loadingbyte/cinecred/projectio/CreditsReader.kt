@@ -3,7 +3,6 @@ package com.loadingbyte.cinecred.projectio
 import com.google.common.collect.Iterators
 import com.google.common.collect.PeekingIterator
 import com.loadingbyte.cinecred.common.*
-import com.loadingbyte.cinecred.common.Severity.ERROR
 import com.loadingbyte.cinecred.common.Severity.WARN
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
@@ -15,14 +14,15 @@ import java.util.*
 
 
 fun readCredits(
+    fileName: String,
     spreadsheet: Spreadsheet,
     styling: Styling,
     pictureLoaders: Map<String, Picture.Loader>,
     tapes: Map<String, Tape>
-): Pair<Credits, List<ParserMsg>> {
+): Triple<Credits, List<ParserMsg>, List<RuntimeGroupSource>> {
     // Try to find the table in the spreadsheet.
     val table = Table(
-        spreadsheet, l10nPrefix = "projectIO.credits.table.", l10nColNames = listOf(
+        fileName, spreadsheet, l10nColNames = listOf(
             "head", "body", "tail", "vGap", "contentStyle", "breakHarmonization", "spinePos",
             "pageStyle", "pageRuntime", "pageGap"
         ), legacyColNames = mapOf(
@@ -40,8 +40,14 @@ fun readCredits(
     )
 
     // Read the table.
-    val credits = CreditsReader(table, styling, pictureLoaders, tapes).read()
-    return Pair(credits, table.log)
+    val (credits, runtimeGroupSources) = CreditsReader(table, styling, pictureLoaders, tapes).read()
+    return Triple(credits, table.log, runtimeGroupSources)
+}
+
+
+sealed interface RuntimeGroupSource {
+    class Style(val style: PageStyle) : RuntimeGroupSource
+    class Sheet(val recordNo: Int, val colHeader: String, val cellValue: String) : RuntimeGroupSource
 }
 
 
@@ -69,20 +75,21 @@ private class CreditsReader(
     // Prepare resolvers for pictures and tape.
     val pictureStyleResolver = AuxiliaryStyleResolver(
         pictureLoaders, isDirectory = { false }, pictureStyleMap,
-        { name -> PRESET_PICTURE_STYLE.copy(name = name) },
-        { name, pictureLoader -> PRESET_PICTURE_STYLE.copy(name = name, picture = PictureRef(pictureLoader)) }
+        { style -> style.picture.name.isEmpty() && style.picture.loader == null },
+        { name -> presetPictureStyle().copy(name = name) },
+        { name, pictureLoader -> presetPictureStyle().copy(name = name, picture = PictureRef(pictureLoader)) }
     )
     val tapeStyleResolver = AuxiliaryStyleResolver(
         tapes, isDirectory = Tape::fileSeq, tapeStyleMap,
-        { name -> PRESET_TAPE_STYLE.copy(name = name) },
+        { style -> style.tape.name.isEmpty() && style.tape.tape == null },
+        { name -> presetTapeStyle().copy(name = name) },
         { name, tape ->
             val tcFmt = if (tape.fileSeq) TimecodeFormat.FRAMES else try {
                 tape.fps?.let { TimecodeFormat.SMPTE_NON_DROP_FRAME }
-            } catch (_: IllegalArgumentException) {
+            } catch (_: IllegalStateException) {
                 null
             } ?: TimecodeFormat.EXACT_FRAMES_IN_SECOND
-            val pt = Opt(false, zeroTimecode(tcFmt))
-            PRESET_TAPE_STYLE.copy(name = name, tape = TapeRef(tape), slice = TapeSlice(pt, pt))
+            presetTapeStyle().copy(name = name, tape = TapeRef(tape), slice = TapeSlice(tcFmt, null, null))
         }
     )
 
@@ -143,8 +150,7 @@ private class CreditsReader(
 
     // Final result
     val pages = mutableListOf<Page>()
-    val unnamedRuntimeGroups = mutableListOf<RuntimeGroup>()
-    val namedRuntimeGroups = HashMap<String, RuntimeGroup>()
+    val runtimeGroupsWithSources = HashMap<Any, Pair<RuntimeGroup, RuntimeGroupSource>>()
 
     // Current page
     val pageStages = mutableListOf<Stage>()
@@ -155,7 +161,7 @@ private class CreditsReader(
     val stageCompounds = mutableListOf<Compound>()
     var stageRuntimeFrames: Int? = null
     var stageRuntimeGroupName: String? = null
-    var stageMeltWithNext = false
+    var stageFuseWithNext = false
     var stageTransitionAfterFrames = 0
     var stageTransitionAfterStyle: TransitionStyle? = null
 
@@ -185,8 +191,11 @@ private class CreditsReader(
     // Keep track where each stage has been declared, for use in an error message.
     var nextStageDeclaredRow = 0
     var stageDeclaredRow = 0
-    // Keep track where the melting of stages has been declared, for use in an error message.
-    var stageMeltDeclaredRow = 0
+    // Keep track where the runtime of stages has been declared, for use in the construction of RuntimeGroupSources.
+    var nextStageRuntimeFramesDeclaredRow = 0
+    var stageRuntimeFramesDeclaredRow = 0
+    // Keep track where the fusion of stages has been declared, for use in an error message.
+    var stageFuseDeclaredRow = 0
     // Keep track where the current head and tail have been declared. This is used by an error message.
     var blockHeadDeclaredRow = 0
     var blockTailDeclaredRow = 0
@@ -202,8 +211,9 @@ private class CreditsReader(
         } else {
             // When discarding a page, remove its stages from all runtime groups. Otherwise, these orphaned stages might
             // confuse the subsequent processing steps.
-            unnamedRuntimeGroups.replaceAll { g -> RuntimeGroup(g.stages.removeAll(pageStages), g.runtimeFrames) }
-            namedRuntimeGroups.replaceAll { _, g -> RuntimeGroup(g.stages.removeAll(pageStages), g.runtimeFrames) }
+            runtimeGroupsWithSources.replaceAll { _, (group, source) ->
+                Pair(RuntimeGroup(group.stages.removeAll(pageStages), group.runtimeFrames), source)
+            }
         }
         pageStages.clear()
         pageGapAfterFrames = null
@@ -223,18 +233,24 @@ private class CreditsReader(
                 PageBehavior.CARD -> {}
                 PageBehavior.SCROLL -> {
                     // If directed, add the new stage to a runtime group.
-                    val groupName = stageRuntimeGroupName
-                    if (groupName != null && groupName in namedRuntimeGroups) {
-                        val oldGroup = namedRuntimeGroups.getValue(groupName)
-                        namedRuntimeGroups[groupName] = RuntimeGroup(oldGroup.stages.add(stage), oldGroup.runtimeFrames)
-                    } else {
-                        val groupFrames = stageRuntimeFrames
-                            ?: stageStyle.scrollRuntimeFrames.run { if (isActive) value else null }
-                        if (groupFrames != null)
-                            if (groupName != null)
-                                namedRuntimeGroups[groupName] = RuntimeGroup(persistentListOf(stage), groupFrames)
-                            else
-                                unnamedRuntimeGroups.add(RuntimeGroup(persistentListOf(stage), groupFrames))
+                    val sheetFrames = stageRuntimeFrames
+                    val sheetGroupName = stageRuntimeGroupName
+                    if (sheetGroupName != null && sheetGroupName in runtimeGroupsWithSources) {
+                        val (oldGroup, source) = runtimeGroupsWithSources.getValue(sheetGroupName)
+                        runtimeGroupsWithSources[sheetGroupName] =
+                            Pair(RuntimeGroup(oldGroup.stages.add(stage), oldGroup.runtimeFrames), source)
+                    } else if (sheetFrames != null) {
+                        val source = RuntimeGroupSource.Sheet(
+                            table.getRecordNo(stageRuntimeFramesDeclaredRow),
+                            table.getColHeader("pageRuntime")!!,
+                            table.getString(stageRuntimeFramesDeclaredRow, "pageRuntime")!!
+                        )
+                        runtimeGroupsWithSources[sheetGroupName ?: stage] =
+                            Pair(RuntimeGroup(persistentListOf(stage), sheetFrames), source)
+                    } else if (stageStyle.scrollRuntimeFrames.value != null) {
+                        val source = RuntimeGroupSource.Style(stageStyle)
+                        runtimeGroupsWithSources[stage] =
+                            Pair(RuntimeGroup(persistentListOf(stage), stageStyle.scrollRuntimeFrames.value), source)
                     }
                 }
             }
@@ -244,6 +260,7 @@ private class CreditsReader(
         stageRuntimeFrames = nextStageRuntimeFrames
         stageRuntimeGroupName = nextStageRuntimeGroupName
         stageDeclaredRow = nextStageDeclaredRow
+        stageRuntimeFramesDeclaredRow = nextStageRuntimeFramesDeclaredRow
         stageCompounds.clear()
         stageTransitionAfterFrames = 0
         stageTransitionAfterStyle = null
@@ -320,7 +337,7 @@ private class CreditsReader(
        ********** ACTUAL PARSING **********
        ************************************ */
 
-    fun read(): Credits {
+    fun read(): Pair<Credits, List<RuntimeGroupSource>> {
         legacyAddStylesForUnhintedAuxFiles()
 
         for (row in 0..<table.numRows) {
@@ -335,14 +352,10 @@ private class CreditsReader(
         concludeStage(0.0)
         concludePage()
 
-        // If there is not a single page, that's an error.
-        if (pages.isEmpty())
-            table.log(null, null, ERROR, l10n("projectIO.credits.noPages"))
+        val (runtimeGroups, runtimeGroupSources) = runtimeGroupsWithSources.values.unzip()
+        val credits = Credits(table.spreadsheet.name, pages.toPersistentList(), runtimeGroups.toPersistentList())
 
-        // Collect the runtime groups.
-        val runtimeGroups = unnamedRuntimeGroups + namedRuntimeGroups.values
-
-        return Credits(table.spreadsheet.name, pages.toPersistentList(), runtimeGroups.toPersistentList())
+        return Pair(credits, runtimeGroupSources)
     }
 
     fun legacyAddStylesForUnhintedAuxFiles() {
@@ -386,8 +399,14 @@ private class CreditsReader(
 
         // If the page style cell is non-empty, mark the previous stage for conclusion (if there was any). Use the
         // specified page style for the stage that starts immediately afterwards. Also reset the spine positioning info.
-        table.getLookup(row, "pageStyle", pageStyleMap, "projectIO.credits.unavailablePageStyle")?.let { newPageStyle ->
-            nextStageStyle = newPageStyle
+        table.getString(row, "pageStyle")?.let { str ->
+            nextStageStyle = pageStyleMap[str]
+            if (nextStageStyle == null) {
+                val msg = if (pageStyleMap.isEmpty()) l10n("projectIO.credits.noPageStyles") else
+                    l10n("projectIO.credits.unavailablePageStyle", "<i>${l10nEnum(pageStyleMap.keys)}</i>")
+                table.log(row, "pageStyle", WARN, msg)
+                return@let
+            }
             nextStageDeclaredRow = row
             nextSpineHookTo = 0
             nextSpineHookVAnchor = VAnchor.MIDDLE
@@ -401,7 +420,7 @@ private class CreditsReader(
             var runtimeGroupName: String? = null
             if (nextStageDeclaredRow != row)
                 table.log(row, "pageRuntime", WARN, l10n("projectIO.credits.pageRuntimeInIntermediateRow"))
-            else if (str in namedRuntimeGroups || str == stageRuntimeGroupName)
+            else if (str in runtimeGroupsWithSources || str == stageRuntimeGroupName)
                 runtimeGroupName = str
             else {
                 val fps = styling.global.fps
@@ -411,13 +430,17 @@ private class CreditsReader(
                         val parts = str.split(' ')
                         val timecode = parts.last()
                         runtimeGroupName = parts.subList(0, parts.size - 1).joinToString(" ")
-                        if (runtimeGroupName in namedRuntimeGroups || runtimeGroupName == stageRuntimeGroupName) {
+                        if (runtimeGroupName in runtimeGroupsWithSources || runtimeGroupName == stageRuntimeGroupName) {
                             val msg = l10n("projectIO.credits.pageRuntimeGroupRedeclared", l10nQuoted(runtimeGroupName))
                             table.log(row, "pageRuntime", WARN, msg)
-                        } else
+                        } else {
                             nextStageRuntimeFrames = parseTimecode(fps, timecodeFormat, timecode)
-                    } else
+                            nextStageRuntimeFramesDeclaredRow = row
+                        }
+                    } else {
                         nextStageRuntimeFrames = parseTimecode(fps, timecodeFormat, str)
+                        nextStageRuntimeFramesDeclaredRow = row
+                    }
                 } catch (_: IllegalArgumentException) {
                     val examples = l10nEnumQuoted(sampleTimecode, "XYZ $sampleTimecode", "XYZ")
                     val msg = l10n("projectIO.credits.illFormattedPageRuntime", "<i>$timecodeFormatLabel</i>", examples)
@@ -433,12 +456,12 @@ private class CreditsReader(
 
         table.getString(row, "pageGap")?.let { str ->
             fun illFormattedPageGapMsg(): String {
-                val melt = l10n(MELT_KW.key)
+                val fuse = FUSE_KW.get()
                 return l10n(
                     "projectIO.credits.illFormattedPageGap",
                     "<i>$timecodeFormatLabel</i>", l10nQuoted(sampleTimecode), l10nQuoted("-$sampleTimecode"),
-                    "<i>$melt</i>", l10nQuoted(melt),
-                    l10nQuoted("$melt $sampleTimecode ${l10n("project.template.transitionStyleLinear")}")
+                    "<i>$fuse</i>", l10nQuoted(fuse),
+                    l10nQuoted("$fuse $sampleTimecode ${l10n("linear")}")
                 )
             }
 
@@ -449,11 +472,16 @@ private class CreditsReader(
 
             if (!table.isEmpty(row, "pageStyle"))
                 table.log(row, "pageGap", WARN, l10n("projectIO.credits.pageGapInNewPageRow"))
-            else if (pageGapAfterFrames != null || stageMeltWithNext)
+            else if (pageGapAfterFrames != null || stageFuseWithNext)
                 table.log(row, "pageGap", WARN, l10n("projectIO.credits.pageGapAlreadySet"))
-            else if (str.substringBefore(' ') in MELT_KW) {
-                stageMeltWithNext = true
-                stageMeltDeclaredRow = row
+            else if (str.substringBefore(' ').let {
+                    if (ROOT_CASE_INSENSITIVE_COLLATOR.equals(it, "Melt")) {
+                        table.logMigrationPut(row, "pageGap", FUSE_KW.get(Locale.ENGLISH) + str.substring(4))
+                        true
+                    } else it in FUSE_KW
+                }) {
+                stageFuseWithNext = true
+                stageFuseDeclaredRow = row
                 val parts = str.split(' ', limit = 3)
                 when (parts.size) {
                     2 -> table.log(row, "pageGap", WARN, illFormattedPageGapMsg())
@@ -575,9 +603,9 @@ private class CreditsReader(
                 val msg = when {
                     hookKw -> {
                         val kw = parts[0]
-                        val top = l10n(TOP_KW.key)
-                        val mid = l10n(MIDDLE_KW.key)
-                        val bot = l10n(BOTTOM_KW.key)
+                        val top = TOP_KW.get()
+                        val mid = MIDDLE_KW.get()
+                        val bot = BOTTOM_KW.get()
                         l10n(
                             "projectIO.credits.illFormattedSpinePosHook", l10nQuoted(kw), u,
                             "<i>$top</i>", "<i>$mid</i>", "<i>$bot</i>",
@@ -585,18 +613,18 @@ private class CreditsReader(
                         )
                     }
                     onCard -> {
-                        val below = l10n(BELOW_KW.key)
-                        val parallel = l10n(PARALLEL_KW.key)
-                        val hook = l10n(HOOK_KW.key)
+                        val below = BELOW_KW.get()
+                        val parallel = PARALLEL_KW.get()
+                        val hook = HOOK_KW.get()
                         l10n(
                             "projectIO.credits.illFormattedSpinePosCard",
-                            "<i>$below</i>", "<i>${l10n(ABOVE_KW.key)}</i>", "<i>$parallel</i>", "<i>$hook</i>",
+                            "<i>$below</i>", "<i>${ABOVE_KW.get()}</i>", "<i>$parallel</i>", "<i>$hook</i>",
                             l10nEnumQuoted("-400", "-400 200", "-400 200 $below", "-400 $parallel", "$hook \u2026")
                         )
                     }
                     else -> {
-                        val parallel = l10n(PARALLEL_KW.key)
-                        val hook = l10n(HOOK_KW.key)
+                        val parallel = PARALLEL_KW.get()
+                        val hook = HOOK_KW.get()
                         l10n(
                             "projectIO.credits.illFormattedSpinePosScroll",
                             "<i>$parallel</i>", "<i>$hook</i>",
@@ -611,11 +639,14 @@ private class CreditsReader(
 
         // If the content style cell is non-empty, mark the previous block for conclusion (if there was any).
         // Use the new content style from now on until the next explicit content style declaration.
-        table.getLookup(
-            row, "contentStyle", contentStyleMap, "projectIO.credits.unavailableContentStyle",
-            fallback = PLACEHOLDER_CONTENT_STYLE
-        )?.let { newContentStyle ->
-            contentStyle = newContentStyle
+        table.getString(row, "contentStyle")?.let { str ->
+            contentStyle = contentStyleMap[str]
+            if (contentStyle == null) {
+                val msg = if (contentStyleMap.isEmpty()) l10n("projectIO.credits.noContentStyles") else
+                    l10n("projectIO.credits.unavailableContentStyle", "<i>${l10nEnum(contentStyleMap.keys)}</i>")
+                table.log(row, "contentStyle", WARN, msg)
+                contentStyle = placeholderContentStyle()
+            }
             isBlockConclusionMarked = true
         }
 
@@ -635,20 +666,20 @@ private class CreditsReader(
                 isBlockConclusionMarked = true
             if (unknown.isNotEmpty()) {
                 val kws = l10nEnumQuoted(unknown)
-                val opts = "<i>${l10nEnum(l10n(HEAD_KW.key), l10n(BODY_KW.key), l10n(TAIL_KW.key))}</i>"
+                val opts = "<i>${l10nEnum(HEAD_KW.get(), BODY_KW.get(), TAIL_KW.get())}</i>"
                 val msg = l10n("projectIO.credits.unknownBreakHarmonizationKeyword", unknown.size, kws, opts)
                 table.log(row, "breakHarmonization", WARN, msg)
             }
         }
 
         // Get the body element, which may either be a styled string or a picture or tape.
-        val bodyOnly1Line = contentStyle?.bodyLayout != BodyLayout.PARAGRAPHS
-        val bodyElem = getBodyElement("body", contentStyle?.bodyLetterStyleName, bodyOnly1Line)
+        val bodyElem = getBodyElement("body", contentStyle?.bodyLetterStyleName, false)
 
         // Get the head and tail, which may only be styled strings.
-        val ht1L = contentStyle?.blockOrientation != BlockOrientation.VERTICAL
-        val newHead = (getBodyElement("head", contentStyle?.headLetterStyleName, ht1L, true) as BodyElement.Str?)?.lines
-        val newTail = (getBodyElement("tail", contentStyle?.tailLetterStyleName, ht1L, true) as BodyElement.Str?)?.lines
+        val headLetterStyleName = contentStyle?.run { headLetterStyleName.value ?: bodyLetterStyleName }
+        val tailLetterStyleName = contentStyle?.run { tailLetterStyleName.value ?: bodyLetterStyleName }
+        val newHead = (getBodyElement("head", headLetterStyleName, true) as BodyElement.Str?)?.lines
+        val newTail = (getBodyElement("tail", tailLetterStyleName, true) as BodyElement.Str?)?.lines
 
         // If either head or tail is available, or if a body is available and the conclusion of the previous block
         // has been marked, conclude the previous block (if there was any) and start a new one.
@@ -666,38 +697,45 @@ private class CreditsReader(
                 concludeSpine()
                 concludeCompound(0.0)
                 // Determine whether the stage that we'll conclude in a moment is the last one on its page.
+                val currStageDeclRow = stageDeclaredRow
                 val currStyle = stageStyle
                 val nextStyle = nextStageStyle!!
                 var isLastOnPage = when {
-                    stageMeltWithNext ->
+                    stageFuseWithNext ->
                         if (currStyle?.behavior == nextStyle.behavior) {
                             val msg = l10n("projectIO.credits.cannotMeltSameBehavior")
-                            table.log(stageMeltDeclaredRow, "pageGap", WARN, msg)
+                            table.log(stageFuseDeclaredRow, "pageGap", WARN, msg)
                             true
                         } else false
                     // If no page gap has been declared and the two adjacent page styles still have the legacy melting
-                    // flag set, we also want to melt the stages.
+                    // flag set, we also want to fuse the stages.
                     pageGapAfterFrames == null -> {
                         val c = currStyle?.behavior == PageBehavior.SCROLL && currStyle.scrollMeltWithNext
                         val n = nextStyle.behavior == PageBehavior.SCROLL && nextStyle.scrollMeltWithPrev
                         if ((c || n) && currStyle?.behavior != nextStyle.behavior) {
                             val msd = if (c) MigrationDataSource(currStyle, PageStyle::scrollMeltWithNext.st())
                             else MigrationDataSource(nextStyle, PageStyle::scrollMeltWithPrev.st())
-                            table.logMigrationPut(row - 1, "pageGap", l10n(MELT_KW.key), msd)
+                            table.logMigrationPut(row - 1, "pageGap", FUSE_KW.get(), msd)
                             false
                         } else true
                     }
                     else -> true
                 }
-                stageMeltWithNext = false
+                stageFuseWithNext = false
                 concludeStage(vGap)
                 // If the last stage was dropped (probably because it was an empty card stage) and we would now be left
-                // with two back-to-back scroll stages, also conclude the page.
+                // with two back-to-back scroll stages, also conclude the page; but do it silently, to not confuse the
+                // user with a back-to-back scroll page warning just now.
                 if (nextStyle.behavior == PageBehavior.SCROLL &&
                     pageStages.lastOrNull()?.style?.behavior == PageBehavior.SCROLL
                 ) isLastOnPage = true
-                if (isLastOnPage)
+                if (isLastOnPage) {
+                    // If, after all attempted fusions, the page only consists of a single empty scroll stage, it will
+                    // be discarded. Warn the user about that.
+                    if (pageStages.size == 1 && pageStages[0].compounds.isEmpty() && currStyle?.behavior == PageBehavior.SCROLL)
+                        table.log(currStageDeclRow, "pageStyle", WARN, l10n("projectIO.credits.emptyScrollPage"))
                     concludePage()
+                }
             } else if (isCompoundConclusionMarked) {
                 concludeBlock(0.0)
                 concludeSpine()
@@ -724,11 +762,11 @@ private class CreditsReader(
         // fall back to the placeholder page or content style.
         if (newHead != null || newTail != null || bodyElem != null) {
             if (stageStyle == null) {
-                stageStyle = PLACEHOLDER_PAGE_STYLE
+                stageStyle = placeholderPageStyle()
                 table.log(row, null, WARN, l10n("projectIO.credits.noPageStyleSpecified"))
             }
             if (contentStyle == null) {
-                contentStyle = PLACEHOLDER_CONTENT_STYLE
+                contentStyle = placeholderContentStyle()
                 blockStyle = contentStyle
                 table.log(row, null, WARN, l10n("projectIO.credits.noContentStyleSpecified"))
             }
@@ -754,23 +792,22 @@ private class CreditsReader(
             isBlockConclusionMarked = true
     }
 
-    fun getBodyElement(
-        l10nColName: String, initLetterStyleName: String?, only1Line: Boolean, onlyStr: Boolean = false
-    ): BodyElement? {
-        fun unavailableLetterStyleMsg(name: String) = l10n(
-            "projectIO.credits.unavailableLetterStyle", l10nQuoted(name), "<i>${l10nEnum(letterStyleMap.keys)}</i>"
-        )
+    fun getBodyElement(l10nColName: String, initLetterStyleName: String?, onlyStr: Boolean): BodyElement? {
+        fun unavailableLetterStyleMsg(name: String) =
+            if (letterStyleMap.isEmpty()) l10n("projectIO.credits.noLetterStyles") else l10n(
+                "projectIO.credits.unavailableLetterStyle", l10nQuoted(name), "<i>${l10nEnum(letterStyleMap.keys)}</i>"
+            )
 
         fun unknownTagMsg(tagKey: String) = l10n(
             "projectIO.credits.unknownTagKeyword", l10nQuoted("{{$tagKey …}}"), l10nQuoted("\\{{$tagKey …}}"),
-            "<i>" + l10nEnum(listOf(BLANK_KW, STYLE_KW, PIC_KW, VIDEO_KW).map { "{{${l10n(it.key)}}}" }) + "</i>"
+            "<i>" + l10nEnum(listOf(BLANK_KW, STYLE_KW, PIC_KW, VIDEO_KW).map { "{{${it.get()}}}" }) + "</i>"
         )
 
         fun tagDisallowedMsg(tagKey: String) = l10n("projectIO.credits.tagDisallowed", l10nQuoted("{{$tagKey …}}"))
         fun tagNotLoneMsg(tagKey: String) = l10n("projectIO.credits.tagNotLone", l10nQuoted("{{$tagKey …}}"))
 
         val str = table.getString(row, l10nColName) ?: return null
-        val initLetterStyle = initLetterStyleName?.let { letterStyleMap[it] } ?: PLACEHOLDER_LETTER_STYLE
+        val initLetterStyle = initLetterStyleName?.let { letterStyleMap[it] } ?: placeholderLetterStyle()
 
         var curLetterStyle: LetterStyle? = null
         val styledLines = mutableListOf(mutableListOf<Pair<String, LetterStyle>>())
@@ -810,7 +847,7 @@ private class CreditsReader(
                         null -> curLetterStyle = initLetterStyle
                         else -> when (val newLetterStyle = letterStyleMap[tagVal]) {
                             null -> {
-                                curLetterStyle = PLACEHOLDER_LETTER_STYLE
+                                curLetterStyle = placeholderLetterStyle()
                                 table.log(row, l10nColName, WARN, unavailableLetterStyleMsg(tagVal))
                             }
                             else -> curLetterStyle = newLetterStyle
@@ -849,8 +886,6 @@ private class CreditsReader(
                 pictureStyle?.let(BodyElement::Pic) ?: tapeStyle?.let(BodyElement::Tap) ?: BodyElement.Mis
             }
             hasPlaintext -> {
-                if (only1Line && styledLines.size != 1)
-                    table.log(row, l10nColName, WARN, l10n("projectIO.credits.linebreakUnsupported"))
                 val missingGlyphLines = styledLines.filter { it.formatted(styling).missesGlyphs }
                 if (missingGlyphLines.isNotEmpty()) {
                     val ns = missingGlyphLines.flatten().mapTo(TreeSet()) { it.second.name }
@@ -861,7 +896,7 @@ private class CreditsReader(
             }
             else -> {
                 table.log(row, l10nColName, WARN, l10n("projectIO.credits.effectivelyEmpty"))
-                BodyElement.Str(persistentListOf(listOf(Pair("???", PLACEHOLDER_LETTER_STYLE))))
+                BodyElement.Str(persistentListOf(listOf(Pair("???", placeholderLetterStyle()))))
             }
         }
     }
@@ -877,8 +912,8 @@ private class CreditsReader(
                         // Crop the picture.
                         hint in CROP_KW -> style.copy(cropBlankSpace = true)
                         // Apply scaling hints.
-                        hint.startsWith('x') -> style.copy(heightPx = Opt(true, hint.drop(1).toDouble()))
-                        hint.endsWith('x') -> style.copy(widthPx = Opt(true, hint.dropLast(1).toDouble()))
+                        hint.startsWith('x') -> style.copy(heightPx = Override(hint.drop(1).toDouble()))
+                        hint.endsWith('x') -> style.copy(widthPx = Override(hint.dropLast(1).toDouble()))
                         else -> continue
                     }
                 } catch (_: IllegalArgumentException) {
@@ -929,7 +964,7 @@ private class CreditsReader(
                             isMargin ->
                                 style.copy(leftTemporalMarginFrames = lFrames, rightTemporalMarginFrames = rFrames)
                             else -> {
-                                val linearName = l10n("project.template.transitionStyleLinear")
+                                val linearName = l10n("linear")
                                 style.copy(
                                     fadeInFrames = lFrames, fadeInTransitionStyleName = linearName,
                                     fadeOutFrames = rFrames, fadeOutTransitionStyleName = linearName
@@ -950,11 +985,10 @@ private class CreditsReader(
                                 continue
                             }
                             val slice = style.slice
-                            val z = Opt(false, zeroTimecode(tcFmt))
-                            val i = if (isIn) Opt(true, tc) else if (slice.inPoint.isActive) slice.inPoint else z
-                            val o = if (isOut) Opt(true, tc) else if (slice.outPoint.isActive) slice.outPoint else z
+                            val i = if (isIn) tc else slice.inPoint
+                            val o = if (isOut) tc else slice.outPoint
                             try {
-                                style = style.copy(slice = TapeSlice(i, o))
+                                style = style.copy(slice = TapeSlice(tcFmt, i, o))
                             } catch (_: IllegalArgumentException) {
                             }
                             break
@@ -969,8 +1003,8 @@ private class CreditsReader(
                     style = try {
                         when {
                             // Apply scaling hints.
-                            hint.startsWith('x') -> style.copy(heightPx = Opt(true, hint.drop(1).toInt()))
-                            hint.endsWith('x') -> style.copy(widthPx = Opt(true, hint.dropLast(1).toInt()))
+                            hint.startsWith('x') -> style.copy(heightPx = Override(hint.drop(1).toInt()))
+                            hint.endsWith('x') -> style.copy(widthPx = Override(hint.dropLast(1).toInt()))
                             else -> continue
                         }
                     } catch (_: IllegalArgumentException) {
@@ -1006,22 +1040,22 @@ private class CreditsReader(
 
     companion object {
 
-        val MELT_KW = Keyword("projectIO.credits.table.melt")
-        val BELOW_KW = Keyword("projectIO.credits.table.below")
-        val ABOVE_KW = Keyword("projectIO.credits.table.above")
-        val HOOK_KW = Keyword("projectIO.credits.table.hook")
-        val TOP_KW = Keyword("projectIO.credits.table.top")
-        val MIDDLE_KW = Keyword("projectIO.credits.table.middle")
-        val BOTTOM_KW = Keyword("projectIO.credits.table.bottom")
-        val PARALLEL_KW = Keyword("projectIO.credits.table.parallel")
-        val HEAD_KW = Keyword("projectIO.credits.table.head")
-        val BODY_KW = Keyword("projectIO.credits.table.body")
-        val TAIL_KW = Keyword("projectIO.credits.table.tail")
+        val FUSE_KW = Keyword("fuse")
+        val PARALLEL_KW = Keyword("parallel")
+        val HOOK_KW = Keyword("hook")
+        val TOP_KW = Keyword("top")
+        val MIDDLE_KW = Keyword("middle")
+        val BOTTOM_KW = Keyword("bottom")
+        val ABOVE_KW = Keyword("above")
+        val BELOW_KW = Keyword("below")
+        val HEAD_KW = Keyword("head")
+        val BODY_KW = Keyword("body")
+        val TAIL_KW = Keyword("tail")
         val BLANK_KW = Keyword("blank")
-        val STYLE_KW = Keyword("projectIO.credits.table.style")
-        val PIC_KW = Keyword("projectIO.credits.table.pic")
+        val STYLE_KW = Keyword("style")
+        val PIC_KW = Keyword("pic")
         val CROP_KW = legacyKeyword("Crop", "Oříznutí", "Stutzen", "Rogner", "裁剪")
-        val VIDEO_KW = Keyword("projectIO.credits.table.video")
+        val VIDEO_KW = Keyword("video")
         val MARGIN_KW = legacyKeyword("Margin", "Odsazení", "Rand", "Marge", "边缘")
         val FADE_KW = legacyKeyword("Fade", "Blende", "Fondu", "淡入")
         val END_KW = legacyKeyword("End", "Konec", "Ende", "Fin", "末尾")
@@ -1042,12 +1076,15 @@ private class CreditsReader(
     }
 
 
-    class Keyword(val key: String) {
+    class Keyword(private val key: String) {
+
         private val kwSet = TRANSLATED_LOCALES.mapTo(TreeSet(ROOT_CASE_INSENSITIVE_COLLATOR)) { l ->
-            l10n(key, l).also { kw -> require(' ' !in kw) { "Keyword '$kw' from $key @ $l contains whitespace" } }
+            l10nKeyword(key, l).also { require(' ' !in it) { "Keyword '$it' from $key @ $l contains whitespace" } }
         }
 
         operator fun contains(str: String) = str in kwSet
+        fun get(locale: Locale = Locale.getDefault()) = l10nKeyword(key, locale)
+
     }
 
 
@@ -1055,6 +1092,7 @@ private class CreditsReader(
         auxiliaries: Map<String, A>,
         isDirectory: (A) -> Boolean,
         private val styleMap: MutableMap<String, S>,
+        private val missesRef: (S) -> Boolean,
         private val makeStyle1: (String) -> S,
         private val makeStyle2: (String, A) -> S
     ) {
@@ -1088,9 +1126,11 @@ private class CreditsReader(
 
         fun legacyAddStyleForUnhinted(tagVal: String) {
             auxMap[tagVal]?.let { aux ->
-                styleMap.computeIfAbsent(tagVal) {
-                    makeStyle2(tagVal, aux).copy(PopupStyle::volatile.st().notarize(true))
-                }
+                val style = styleMap[tagVal]
+                // If the style is volatile and misses a ref, we can get away with creating a new style (as opposed to
+                // updating the existing one) because volatile styles are "fresh" and non-user-modified anyway.
+                if (style == null || style.volatile && missesRef(style))
+                    styleMap[tagVal] = makeStyle2(tagVal, aux).copy(PopupStyle::volatile.st().notarize(true))
             }
         }
 

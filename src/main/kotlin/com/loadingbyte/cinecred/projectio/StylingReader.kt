@@ -5,7 +5,7 @@ import com.loadingbyte.cinecred.imaging.*
 import com.loadingbyte.cinecred.project.*
 import kotlinx.collections.immutable.PersistentList
 import kotlinx.collections.immutable.toPersistentList
-import java.awt.Font
+import kotlinx.collections.immutable.toPersistentMap
 import java.io.IOException
 import java.nio.file.Path
 import java.util.*
@@ -69,8 +69,7 @@ class StylingReaderContext(
     val pictureLoaders: Map<String, Picture.Loader>,
     val tapes: Map<String, Tape>
 ) {
-    fun resolveFont(name: String): Font? =
-        projectFonts[name] ?: getBundledFont(name) ?: getSystemFont(name)
+    fun resolveFont(name: String): Font? = projectFonts[name] ?: Font.bundled(name) ?: Font.system(name)
 }
 
 
@@ -119,6 +118,8 @@ private fun <S : Style, SUBJ : Any> readSetting(
             setting.notarize(convert(ctx, setting.type, raw))
         is OptStyleSetting ->
             setting.notarize(Opt(true, convert(ctx, setting.type, raw)))
+        is OverrideStyleSetting ->
+            setting.notarize(Override(convert(ctx, setting.type, raw)))
         is ListStyleSetting ->
             setting.notarize((raw as List<*>).filterNotNull().map { convert(ctx, setting.type, it) }.toPersistentList())
     }
@@ -139,7 +140,9 @@ private fun convertUntyped(ctx: StylingReaderContext, type: Class<*>, raw: Any):
     FontRef::class.java -> ctx.resolveFont(raw as String)?.let(::FontRef) ?: FontRef(raw)
     PictureRef::class.java -> ctx.pictureLoaders[raw as String]?.let(::PictureRef) ?: PictureRef(raw)
     TapeRef::class.java -> ctx.tapes[raw as String]?.let(::TapeRef) ?: TapeRef(raw)
+    FontVariations::class.java -> fontVariationsFromKVs((raw as List<*>).requireIsInstance<String>())
     FontFeature::class.java -> fontFeatureFromKV(raw as String)
+    GradientStop::class.java -> gradientStopFromList((raw as List<*>).requireIsInstance<Number>())
     Transition::class.java -> transitionFromList((raw as List<*>).requireIsInstance<Number>())
     TapeSlice::class.java -> tapeSliceFromStr(raw as String)
     else -> when {
@@ -150,11 +153,21 @@ private fun convertUntyped(ctx: StylingReaderContext, type: Class<*>, raw: Any):
     }
 }
 
+private fun fontVariationsFromKVs(kvs: List<String>): FontVariations =
+    FontVariations(kvs.associate { kv ->
+        val parts = kv.split("=")
+        require(parts.size == 2)
+        parts[0] to parts[1].toDouble()
+    }.toPersistentMap())
+
 private fun fontFeatureFromKV(kv: String): FontFeature {
     val parts = kv.split("=")
     require(parts.size == 2)
     return FontFeature(parts[0], parts[1].toInt())
 }
+
+private fun gradientStopFromList(l: List<Number>): GradientStop =
+    GradientStop(Color4f(l.subList(0, 4), ColorSpace.XYZD50), l[4].toDouble())
 
 private fun transitionFromList(l: List<Number>): Transition =
     Transition(l[0].toDouble(), l[1].toDouble(), l[2].toDouble(), l[3].toDouble())
@@ -163,20 +176,19 @@ private fun tapeSliceFromStr(str: String): TapeSlice {
     val tcStrs = str.split("-")
     require(tcStrs.size == 2)
     for (tcFmt in TimecodeFormat.entries) {
-        val tcOpts = try {
+        val tcs = try {
             tcStrs.map { tcStr ->
                 if (tcStr.isBlank())
                     null
                 else if (tcFmt == TimecodeFormat.CLOCK && "/" in tcStr)
-                    Opt(true, tcStr.split("/").let { Timecode.Clock(it[0].toLong(), it[1].toLong()) })
+                    tcStr.split("/").let { Timecode.Clock(it[0].toLong(), it[1].toLong()) }
                 else
-                    Opt(true, parseTimecode(tcFmt, tcStr))
+                    parseTimecode(tcFmt, tcStr)
             }
         } catch (_: RuntimeException) {
             continue
         }
-        val zeroOpt = Opt(false, zeroTimecode((tcOpts[0] ?: tcOpts[1])!!.value.format))
-        return TapeSlice(tcOpts[0] ?: zeroOpt, tcOpts[1] ?: zeroOpt)
+        return TapeSlice((tcs[0] ?: tcs[1])!!.format, tcs[0], tcs[1])
     }
     throw IllegalArgumentException()
 }

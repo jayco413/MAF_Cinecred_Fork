@@ -1,7 +1,8 @@
 package com.loadingbyte.cinecred.ui.helper
 
 import com.formdev.flatlaf.ui.FlatUIUtils
-import com.formdev.flatlaf.util.UIScale
+import com.formdev.flatlaf.util.SystemInfo
+import com.loadingbyte.cinecred.common.JobSlot
 import com.loadingbyte.cinecred.common.Resolution
 import com.loadingbyte.cinecred.common.l10n
 import com.loadingbyte.cinecred.common.scale
@@ -13,8 +14,6 @@ import net.miginfocom.swing.MigLayout
 import java.awt.*
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
-import java.awt.event.MouseAdapter
-import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent.*
 import java.awt.geom.AffineTransform
 import java.awt.image.BufferedImage
@@ -31,12 +30,10 @@ import kotlin.math.*
  * like panning (via clicking and dragging) and zooming.
  */
 class DeferredImagePanel(
+    private val minZoom: Double,
     private val maxZoom: Double,
-    private val zoomIncrement: Double,
-    private val highResCache: DeferredImage.CanvasMaterializationCache,
-    private val lowResCache: DeferredImage.CanvasMaterializationCache
-) :
-    JPanel(MigLayout("gap 0, insets 0")) {
+    private val zoomFactor: Double
+) : JPanel(MigLayout("gap 0, insets 0")) {
 
     // ========== ENCAPSULATION LEAKS ==========
     @Deprecated("ENCAPSULATION LEAK")
@@ -68,9 +65,9 @@ class DeferredImagePanel(
     var isPresented: Boolean = true
 
     fun setImageAndGroundingAndLayers(image: DeferredImage?, grounding: Color4f, layers: List<Layer>) {
+        val image = if (image != null && image.width != 0.0 && image.height.resolve() != 0.0) image else null
         val imageChanged = image !== _image
         if (!imageChanged && _grounding == grounding && _layers == layers) return
-        if (imageChanged) require(image == null || image.width != 0.0 && image.height.resolve() != 0.0)
         _image = image
         _grounding = grounding
         _layers = layers
@@ -83,9 +80,9 @@ class DeferredImagePanel(
     /**
      * Zoom = 1 means: Show the whole width of the image.
      */
-    var zoom = 1.0
+    var zoom = 1.0.coerceIn(minZoom, maxZoom)
         set(value) {
-            val newZoom = value.coerceIn(1.0, maxZoom)
+            val newZoom = value.coerceIn(minZoom, maxZoom)
             if (field != newZoom) {
                 field = newZoom
                 for (listener in zoomListeners)
@@ -119,14 +116,16 @@ class DeferredImagePanel(
     private var materializedStopY = Double.NaN
     private var lowResMaterialized: BufferedImage? = null
     private var lowResMaterializedContentVersion = 0L
-    private val immediateMaterializingJobSlot = JobSlot()
-    private val delayedHighResMaterializingJobSlot = JobSlot(delay = 200L)
-    private val delayedLowResMaterializingJobSlot = JobSlot(delay = 200L)
+    private val highResMaterializingJobSlot = JobSlot(slots = 2)
+    private val lowResMaterializingJobSlot = JobSlot()
+    private val loadFullThumbnailsJobSlot = JobSlot()
 
     private val canvas = CanvasPanel()
     private val xScrollbar = Scrollbar(JScrollBar.HORIZONTAL)
     private val yScrollbar = Scrollbar(JScrollBar.VERTICAL)
+
     private var disableScrollbarListeners = false
+    private var disableRematerialization = 0
 
     init {
         add(canvas, "push, grow")
@@ -161,15 +160,32 @@ class DeferredImagePanel(
         }
 
         // Hovering over the canvas should always display a move cursor.
-        canvas.cursor = Cursor(Cursor.MOVE_CURSOR)
+        canvas.cursor = Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
 
-        // When the user scrolls inside the canvas, scroll the viewport or adjust the zoom.
-        canvas.addMouseWheelListener { e ->
+        // When the user scrolls inside the canvas or over the scrollbars, scroll the viewport or adjust the zoom.
+        addMouseWheelListener { e ->
             val block = e.scrollType == WHEEL_BLOCK_SCROLL
-            val mult = if (block) e.wheelRotation.sign.toDouble() else e.preciseWheelRotation * e.scrollAmount
-            if (e.modifiersEx == CTRL_DOWN_MASK)
-                zoom -= zoomIncrement * mult
-            else {
+            val mult = when {
+                block -> e.wheelRotation.sign.toDouble()
+                else -> e.preciseWheelRotation * e.scrollAmount *
+                        // On Windows, wheel rotation is divided by the UI scale factor, which however makes scrolling
+                        // the image unnaturally slow. Hence, we compensate by multiplying by the scale factor again.
+                        if (SystemInfo.isWindows) getSystemScaleFactor(graphicsConfiguration) else 1.0
+            }
+            // On macOS, depending on the app, either ctrl or command is used for zooming, so we just support both.
+            if (e.modifiersEx.let { it == CTRL_DOWN_MASK || it == META_DOWN_MASK }) {
+                val zoomMult = zoomFactor.pow(-mult)
+                val c = (1.0 - 1.0 * zoom / (zoom * zoomMult).coerceIn(minZoom, maxZoom)) / imageScaling
+                val mouse = SwingUtilities.convertPoint(e.component, e.point, canvas)
+                val newViewportCenterX = viewportCenterX + c * (mouse.x - canvas.width / 2)
+                val newViewportCenterY = viewportCenterY + c * (mouse.y - canvas.height / 2)
+                disableRematerialization++
+                zoom *= zoomMult
+                viewportCenterX = newViewportCenterX
+                viewportCenterY = newViewportCenterY
+                disableRematerialization--
+                rematerialize(contentChanged = false)
+            } else {
                 val unitIncrement = min(viewportWidth, viewportHeight) * mult / 50.0
                 when (e.modifiersEx) {
                     0 -> viewportCenterY += if (block) viewportHeight * mult else unitIncrement
@@ -186,34 +202,22 @@ class DeferredImagePanel(
         }
 
         // When the user clicks and drags inside the canvas, move the viewport center.
-        val canvasDragListener = object : MouseAdapter() {
-            private var startPoint: Point? = null
+        canvas.addHighFrequencyDragListener(object : HighFrequencyDragListener {
             private var startViewportCenterX = 0.0
             private var startViewportCenterY = 0.0
 
-            override fun mousePressed(e: MouseEvent) {
-                if (e.button == BUTTON1) {
-                    startPoint = e.point
-                    startViewportCenterX = viewportCenterX
-                    startViewportCenterY = viewportCenterY
-                }
+            override fun onStartDragging(startPointer: Point): Boolean {
+                startViewportCenterX = viewportCenterX
+                startViewportCenterY = viewportCenterY
+                return true
             }
 
-            override fun mouseReleased(e: MouseEvent) {
-                if (e.button == BUTTON1)
-                    startPoint = null
+            override fun onDrag(startPointer: Point, currentPointer: Point, modifiersEx: Int) {
+                viewportCenterX = startViewportCenterX + (startPointer.x - currentPointer.x) / imageScaling
+                viewportCenterY = startViewportCenterY + (startPointer.y - currentPointer.y) / imageScaling
+                canvas.repaint()
             }
-
-            override fun mouseDragged(e: MouseEvent) {
-                startPoint?.let { s ->
-                    viewportCenterX = startViewportCenterX + (s.x - e.x) / imageScaling
-                    viewportCenterY = startViewportCenterY + (s.y - e.y) / imageScaling
-                    canvas.repaint()
-                }
-            }
-        }
-        canvas.addMouseListener(canvasDragListener)
-        canvas.addMouseMotionListener(canvasDragListener)
+        })
     }
 
     // In image coordinates:
@@ -237,30 +241,32 @@ class DeferredImagePanel(
             val reZone = viewportHeight
             if (!materializedStartY.isNaN())
                 if (field < materializedStartY + reZone && materializedStartY > 0.1 ||
-                    field > materializedStopY - reZone && materializedStopY < image!!.height.resolve() - 0.1
+                    field > materializedStopY - reZone && materializedStopY < imageHeight - 0.1
                 ) rematerialize(contentChanged = false)
         }
 
     // In image coordinates:
-    private val viewportWidth get() = image!!.width / zoom
+    private val imageWidth get() = image?.width ?: 0.0
+    private val imageHeight get() = image?.height?.resolve() ?: 0.0
+    private val viewportWidth get() = imageWidth / max(1.0, zoom)
     private val viewportHeight
-        get() = min(image!!.height.resolve(), canvas.height.also { require(it != 0) } / imageScaling)
+        get() = min(imageHeight, canvas.height.also { require(it != 0) } / imageScaling)
     private val viewportStartX get() = viewportCenterX - viewportWidth / 2.0
     private val viewportStartY get() = viewportCenterY - viewportHeight / 2.0
     private val viewportStopY get() = viewportCenterY + viewportHeight / 2.0
     private val minViewportCenterX get() = viewportWidth / 2.0
-    private val maxViewportCenterX get() = image!!.width - minViewportCenterX
+    private val maxViewportCenterX get() = imageWidth - minViewportCenterX
     private val minViewportCenterY get() = viewportHeight / 2.0
-    private val maxViewportCenterY get() = image!!.height.resolve() - minViewportCenterY
+    private val maxViewportCenterY get() = imageHeight - minViewportCenterY
 
     // The image scaling maps from deferred image coordinates to canvas coordinates as they are used by Swing.
     // These canvas coordinates are however fake if system scaling is enabled in a HiDPI context. Hence, to find out
     // how large the materialized image should be, we need to compensate for that using the physical image scaling.
     private val imageScaling
-        get() = zoom * canvas.width.also { require(it != 0) } / image!!.width
+        get() = zoom * canvas.width.also { require(it != 0) } / imageWidth
     private val physicalImageScaling
         // Safeguard in case the graphics object is not yet ready or has already been discarded; this happens sometimes.
-        get() = imageScaling * ((canvas.graphics as Graphics2D?)?.let(UIScale::getSystemScaleFactor) ?: 1.0)
+        get() = imageScaling * ((canvas.graphics as Graphics2D?)?.let(::getSystemScaleFactor) ?: 1.0)
 
     private fun coerceViewportAndCalibrateScrollbars() {
         val image = this.image
@@ -271,6 +277,8 @@ class DeferredImagePanel(
             xScrollbar.isEnabled = false
             yScrollbar.isEnabled = false
         } else {
+            disableRematerialization++
+
             // These setters do the coercion and update the scrollbar positions:
             viewportCenterX = viewportCenterX
             viewportCenterY = viewportCenterY
@@ -293,10 +301,15 @@ class DeferredImagePanel(
             // Calling the setters once before and once after is vital to prevent various desyncs we've observed.
             viewportCenterX = viewportCenterX
             viewportCenterY = viewportCenterY
+
+            disableRematerialization--
         }
     }
 
     private fun rematerialize(contentChanged: Boolean) {
+        if (disableRematerialization > 0)
+            return
+
         val image = this.image
 
         if (image == null || canvas.width == 0 || canvas.height == 0) {
@@ -312,49 +325,42 @@ class DeferredImagePanel(
             if (isPresented) {
                 // The portion's top y in image coordinates.
                 val immediateStartY = if (imageHeight == viewportHeight) Double.NaN else viewportStartY
-                submitHighResMaterializingJob(immediateMaterializingJobSlot, immediateStartY, viewportHeight)
-                if (immediateStartY.isNaN()) {
-                    // In rare cases, it could happen that the delayed job (scheduled some time ago with another zoom)
-                    // is already running, but finishes after the just scheduled immediate job, in which case an image
-                    // with the wrong zoom would be displayed. However, this is so unlikely and at the same time the
-                    // outcome is so un-severe that we don't need to pollute the code with a countermeasure.
-                    delayedHighResMaterializingJobSlot.cancel()
+                highResMaterializingJobSlot.unsubmit(1)
+                submitHighResMaterializingJob(highResMaterializingJobSlot, 0, 0, immediateStartY, viewportHeight)
+                if (immediateStartY.isNaN())
                     return
-                }
             }
             // If the first step didn't start the materialization of the entire deferred image yet, schedule the
             // materialization of a larger area around the viewport (this allows the user to move around a bit) after
             // some delay has passed. If the image changes again before the waiting time is up, the scheduled job is
-            // canceled. This way, when the user is pushing down a spinner and quickly cycles through images, we only
+            // canceled. This way, when the user is dragging a scrubber and quickly cycles through images, we only
             // spend compute on materializing the current viewport of the currently presented image panel. Only after he
-            // has let go of the spinner will the other images catch up and will a larger area be materialized.
-            val delayedHeight = min(
-                imageHeight,
-                // If a raster image of the entire deferred image with the current physical scaling would exceed
-                // MAX_PIXELS, we only materialize a portion of the deferred image around the current viewport.
-                MAX_MAT_PIXELS / (image.width * physicalImageScaling.pow(2))
-            )
+            // has let go of the scrubber will the other images catch up and will a larger area be materialized.
+            // If a raster image of the entire deferred image with the current physical scaling would exceed
+            // MAX_MAT_PIXELS, we only materialize a portion of the deferred image around the current viewport.
+            val delayedHeight =
+                (MAX_MAT_PIXELS / (image.width * physicalImageScaling.pow(2))).coerceIn(viewportHeight, imageHeight)
             val delayedStartY = if (delayedHeight == imageHeight) Double.NaN else
                 (viewportCenterY - delayedHeight / 2.0).coerceIn(0.0, imageHeight - delayedHeight)
-            submitHighResMaterializingJob(delayedHighResMaterializingJobSlot, delayedStartY, delayedHeight)
+            submitHighResMaterializingJob(highResMaterializingJobSlot, 1, 200, delayedStartY, delayedHeight)
             // Materialize a low-res version if (a) the high-res version doesn't yet cover the entire deferred image and
             // (b) either the content changed or there is not a low-res version yet. We will momentarily paint this
             // low-res placeholder when the user scrolls out of the materialized portion too quickly.
             if (!delayedStartY.isNaN() && (contentChanged || lowResMaterialized == null))
-                submitLowResMaterializingJob(delayedLowResMaterializingJobSlot)
+                submitLowResMaterializingJob(lowResMaterializingJobSlot)
         }
     }
 
-    private fun submitHighResMaterializingJob(jobSlot: JobSlot, startY: Double, height: Double) {
+    private fun submitHighResMaterializingJob(jobSlot: JobSlot, slot: Int, delay: Int, startY: Double, height: Double) {
         // Abort if the canvas was disposed already.
         val bitmapJ2DBridge = BitmapJ2DBridge(canvas.graphicsConfiguration.colorModel ?: return)
         // Capture these variables.
-        val image = this.image!!
+        val image = this.image ?: return
         val grounding = this.grounding
         val layers = this.layers
         val contentVersion = this.contentVersion
         val physicalImageScaling = this.physicalImageScaling
-        jobSlot.submit {
+        jobSlot.submit(slot, delay) {
             // Align the drawn portion with the pixel grid. If we didn't do this, users would notice changes in the
             // antialiasing pattern when we swap the materialized image, for example when going from the narrow
             // immediate image to the taller delayed image.
@@ -364,12 +370,13 @@ class DeferredImagePanel(
             // Use max(1, ...) to ensure that the raster image dimensions don't drop to 0.
             val matWidth = max(1, (physicalImageScaling * image.width).roundToInt())
             val matHeight = max(1, (physicalStopY - physicalStartY).roundToInt())
+            val permitTapePreviews = DeferredImage.PermitTapePreviews()
             val materialized = drawToBufferedImage(matWidth, matHeight, grounding, bitmapJ2DBridge) { canvas ->
                 // Paint a scaled version of the deferred image onto the raster image.
                 DeferredImage(matWidth.toDouble(), matHeight.toDouble().toY()).apply {
                     // If only a portion is materialized, scroll the deferred image to that portion.
                     drawDeferredImage(image, y = (-physicalStartY).toY(), universeScaling = physicalImageScaling)
-                }.materialize(canvas, highResCache, layers)
+                }.materialize(canvas, cachePictures = true, permitTapePreviews, tolerateErroneousMedia = true, layers)
             }
             SwingUtilities.invokeLater {
                 if (this.materializedContentVersion > contentVersion)
@@ -384,8 +391,8 @@ class DeferredImagePanel(
                     this.lowResMaterializedContentVersion = contentVersion
                 }
                 // This is a bit hacky. When materialization has finished, we want to repaint the canvas.
-                // However, the user might have supplied a new image in the meantime (e.g., because he's pushing
-                // down on some style config spinner). To avoid that the repainting of the canvas is done with
+                // However, the user might have supplied a new image in the meantime (e.g., because he's dragging
+                // some style config scrubber). To avoid that the repainting of the canvas is done with
                 // a wrong image in the this.image variable (which would lead to a wrongly calculated viewport
                 // position and hence to awful jitter), we briefly set this.image to the image used as a source
                 // for the just generated materialized image. After the canvas has been repainted (we use
@@ -393,12 +400,26 @@ class DeferredImagePanel(
                 // back to its original value. We do the same thing for this.viewportCenterX/Y.
                 // Note that this quick change will not interfere with other code setting those variables because
                 // they may only be set from the AWT event thread (which we are in right now as well).
-                if (this.contentVersion == contentVersion)
+                if (this.contentVersion == contentVersion) {
                     canvas.repaint()
-                else {
+                    // If tape preview thumbnails were painted, rematerialize once the full thumbnails are available.
+                    if (permitTapePreviews.usedPreviewThumbnails)
+                        loadFullThumbnailsJobSlot.submit(delay = 200) {
+                            SwingUtilities.invokeLater {
+                                if (this.contentVersion == contentVersion)
+                                    permitTapePreviews.loadFullThumbnailsAndThen {
+                                        SwingUtilities.invokeLater {
+                                            if (this.contentVersion == contentVersion)
+                                                rematerialize(contentChanged = false)
+                                        }
+                                    }
+                            }
+                        }
+                } else {
                     val curImage = this._image
                     val curViewportCenterX = this.viewportCenterX
                     val curViewportCenterY = this.viewportCenterY
+                    disableRematerialization++
                     this._image = image
                     this.viewportCenterX = viewportCenterX
                     this.viewportCenterY = viewportCenterY
@@ -406,6 +427,7 @@ class DeferredImagePanel(
                     this._image = curImage
                     this.viewportCenterX = curViewportCenterX
                     this.viewportCenterY = curViewportCenterY
+                    disableRematerialization--
                 }
             }
         }
@@ -415,11 +437,11 @@ class DeferredImagePanel(
         // Abort if the canvas was disposed already.
         val bitmapJ2DBridge = BitmapJ2DBridge(canvas.graphicsConfiguration.colorModel ?: return)
         // Capture these variables.
-        val image = this.image!!
+        val image = this.image ?: return
         val grounding = this.grounding
         val layers = this.layers
         val contentVersion = this.contentVersion
-        jobSlot.submit {
+        jobSlot.submit(delay = 200) {
             val imageHeight = image.height.resolve()
             val theoreticalScaling = sqrt(MAX_MAT_PIXELS / (image.width * imageHeight))
             // Again use max(1, ...) to ensure that the raster image dimensions do not drop to 0.
@@ -427,7 +449,9 @@ class DeferredImagePanel(
             val scaling = matWidth / image.width
             val matHeight = max(1, ceil(scaling * imageHeight).toInt())
             val materialized = drawToBufferedImage(matWidth, matHeight, grounding, bitmapJ2DBridge) { canvas ->
-                image.copy(universeScaling = scaling).materialize(canvas, lowResCache, layers)
+                val permitTapePreview = DeferredImage.PermitTapePreviews()
+                image.copy(universeScaling = scaling)
+                    .materialize(canvas, cachePictures = true, permitTapePreview, tolerateErroneousMedia = true, layers)
             }
             SwingUtilities.invokeLater {
                 if (this.lowResMaterializedContentVersion > contentVersion)
@@ -442,7 +466,7 @@ class DeferredImagePanel(
     companion object {
 
         private const val SCROLLBAR_MULT = 1024.0
-        private const val MAX_MAT_PIXELS = 5_000_000
+        private const val MAX_MAT_PIXELS = 30_000_000
 
         private inline fun drawToBufferedImage(
             w: Int, h: Int, grounding: Color4f, bitmapJ2DBridge: BitmapJ2DBridge, draw: (Canvas) -> Unit
@@ -487,16 +511,16 @@ class DeferredImagePanel(
             if (image == null || materialized == null) {
                 // If the materialized image is not ready yet, draw a loading indicator instead.
                 FlatUIUtils.setRenderingHints(g)
-                g.font = UIManager.getFont("h0.font").deriveFont(Font.BOLD)
+                g.font = UIManager.getFont("h0.font").deriveFont(java.awt.Font.BOLD)
                 val m = g.fontMetrics
                 val t = l10n("ui.edit.loading")
                 FlatUIUtils.drawString(this, g, t, (width - m.stringWidth(t)) / 2, (height - m.height) / 2 + m.ascent)
             } else {
-                // Find the width of the viewport in materialized image coordinates.
-                val materializedViewportWidth = (viewportWidth / image.width) * materialized.width
                 // Find the amount the materialized image would need to be scaled
                 // so that it can be painted onto this canvas.
-                val extraScaling = width / materializedViewportWidth
+                val extraScaling = zoom * width / materialized.width
+                // Find the horizontal shift needed to center the materialized image when zoom < 1.
+                val centerShift = if (zoom < 1.0) (width - width * zoom) / 2.0 else 0.0
 
                 g.withNewG2 { g2 ->
                     // Use nearest-neighbor interpolation for a massive speed improvement when momentarily painting
@@ -532,6 +556,7 @@ class DeferredImagePanel(
                         //   - The x translation dictated by the viewport position.
                         //   - The remaining y translation.
                         val tx = AffineTransform().apply {
+                            translate(centerShift, 0.0)
                             scale(imageScaling)
                             translate(-viewportStartX, -viewportStartY)
                             scale(invertedLowResScaling)
@@ -545,7 +570,7 @@ class DeferredImagePanel(
                     val tx = AffineTransform()
                     // Scroll to the current viewport.
                     tx.translate(
-                        -((viewportCenterX - minViewportCenterX) * imageScaling),
+                        -((viewportCenterX - minViewportCenterX) * imageScaling) + centerShift,
                         -((viewportCenterY - minViewportCenterY) * imageScaling)
                     )
                     // Again, if the materialized image doesn't cover the whole deferred image, translate such that the

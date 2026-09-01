@@ -1,27 +1,24 @@
 package com.loadingbyte.cinecred.projectio
 
+import com.formdev.flatlaf.util.SystemInfo
 import com.loadingbyte.cinecred.common.*
 import com.loadingbyte.cinecred.common.Severity.ERROR
-import com.loadingbyte.cinecred.common.Severity.WARN
 import com.loadingbyte.cinecred.delivery.RenderQueue
+import com.loadingbyte.cinecred.imaging.Font
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.projectio.RecursiveFileWatcher.Event.DELETE
 import com.loadingbyte.cinecred.projectio.RecursiveFileWatcher.Event.MODIFY
-import com.loadingbyte.cinecred.projectio.service.SERVICES
-import com.loadingbyte.cinecred.projectio.service.SERVICE_LINK_EXTS
-import com.loadingbyte.cinecred.projectio.service.ServiceWatcher
-import com.loadingbyte.cinecred.projectio.service.readServiceLink
-import java.awt.Font
+import com.loadingbyte.cinecred.projectio.service.*
 import java.io.IOException
 import java.net.URI
-import java.nio.file.NoSuchFileException
+import java.nio.channels.FileChannel
 import java.nio.file.Path
-import java.util.*
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.io.path.*
@@ -29,9 +26,8 @@ import kotlin.io.path.*
 
 /**
  * Upon creation of a new instance of this class, the callbacks [Callbacks.pushProjectFonts],
- * [Callbacks.pushPictureLoaders], and [Callbacks.pushTapes] are immediately called from the same thread before the
- * constructor returns.
- * In contrast, the callback [Callbacks.pushCreditsSpreadsheets] will be called later from a separate thread.
+ * [Callbacks.pushPictureLoaders], and [Callbacks.pushTapes] are immediately called before the constructor returns.
+ * In contrast, the callback [Callbacks.pushCreditsWorkbooks] will be called later from a separate thread.
  *
  * Neither the constructor nor any method in this class throws exceptions. Instead, errors are gracefully handled and,
  * if reasonable, the user is notified via the log.
@@ -39,82 +35,70 @@ import kotlin.io.path.*
 class ProjectIntake(private val projectDir: Path, private val callbacks: Callbacks) {
 
     interface Callbacks {
-        fun creditsPolling(possible: Boolean)
-        fun pushCreditsSpreadsheets(creditsSpreadsheets: List<Spreadsheet>, uri: URI?, log: List<ParserMsg>)
-        fun pushCreditsSpreadsheetsLog(log: List<ParserMsg>)
-        fun pushProjectFonts(projectFonts: SortedMap<String, Font>)
-        fun pushPictureLoaders(pictureLoaders: SortedMap<String, Picture.Loader>)
-        fun pushTapes(tapes: SortedMap<String, Tape>)
+        fun pushCreditsWorkbooks(creditsWorkbooks: Collection<CreditsWorkbook>, log: List<ParserMsg>, pollable: Boolean)
+        fun pushProjectFonts(projectFonts: Map<String, Font>)
+        fun pushPictureLoaders(pictureLoaders: Map<String, Picture.Loader>)
+        fun pushTapes(tapes: Map<String, Tape>)
     }
 
+    class CreditsWorkbook(val fileName: String, val uri: URI, spreadsheets: List<Spreadsheet>) {
+        val spreadsheets = spreadsheets.toMutableList().also {
+            dedupNames(it, Spreadsheet::name, Spreadsheet::withName)
+        }
+    }
+
+    // All operations are performed in this singular thread, which means we don't need to make them thread-safe.
     private val executor = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "ProjectIntake").apply { isDaemon = true }
     }
 
-    private var currentCreditsFile: Path? = null
-    private var linkedCreditsWatcher: ServiceWatcher? = null
+    private val creditsWorkbooks = HashMap<Path, CreditsWorkbook>()
+    private val creditsLogs = HashMap<Path, List<ParserMsg>>()
+    private val linkedCreditsWatchers = HashMap<Path, ServiceWatcher>()
 
-    private var auxFileEventBatch = HashMap<Path, RecursiveFileWatcher.Event>()
-    private val auxFileEventBatchLock = ReentrantLock()
-    private val auxFileEventBatchProcessor = AtomicReference<ScheduledFuture<*>?>()
+    private val creditsFileEventBatcher = EventBatcher<Int>(executor, ::flushCreditsFileEvents)
+    private val auxFileEventBatcher = EventBatcher<Trial>(executor, ::flushAuxFileEvents)
 
     private val projectFonts = HashMap<Path, List<Font>>()
     private val pictureLoaders = PathTreeMap<Picture.Loader>()
     private val tapes = HashMap<Path, Tape>()
 
     // These are set to true to force calls to the corresponding pushX() method upon initialization.
+    private var creditsWorkbooksChanged = true
     private var projectFontsChanged = true
     private var pictureLoadersChanged = true
     private var tapesChanged = true
 
     init {
-        // Load the initially present auxiliary files (project fonts, pictures, tapes) in the current thread, which is
-        // required by the class's contract. After that, all actions will be performed in the executor thread, which is
-        // why the class doesn't need locking mechanisms.
-        for (projectFileOrDir in projectDir.walkSafely())
-            reloadAuxFileOrDir(projectFileOrDir)
-        pushAuxiliaryFileChanges()
+        // Load the initially present auxiliary files (project fonts, pictures, tapes), and let this thread wait until
+        // completion, as is required by the class's contract. We perform the loading in the executor thread instead of
+        // this thread for two reasons: First, all other operations are also done in the executor thread, which permits
+        // us to omit locking. Second, reloadAuxFileOrDir() might schedule a task in the executor thread, which we do
+        // not want to run before our first push down below is done -- and since we're blocking the executor thread,
+        // the scheduled task can't run.
+        executor.submit(throwableAwareTask {
+            for (projectFileOrDir in projectDir.walkSafely())
+                reloadAuxFileOrDir(projectFileOrDir, attempt = 0)
+            pushAuxiliaryFileChanges()
+        }).get()
 
-        // Load the initially present credits file in the executor thread.
-        executor.submit(throwableAwareTask { reloadCreditsFile(Path("")) })
+        // Load the initially present credits files in the executor thread.
+        val creditsFiles = projectDir.walkSafely().filter { file -> file.isRegularFile() && hasCreditsFilename(file) }
+        creditsFileEventBatcher.pushEvents(creditsFiles.map { it to 0 }, delay = 0)
 
         // Watch for future changes in the new project dir.
         RecursiveFileWatcher.watch(projectDir) { event: RecursiveFileWatcher.Event, file: Path ->
             if (hasCreditsFilename(file)) {
-                // Process changes to the credits file in the executor thread.
                 // Also wait a moment so that the file has been fully written.
-                executor.schedule(throwableAwareTask { reloadCreditsFile(file) }, 100, TimeUnit.MILLISECONDS)
-            } else {
-                // Changes to auxiliary files are batched to reduce the number of pushes when, e.g., a long image
-                // sequence is copied into the project dir.
-                // For this, we first record the event to a map, overriding the previous event for that file if there
-                // was any. We also record events for the changed file's parent dir to account for image sequences.
-                auxFileEventBatchLock.withLock {
-                    val batch = auxFileEventBatch
-                    val parent = file.parent
-                    batch[file] = event
-                    batch[parent] = if (parent.exists()) MODIFY else DELETE
-                }
-                // We then schedule a task that will later apply the batched changes in one go.
-                val newProcessor = executor.schedule(throwableAwareTask {
-                    val batch = auxFileEventBatchLock.withLock {
-                        auxFileEventBatch.also { auxFileEventBatch = HashMap() }
-                    }
-                    for ((defFile, defEvent) in batch) {
-                        removeAuxFileOrDir(defFile)
-                        if (defEvent == MODIFY)
-                            reloadAuxFileOrDir(defFile)
-                    }
-                    pushAuxiliaryFileChanges()
-                }, 500, TimeUnit.MILLISECONDS)
-                // Cancel the previous task if it hasn't started yet
-                auxFileEventBatchProcessor.getAndSet(newProcessor)?.cancel(false)
-            }
+                creditsFileEventBatcher.pushEvent(file, 0, delay = 100)
+            } else
+                reloadOrRemoveAuxFileOrDirLater(file, event, attempt = 0)
         }
     }
 
     fun pollCredits() {
-        linkedCreditsWatcher?.poll()
+        for (watcher in linkedCreditsWatchers.values)
+            watcher.poll()
     }
 
     fun close() {
@@ -134,70 +118,141 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
                 tape.close()
 
             // Stop watching for online changes.
-            linkedCreditsWatcher?.cancel()
-            linkedCreditsWatcher = null
+            for (watcher in linkedCreditsWatchers.values)
+                watcher.cancel()
+            linkedCreditsWatchers.clear()
         })
 
         executor.shutdown()
     }
 
-    private fun reloadCreditsFile(changedFile: Path) {
-        val (activeFile, locatingLog) = locateCreditsFile(projectDir)
-        if (activeFile == null)
-            callbacks.pushCreditsSpreadsheets(emptyList(), null, locatingLog)
-        else if (
-            changedFile == activeFile || currentCreditsFile.let { it == null || !it.isSameFileAsSafely(activeFile) }
+    private fun flushCreditsFileEvents(events: Map<Path, Int>) {
+        val (locked, unlocked) = events.entries.partition { (f, a) -> f.isRegularFile() && isFileLocked(f, a) }
+        if (locked.isNotEmpty())
+            creditsFileEventBatcher.pushEvents(locked.map { (f, a) -> f to a + 1 }, delay = 500)
+        reloadOrRemoveCreditsFiles(unlocked.map { (f, _) -> f })
+    }
+
+    private fun reloadOrRemoveCreditsFiles(changedFiles: List<Path>) {
+        for (changedFile in changedFiles) if (
+            !changedFile.isRegularFile() || changedFile.isHiddenSafely() || changedFile.name.startsWith("~$")
         ) {
-            linkedCreditsWatcher?.cancel()
-            linkedCreditsWatcher = null
-            callbacks.creditsPolling(false)
-            val fileExt = activeFile.extension
+            creditsWorkbooksChanged = creditsWorkbooksChanged ||
+                    changedFile in creditsWorkbooks || changedFile in creditsLogs ||
+                    changedFile in linkedCreditsWatchers
+            // First cancel the watcher, which is then guaranteed to immediately stop touching the credits* maps.
+            linkedCreditsWatchers.remove(changedFile)?.cancel()
+            creditsWorkbooks.remove(changedFile)
+            creditsLogs.remove(changedFile)
+        } else {
+            val fileExt = changedFile.extension
             try {
                 if (fileExt in SERVICE_LINK_EXTS) {
-                    val link = readServiceLink(activeFile)
-                    val service = SERVICES.find { it.canWatch(link) }
-                    if (service == null) {
-                        val msg = l10n("projectIO.credits.unsupportedServiceLink", l10nQuoted(link))
-                        val msgObj = ParserMsg(null, null, null, null, ERROR, msg)
-                        callbacks.pushCreditsSpreadsheets(emptyList(), link, locatingLog + msgObj)
-                    } else {
-                        linkedCreditsWatcher = service.watch(link, object : ServiceWatcher.Callbacks {
+                    val link = readServiceLink(changedFile)
+                    var found = false
+                    var msg: String? = null
+                    for (service in SERVICES) {
+                        val result = service.watch(link, object : ServiceWatcher.Callbacks {
                             override fun content(spreadsheets: List<Spreadsheet>) {
-                                callbacks.pushCreditsSpreadsheets(spreadsheets, link, locatingLog)
+                                creditsWorkbooks[changedFile] = CreditsWorkbook(changedFile.name, link, spreadsheets)
+                                updateCreditsLogBasedOnSpreadsheets(changedFile, spreadsheets)
+                                pushCreditsWorkbooks()
                             }
 
-                            override fun problem(problem: ServiceWatcher.Problem) {
-                                val key = when (problem) {
-                                    ServiceWatcher.Problem.INACCESSIBLE -> "projectIO.credits.noAccountGrantsAccess"
-                                    ServiceWatcher.Problem.DOWN -> "projectIO.credits.serviceUnresponsive"
-                                }
-                                val msg = ParserMsg(null, null, null, null, ERROR, l10n(key))
-                                callbacks.pushCreditsSpreadsheets(emptyList(), link, locatingLog + msg)
+                            override fun problem(error: ServiceError) {
+                                val str = "${error.message} ${l10n("projectIO.credits.outdated")}"
+                                val msg = ParserMsg(changedFile.name, null, null, null, null, ERROR, str)
+                                creditsLogs[changedFile] = listOf(msg)
+                                pushCreditsWorkbooks()
                             }
                         })
-                        callbacks.creditsPolling(true)
+                        if (!(result is ServiceResult.Failure && result.error is ServiceError.ServiceNotResponsible)) {
+                            found = true
+                            when (result) {
+                                is ServiceResult.Failure -> msg = result.error.message
+                                is ServiceResult.Success ->
+                                    linkedCreditsWatchers.put(changedFile, result.value)?.cancel()
+                            }
+                            break
+                        }
+                    }
+                    if (!found)
+                        msg = l10n("projectIO.credits.unsupportedServiceLink", l10nQuoted(link))
+                    if (msg != null) {
+                        val msgObj = ParserMsg(changedFile.name, null, null, null, null, ERROR, msg)
+                        // First cancel the watcher, which then immediately stops touching the credits* maps.
+                        linkedCreditsWatchers.remove(changedFile)?.cancel()
+                        creditsWorkbooks.remove(changedFile)
+                        creditsLogs[changedFile] = listOf(msgObj)
+                        creditsWorkbooksChanged = true
                     }
                 } else {
                     val fmt = SPREADSHEET_FORMATS.first { fmt -> fmt.fileExt.equals(fileExt, ignoreCase = true) }
-                    val (spreadsheets, loadingLog) = fmt.read(activeFile, l10n("project.template.spreadsheetName"))
-                    callbacks.pushCreditsSpreadsheets(spreadsheets, activeFile.toUri(), locatingLog + loadingLog)
+                    val spreadsheets = fmt.read(changedFile, l10n("project.template.spreadsheetName"))
+                    creditsWorkbooks[changedFile] = CreditsWorkbook(changedFile.name, changedFile.toUri(), spreadsheets)
+                    updateCreditsLogBasedOnSpreadsheets(changedFile, spreadsheets)
+                    creditsWorkbooksChanged = true
                 }
             } catch (e: Exception) {
                 // General exceptions can occur if the credits file is ill-formatted.
                 // An IO exception can occur if the credits file has disappeared in the meantime. If that happens,
                 // the file watcher should quickly trigger a call to this method again. Still, we push an
                 // error message in case something else goes wrong too.
-                val note = e.message ?: e.toString()
-                val msg = l10n("projectIO.credits.cannotReadCreditsFile", l10nQuoted(activeFile.name), note)
-                val msgObj = ParserMsg(null, null, null, null, ERROR, msg)
-                callbacks.pushCreditsSpreadsheets(emptyList(), activeFile.toUri(), locatingLog + msgObj)
+                LOGGER.error("Could not read the credits file '{}'.", changedFile, e)
+                val msg = l10n("projectIO.credits.cannotReadCreditsFile", e.userNotification)
+                creditsLogs[changedFile] = listOf(ParserMsg(changedFile.name, null, null, null, null, ERROR, msg))
+                creditsWorkbooksChanged = true
             }
-        } else
-            callbacks.pushCreditsSpreadsheetsLog(locatingLog)
-        currentCreditsFile = activeFile
+        }
+        if (creditsWorkbooksChanged) {
+            creditsWorkbooksChanged = false
+            pushCreditsWorkbooks()
+        }
     }
 
-    private fun reloadAuxFileOrDir(fileOrDir: Path) {
+    private fun updateCreditsLogBasedOnSpreadsheets(file: Path, spreadsheets: List<Spreadsheet>) {
+        if (spreadsheets.isEmpty()) {
+            val msg = l10n("projectIO.spreadsheet.noSheet", l10nQuoted(file.name))
+            creditsLogs[file] = listOf(ParserMsg(file.name, null, null, null, null, ERROR, msg))
+        } else
+            creditsLogs.remove(file)
+    }
+
+    private fun pushCreditsWorkbooks() {
+        val creditsWorkbooks = this.creditsWorkbooks.values
+            // An ad-hoc solution to ignore CSV tape timeline exports.
+            .filterNotTo(mutableListOf()) { wb ->
+                wb.fileName.endsWith(".csv") && wb.spreadsheets.size == 1 &&
+                        wb.spreadsheets[0].run { numRecords != 0 && numColumns != 0 && get(0, 0) == "Record In" }
+            }
+        dedupNames(creditsWorkbooks, CreditsWorkbook::fileName) { w, n -> CreditsWorkbook(n, w.uri, w.spreadsheets) }
+
+        val log = creditsLogs.values.flatMapTo(mutableListOf()) { it }
+        if (creditsWorkbooks.isEmpty() && creditsLogs.isEmpty() && linkedCreditsWatchers.isEmpty()) {
+            val msg = l10n("projectIO.credits.noCreditsFile", "<i>${l10nEnum(CREDITS_EXTS)}</i>")
+            log += ParserMsg(null, null, null, null, null, ERROR, msg)
+        }
+
+        callbacks.pushCreditsWorkbooks(creditsWorkbooks, log, pollable = linkedCreditsWatchers.isNotEmpty())
+    }
+
+    private fun reloadOrRemoveAuxFileOrDirLater(fileOrDir: Path, event: RecursiveFileWatcher.Event, attempt: Int) {
+        // Also record events for the changed file's parent dir to account for image sequences.
+        val p = fileOrDir.parent
+        val events = listOf(fileOrDir to Trial(event, attempt), p to Trial(if (p.exists()) MODIFY else DELETE, attempt))
+        auxFileEventBatcher.pushEvents(events, delay = 500)
+    }
+
+    private fun flushAuxFileEvents(events: Map<Path, Trial>) {
+        for ((fileOrDir, trial) in events) {
+            removeAuxFileOrDir(fileOrDir)
+            if (trial.event == MODIFY)
+                reloadAuxFileOrDir(fileOrDir, trial.attempt)
+        }
+        pushAuxiliaryFileChanges()
+    }
+
+    private fun reloadAuxFileOrDir(fileOrDir: Path, attempt: Int) {
         // If the file has been generated by a render job, don't reload the project. Otherwise, generating image
         // sequences would be very expensive because we would constantly reload the project. Note that we do not
         // only consider the current render job, but all render jobs in the render job list. This ensures that even
@@ -206,10 +261,20 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         if (RenderQueue.isRenderedFile(fileOrDir))
             return
 
-        val newFonts = tryReadFonts(fileOrDir)
-        if (newFonts.isNotEmpty()) {
-            projectFonts[fileOrDir] = newFonts
-            projectFontsChanged = true
+        if (fileOrDir.isHiddenSafely())
+            removeAuxFileOrDir(fileOrDir)
+
+        if (fileOrDir.isRegularFile() && hasFontFilename(fileOrDir)) {
+            if (isFileLocked(fileOrDir, attempt))
+                reloadOrRemoveAuxFileOrDirLater(fileOrDir, MODIFY, attempt + 1)
+            else {
+                // Don't memory-map project fonts because the user might modify the font files in unexpected ways.
+                val newFonts = Font.read(fileOrDir, mmap = false)
+                if (newFonts.isNotEmpty()) {
+                    projectFonts[fileOrDir] = newFonts
+                    projectFontsChanged = true
+                }
+            }
             return
         }
 
@@ -254,10 +319,10 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
 
     private fun pushAuxiliaryFileChanges() {
         if (projectFontsChanged)
-            callbacks.pushProjectFonts(buildDedupSortedMap { put ->
+            callbacks.pushProjectFonts(buildDedupMap { put ->
                 for (fonts in projectFonts.values)
                     for (font in fonts)
-                        put(font.getFontName(Locale.ROOT), font)
+                        put(font.name, font)
             })
 
         if (pictureLoadersChanged) {
@@ -266,7 +331,7 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
                 if (tape.fileSeq && (tape.availableRange.run { endExclusive - start } as Timecode.Frames).frames > 10)
                     tape.fileOrDir else null
             }
-            callbacks.pushPictureLoaders(buildDedupSortedMap { put ->
+            callbacks.pushPictureLoaders(buildDedupMap { put ->
                 pictureLoaders.forEachValue(exclude) { pictureLoader ->
                     put(pictureLoader.file.name, pictureLoader)
                 }
@@ -274,7 +339,7 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         }
 
         if (tapesChanged)
-            callbacks.pushTapes(buildDedupSortedMap { put ->
+            callbacks.pushTapes(buildDedupMap { put ->
                 for (tape in tapes.values)
                     put(tape.fileOrDir.name, tape)
             })
@@ -284,8 +349,21 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
         tapesChanged = false
     }
 
-    private fun <V : Any> buildDedupSortedMap(builderAction: ((String, V) -> Unit) -> Unit): SortedMap<String, V> {
-        val map = TreeMap<String, V>()
+    private fun isFileLocked(file: Path, attempt: Int): Boolean {
+        // On Windows, some users observed that files like the credits file can be locked while Excel writes to it.
+        // As a workaround, we quickly check whether the file can be opened, and if not, the caller of this method will
+        // wait a bit longer and then try again.
+        if (SystemInfo.isWindows && attempt < 20)
+            try {
+                FileChannel.open(file, StandardOpenOption.READ).close()
+            } catch (_: IOException) {
+                return true
+            }
+        return false
+    }
+
+    private fun <V : Any> buildDedupMap(builderAction: ((String, V) -> Unit) -> Unit): Map<String, V> {
+        val map = HashMap<String, V>()
         val dupKeys = HashSet<String>()
         builderAction { key, value ->
             if (key !in dupKeys && map.put(key, value) != null) {
@@ -299,61 +377,70 @@ class ProjectIntake(private val projectDir: Path, private val callbacks: Callbac
 
     companion object {
 
-        private val CREDITS_EXTS = SPREADSHEET_FORMATS.map(SpreadsheetFormat::fileExt) + SERVICE_LINK_EXTS
+        val CREDITS_EXTS = sortedSetOf(String.CASE_INSENSITIVE_ORDER).also {
+            SPREADSHEET_FORMATS.mapTo(it, SpreadsheetFormat::fileExt)
+            it.addAll(SERVICE_LINK_EXTS)
+        }
         private val FONT_EXTS = sortedSetOf(String.CASE_INSENSITIVE_ORDER, "ttf", "ttc", "otf", "otc")
 
-        fun locateCreditsFile(projectDir: Path): Pair<Path?, List<ParserMsg>> {
-            fun availExtsStr() = "<i>${l10nEnum(CREDITS_EXTS)}</i>"
+        fun hasCreditsFilename(file: Path): Boolean = file.extension in CREDITS_EXTS
+        fun hasFontFilename(file: Path): Boolean = file.extension in FONT_EXTS
 
-            var creditsFile: Path? = null
-            val log = mutableListOf<ParserMsg>()
-
-            val candidates = getCreditsFileCandidates(projectDir)
-            if (candidates.isEmpty()) {
-                val msg = l10n("projectIO.credits.noCreditsFile", "<i>${availExtsStr()}</i>")
-                log.add(ParserMsg(null, null, null, null, ERROR, msg))
-            } else {
-                creditsFile = candidates.first()
-                if (candidates.size > 1) {
-                    val chosen = l10nQuoted(creditsFile.name)
-                    val msg = l10n("projectIO.credits.multipleCreditsFiles", "<i>${availExtsStr()}</i>", chosen)
-                    log.add(ParserMsg(null, null, null, null, WARN, msg))
-                }
+        private inline fun <T> dedupNames(list: MutableList<T>, getName: (T) -> String, changeName: (T, String) -> T) {
+            for (idx in list.indices) {
+                val elem = list[idx]
+                var name = getName(elem)
+                var counter = 1
+                while (list.subList(0, idx).any { getName(it) == name })
+                    name = "${getName(elem)} (${++counter})"
+                if (name != getName(elem))
+                    list[idx] = changeName(elem, name)
             }
-
-            return Pair(creditsFile, log)
         }
 
-        private fun getCreditsFileCandidates(projectDir: Path): List<Path> {
-            val files = try {
-                projectDir.listDirectoryEntries()
-            } catch (e: IOException) {
-                if (e !is NoSuchFileException)
-                    LOGGER.error("Cannot list files in project dir '{}'.", projectDir, e)
-                return emptyList()
+    }
+
+
+    private data class Trial(val event: RecursiveFileWatcher.Event, val attempt: Int)
+
+
+    private class EventBatcher<E : Any>(
+        private val executor: ScheduledExecutorService,
+        private val flushEvents: (Map<Path, E>) -> Unit
+    ) {
+
+        private val lock = ReentrantLock()
+        private var batch = HashMap<Path, E>()
+        private var version = 0L
+        private var processor: ScheduledFuture<*>? = null
+
+        fun pushEvent(path: Path, event: E, delay: Long) {
+            pushEvents(listOf(path to event), delay)
+        }
+
+        fun pushEvents(events: Iterable<Pair<Path, E>>, delay: Long) {
+            lock.withLock {
+                // Changes to files are batched to reduce the number of pushes when, e.g., a long image sequence is
+                // copied into the project dir.
+                // For this, first record the events, overriding the previous events for those files if there were any.
+                batch.putAll(events)
+                val curVersion = ++version
+                // Cancel the previous task if it hasn't started yet.
+                processor?.cancel(false)
+                // Then schedule a task that will later apply the batched changes in one go.
+                processor = executor.schedule(throwableAwareTask {
+                    val batch = lock.withLock {
+                        // If new file events have arrived in the meantime, but this task wasn't canceled in time, abort
+                        // the task now. This makes sure that there's always a delay between when an event arrives and
+                        // is processed. A nice side effect of that delay is waiting until whoever modified the file is
+                        // done writing to it.
+                        if (version != curVersion)
+                            return@throwableAwareTask
+                        this.batch.also { this.batch = HashMap() }
+                    }
+                    flushEvents(batch)
+                }, delay, TimeUnit.MILLISECONDS)
             }
-            return files
-                .filter { file -> file.isRegularFile() && hasCreditsFilename(file) }
-                .sortedBy { file ->
-                    val fileExt = file.extension
-                    CREDITS_EXTS.indexOfFirst { ext -> ext.equals(fileExt, ignoreCase = true) }
-                }
-        }
-
-        private fun hasCreditsFilename(file: Path): Boolean {
-            val fileExt = file.extension
-            return file.nameWithoutExtension.equals("Credits", ignoreCase = true) &&
-                    CREDITS_EXTS.any { ext -> ext.equals(fileExt, ignoreCase = true) }
-        }
-
-        private fun tryReadFonts(file: Path): List<Font> {
-            if (file.isRegularFile() && file.extension in FONT_EXTS)
-                try {
-                    return Font.createFonts(file.toFile()).asList()
-                } catch (e: Exception) {
-                    LOGGER.error("Font '{}' cannot be read.", file.name, e)
-                }
-            return emptyList()
         }
 
     }

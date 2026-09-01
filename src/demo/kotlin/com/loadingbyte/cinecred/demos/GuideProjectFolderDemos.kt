@@ -4,10 +4,10 @@ import com.loadingbyte.cinecred.demo.ScreencastDemo
 import com.loadingbyte.cinecred.demo.l10nDemo
 import com.loadingbyte.cinecred.projectio.OdsFormat
 import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetFormat
 import com.loadingbyte.cinecred.projectio.SpreadsheetLook
 import com.loadingbyte.cinecred.projectio.service.Account
 import com.loadingbyte.cinecred.projectio.service.GoogleService
-import com.loadingbyte.cinecred.ui.LocaleWish
 import com.loadingbyte.cinecred.ui.comms.WelcomeTab
 import java.lang.Thread.sleep
 import javax.swing.JTextField
@@ -59,8 +59,9 @@ object GuideProjectFolderCreateProjectDemo : ScreencastDemo("$DIR/create-project
     private object DummyAccount : Account {
         override val id get() = l10nDemo("genericName")
         override val service get() = GoogleService
-        override fun upload(filename: String?, spreadsheet: Spreadsheet, look: SpreadsheetLook) =
-            throw UnsupportedOperationException()
+        override fun upload(
+            filename: String?, format: SpreadsheetFormat?, spreadsheet: Spreadsheet, look: SpreadsheetLook
+        ) = throw UnsupportedOperationException()
     }
 }
 
@@ -70,11 +71,6 @@ object GuideProjectFolderAddOnlineAccountDemo : ScreencastDemo("$DIR/add-online-
     override fun generate() {
         addWelcomeWindow(fullscreen = true)
         welcomeFrame.setTab(WelcomeTab.PREFERENCES)
-        welcomeFrame.preferences_start_setUILocaleWish(LocaleWish.System)
-        welcomeFrame.preferences_start_setCheckForUpdates(true)
-        welcomeFrame.preferences_start_setAccounts(emptyList())
-        welcomeFrame.preferences_start_setOverlays(emptyList())
-        welcomeFrame.preferences_start_setDeliveryDestTemplates(emptyList())
 
         sc.hold(2 * hold)
         sc.mouseTo(welcomeWin.desktopPosOf(prefsPanel.leakedStartAddAccountButton))

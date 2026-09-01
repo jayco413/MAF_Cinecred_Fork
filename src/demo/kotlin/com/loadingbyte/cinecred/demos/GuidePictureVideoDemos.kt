@@ -1,17 +1,29 @@
 package com.loadingbyte.cinecred.demos
 
-import com.loadingbyte.cinecred.common.Timecode
+import com.loadingbyte.cinecred.common.Timecode.SMPTENonDropFrame
+import com.loadingbyte.cinecred.common.TimecodeFormat.SMPTE_NON_DROP_FRAME
 import com.loadingbyte.cinecred.common.l10n
+import com.loadingbyte.cinecred.common.l10nKeyword
 import com.loadingbyte.cinecred.common.useResourcePath
 import com.loadingbyte.cinecred.demo.*
 import com.loadingbyte.cinecred.imaging.Picture
 import com.loadingbyte.cinecred.imaging.Tape
 import com.loadingbyte.cinecred.project.*
+import com.loadingbyte.cinecred.projectio.Spreadsheet
+import com.loadingbyte.cinecred.projectio.SpreadsheetLook
+import com.loadingbyte.cinecred.projectio.XlsxFormat
+import com.loadingbyte.cinecred.ui.comms.DockableId.LOG
+import com.loadingbyte.cinecred.ui.comms.DockableId.STYLING
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toPersistentList
+import org.bytedeco.ffmpeg.global.avutil.AVCOL_PRI_SMPTE428
+import org.bytedeco.ffmpeg.global.avutil.AVCOL_TRC_LOG_SQRT
 import java.awt.Dimension
 import java.lang.Thread.sleep
-import kotlin.io.path.*
+import kotlin.io.path.copyTo
+import kotlin.io.path.createTempDirectory
+import kotlin.io.path.moveTo
+import kotlin.io.path.name
 
 
 private const val DIR = "guide/picture-video"
@@ -24,33 +36,40 @@ val GUIDE_PICTURE_VIDEO_DEMOS
         GuidePictureVideoPictureFileDemo,
         GuidePictureVideoVideoFileDemo,
         GuidePictureVideoResolutionDemo,
+        GuidePictureVideoCropDemo,
+        GuidePictureVideoFlipAndRotateDemo,
+        GuidePictureVideoResamplingFilterDemo,
         GuidePictureVideoPictureCropBlankSpaceDemo,
         GuidePictureVideoVideoMovingDemo,
-        GuidePictureVideoVideoPreviewDemo,
         GuidePictureVideoVideoSliceDemo,
+        GuidePictureVideoVideoLoopDemo,
         GuidePictureVideoVideoTemporallyJustifyDemo,
         GuidePictureVideoVideoTemporalMarginDemo,
-        GuidePictureVideoVideoFadeDemo
+        GuidePictureVideoVideoFadeDemo,
+        GuidePictureVideoVideoInterpretationDemo
     )
 
 
 @Suppress("DEPRECATION")
-object GuidePictureVideoAutoAddDemo : ScreencastDemo(
-    "$DIR/auto-add", Format.VIDEO_GIF, 1100, 600
-) {
+object GuidePictureVideoAutoAddDemo : ScreencastDemo("$DIR/auto-add", Format.VIDEO_GIF, 1100, 650, 0.85) {
     override fun generate() {
-        val creditsFile = projectDir.resolve("Credits.csv")
-        addProjectWindows(hideStyWin = true, prepareProjectDir = {
-            val lines = creditsFile.readLines().toMutableList()
-            val idx = lines.indexOfFirst { "Dirc Director" in it }
-            lines[idx] = lines[idx].replace("A,", ",").replace(",Film,", ",,")
-            lines[idx + 1] = ",,,4,,,,,,"
-            lines.subList(idx + 2, lines.size).fill(",,,,,,,,,")
-            creditsFile.writeLines(lines)
+        val creditsFile = projectDir.resolve("${projectDir.name}.xlsx")
+        addProjectWindows(dockedTrees.apply { leaf(LOG).collapsed = true }, prepareProjectDir = {
+            val sheet = XlsxFormat.read(creditsFile, "").single()
+            val matrix = sheet.mapTo(mutableListOf(), Spreadsheet.Record::cells)
+            val firstDataRow = matrix.subList(1, matrix.size).first { row -> row[1] != "" }
+            matrix.subList(1, matrix.size).clear()
+            matrix.add(emptyList())
+            matrix.add(listOf("", "Iris Imaginer", "") + firstDataRow.subList(3, firstDataRow.size))
+            repeat(100) { matrix.add(emptyList()) }
+            matrix.add(listOf("", "", "", "0"))
+            val look = SpreadsheetLook(0, emptyMap(), emptyList(), emptyList())
+            XlsxFormat.write(creditsFile, Spreadsheet(sheet.name, matrix), look)
 
             val logosDir = projectDir.resolve("Logos")
             logosDir.resolve("Cinecred H.svg").moveTo(logosDir.resolve("Cinecred.svg"))
         })
+        edt { projectCtrl.setDockableCollapsed(STYLING, true) }
 
         val oldStyling = projectCtrl.stylingHistory.current
         val newStyling = oldStyling.copy(
@@ -71,7 +90,7 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo(
         }
         sleep(500)
 
-        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, skipRows = 1).apply {
+        val spreadsheetEditorWin = SpreadsheetEditorVirtualWindow(creditsFile, XlsxFormat).apply {
             size = Dimension(600, 350)
             colWidths = intArrayOf(100, 200, 50, 100, 100, 50, 50, 50, 50, 50)
         }
@@ -80,23 +99,23 @@ object GuidePictureVideoAutoAddDemo : ScreencastDemo(
         dt.toBack(spreadsheetEditorWin)
 
         sc.hold(2 * hold)
-        sc.type(spreadsheetEditorWin, 6, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred}}", 8 * hold)
-        sc.mouseTo(prjWin.desktopPosOf(prjPnl.leakedStylingDialogButton))
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10nKeyword("pic")} Cinecred}}", 8 * hold)
+        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click(4 * hold)
-        sc.mouseTo(styWin.desktopPosOfTreeItem(styTree, "Cinecred"))
+        sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred"))
         sc.click(12 * hold)
-        sc.mouseTo(prjWin.desktopPosOf(prjPnl.leakedStylingDialogButton))
+        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
-        sc.type(spreadsheetEditorWin, 6, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred.svg}}")
-        sc.mouseTo(prjWin.desktopPosOf(prjPnl.leakedStylingDialogButton))
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10nKeyword("pic")} Cinecred.svg}}")
+        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click(8 * hold)
         sc.click()
-        sc.type(spreadsheetEditorWin, 6, 1, "{{${l10n("projectIO.credits.table.pic")} Cinecred Cropped}}")
-        sc.mouseTo(prjWin.desktopPosOf(prjPnl.leakedStylingDialogButton))
+        sc.type(spreadsheetEditorWin, 4, 1, "{{${l10nKeyword("pic")} Cinecred Cropped}}")
+        sc.mouseTo(prjWin.desktopPosOf(tolDok.leakedStylingButton))
         sc.click()
-        sc.mouseTo(styWin.desktopPosOfTreeItem(styTree, "Cinecred Cropped"))
+        sc.mouseTo(prjWin.desktopPosOfTreeItem(styTree, "Cinecred Cropped"))
         sc.click()
-        sc.demonstrateSetting(styWin, styPictForm, PictureStyle::cropBlankSpace.st(), 0)
+        sc.demonstrateSetting(prjWin, styPictForm, PictureStyle::cropBlankSpace.st(), 0)
         sc.hold(4 * hold)
     }
 }
@@ -107,7 +126,7 @@ object GuidePictureVideoPictureNameDemo : StyleSettingsDemo<PictureStyle>(
     listOf(PictureStyle::name.st())
 ) {
     override fun styles() = buildList<PictureStyle> {
-        this += PRESET_PICTURE_STYLE.copy(name = "Cinecred Cropped")
+        this += presetPictureStyle().copy(name = "Cinecred Cropped")
     }
 }
 
@@ -117,7 +136,7 @@ object GuidePictureVideoVideoNameDemo : StyleSettingsDemo<TapeStyle>(
     listOf(TapeStyle::name.st())
 ) {
     override fun styles() = buildList<TapeStyle> {
-        this += PRESET_TAPE_STYLE.copy(name = "Blooper")
+        this += presetTapeStyle().copy(name = "Blooper")
     }
 }
 
@@ -129,12 +148,12 @@ object GuidePictureVideoPictureFileDemo : StyleSettingsDemo<PictureStyle>(
     override val pictureLoaders by lazy {
         val tmpDir = createTempDirectory()
         val picFile = tmpDir.resolve("Cinecred.svg")
-        useResourcePath("/logo.svg") { it.copyTo(picFile) }
+        useResourcePath("/branding/logo.svg") { it.copyTo(picFile) }
         listOf(Picture.Loader.recognize(picFile)!!.apply { picture }).also { tmpDir.toFile().deleteRecursively() }
     }
 
     override fun styles() = buildList<PictureStyle> {
-        this += PRESET_PICTURE_STYLE.copy(picture = PictureRef(pictureLoaders[0]))
+        this += presetPictureStyle().copy(picture = PictureRef(pictureLoaders[0]))
     }
 }
 
@@ -151,7 +170,7 @@ object GuidePictureVideoVideoFileDemo : StyleSettingsDemo<TapeStyle>(
     }
 
     override fun styles() = buildList<TapeStyle> {
-        this += PRESET_TAPE_STYLE.copy(tape = TapeRef(tapes[0]))
+        this += presetTapeStyle().copy(tape = TapeRef(tapes[0]))
     }
 }
 
@@ -162,11 +181,65 @@ object GuidePictureVideoResolutionDemo : StyleSettingsDemo<PictureStyle>(
 ) {
     override fun styles() = buildList<PictureStyle> {
         this += PIC_STYLE
-        this += last().copy(widthPx = Opt(true, 150.0))
-        this += last().copy(heightPx = Opt(true, 220.0))
+        this += last().copy(widthPx = Override(150.0))
+        this += last().copy(heightPx = Override(220.0))
     }
 
     override fun credits(style: PictureStyle) = PIC_SPREADSHEET.parseCreditsPiS(style)
+}
+
+
+object GuidePictureVideoCropDemo : StyleSettingsDemo<PictureStyle>(
+    PictureStyle::class.java, "$DIR/crop", Format.STEP_GIF,
+    listOf(
+        PictureStyle::cropLeftPx.st(), PictureStyle::cropRightPx.st(),
+        PictureStyle::cropTopPx.st(), PictureStyle::cropBottomPx.st()
+    ), pageGuides = true
+) {
+    override fun styles() = buildList<PictureStyle> {
+        this += PIC_STYLE.copy(widthPx = Override(256 / 2.0))
+        this += last().copy(cropLeftPx = 32.0, widthPx = Override((256 - 32) / 2.0))
+        this += last().copy(cropRightPx = 64.0, widthPx = Override((256 - 32 - 64) / 2.0))
+        this += last().copy(cropTopPx = 50.0)
+        this += last().copy(cropBottomPx = 90.0)
+    }
+
+    override fun credits(style: PictureStyle) = PIC_SPREADSHEET.parseCreditsPiS(style)
+}
+
+
+object GuidePictureVideoFlipAndRotateDemo : StyleSettingsDemo<PictureStyle>(
+    PictureStyle::class.java, "$DIR/flip-and-rotate", Format.STEP_GIF,
+    listOf(PictureStyle::hFlip.st(), PictureStyle::vFlip.st(), PictureStyle::rotationDeg.st()), pageGuides = true
+) {
+    override fun styles() = buildList<PictureStyle> {
+        this += PIC_STYLE.copy(widthPx = Override(128.0))
+        this += last().copy(hFlip = true)
+        this += last().copy(vFlip = true)
+        for (angle in doubleArrayOf(22.5, 45.0, 67.5, 90.0, 112.5))
+            this += last().copy(rotationDeg = angle)
+    }
+
+    override fun credits(style: PictureStyle) = PIC_SPREADSHEET.parseCreditsPiS(style)
+}
+
+
+object GuidePictureVideoResamplingFilterDemo : StyleSettingsDemo<PictureStyle>(
+    PictureStyle::class.java, "$DIR/resampling-filter", Format.STEP_GIF,
+    listOf(PictureStyle::resamplingFilter.st())
+) {
+    override fun styles() = buildList<PictureStyle> {
+        for (resamplingFilter in ResamplingFilter.entries)
+            this += presetPictureStyle().copy(
+                name = "slate", picture = PictureRef(SLATE_PIC), widthPx = Override(200.0),
+                resamplingFilter = resamplingFilter
+            )
+    }
+
+    override fun credits(style: PictureStyle) = """
+@Body
+{{Pic slate}}
+        """.parseCreditsPiS(style)
 }
 
 
@@ -175,7 +248,7 @@ object GuidePictureVideoPictureCropBlankSpaceDemo : StyleSettingsDemo<PictureSty
     listOf(PictureStyle::cropBlankSpace.st()), pageGuides = true
 ) {
     override fun styles() = buildList<PictureStyle> {
-        this += PIC_STYLE.copy(widthPx = Opt(true, 150.0))
+        this += PIC_STYLE.copy(widthPx = Override(128.0), rotationDeg = 25.0)
         this += last().copy(cropBlankSpace = true)
     }
 
@@ -189,19 +262,26 @@ object GuidePictureVideoVideoMovingDemo : VideoDemo("$DIR/video-moving", Format.
 }
 
 
-object GuidePictureVideoVideoPreviewDemo : PageDemo("$DIR/video-preview", Format.PNG, pageGuides = true) {
-    override fun credits() = listOf(TAPE_SPREADSHEET.parseCreditsCS())
-}
-
-
 object GuidePictureVideoVideoSliceDemo : StyleSettingsVideoDemo<TapeStyle>(
     "$DIR/video-slice", Format.VIDEO_GIF,
     listOf(TapeStyle::slice.st()), timeline = true
 ) {
     override fun styles() = buildList<TapeStyle> {
         this += TAPE_STYLE
-        this += last().copy(slice = TapeSlice(Opt(true, Timecode.SMPTENonDropFrame(3, 10)), last().slice.outPoint))
-        this += last().copy(slice = TapeSlice(last().slice.inPoint, Opt(true, Timecode.SMPTENonDropFrame(5, 20))))
+        this += last().copy(slice = TapeSlice(SMPTE_NON_DROP_FRAME, SMPTENonDropFrame(3, 10), last().slice.outPoint))
+        this += last().copy(slice = TapeSlice(SMPTE_NON_DROP_FRAME, last().slice.inPoint, SMPTENonDropFrame(5, 20)))
+    }
+
+    override fun credits(style: TapeStyle) = TAPE_SPREADSHEET.parseCreditsTS(style)
+}
+
+
+object GuidePictureVideoVideoLoopDemo : StyleSettingsVideoDemo<TapeStyle>(
+    "$DIR/video-loop", Format.VIDEO_GIF,
+    listOf(TapeStyle::loop.st())
+) {
+    override fun styles() = buildList<TapeStyle> {
+        this += TAPE_STYLE.copy(slice = TapeSlice(SMPTE_NON_DROP_FRAME, null, SMPTENonDropFrame(1, 0)), loop = true)
     }
 
     override fun credits(style: TapeStyle) = TAPE_SPREADSHEET.parseCreditsTS(style)
@@ -214,7 +294,7 @@ object GuidePictureVideoVideoTemporallyJustifyDemo : StyleSettingsVideoDemo<Tape
 ) {
     override fun styles() = buildList<TapeStyle> {
         this += TAPE_STYLE.copy(
-            slice = TapeSlice(Opt(true, Timecode.SMPTENonDropFrame(0, 0)), Opt(true, Timecode.SMPTENonDropFrame(3, 0))),
+            slice = TapeSlice(SMPTE_NON_DROP_FRAME, SMPTENonDropFrame(0, 0), SMPTENonDropFrame(3, 0)),
             temporallyJustify = HJustify.LEFT
         )
         this += last().copy(temporallyJustify = HJustify.CENTER)
@@ -247,7 +327,7 @@ object GuidePictureVideoVideoFadeDemo : StyleSettingsVideoDemo<TapeStyle>(
     ), timeline = true
 ) {
     override fun styles() = buildList<TapeStyle> {
-        val linear = l10n("project.template.transitionStyleLinear")
+        val linear = l10n("linear")
         this += TAPE_STYLE.copy(
             leftTemporalMarginFrames = 42, rightTemporalMarginFrames = 42,
             fadeInTransitionStyleName = linear, fadeOutTransitionStyleName = linear
@@ -260,13 +340,29 @@ object GuidePictureVideoVideoFadeDemo : StyleSettingsVideoDemo<TapeStyle>(
 }
 
 
-private val PIC_STYLE = PRESET_PICTURE_STYLE.copy("logo.svg", picture = PictureRef(LOGO_PIC))
+object GuidePictureVideoVideoInterpretationDemo : StyleSettingsVideoDemo<TapeStyle>(
+    "$DIR/video-interpretation", Format.VIDEO_GIF,
+    listOf(
+        TapeStyle::range.st(), TapeStyle::primaries.st(), TapeStyle::transfer.st(), TapeStyle::yuvCoefficients.st(),
+        TapeStyle::alpha.st(), TapeStyle::scan.st()
+    )
+) {
+    override fun styles() = buildList<TapeStyle> {
+        this += TAPE_STYLE
+        this += last().copy(primaries = Override(AVCOL_PRI_SMPTE428), transfer = Override(AVCOL_TRC_LOG_SQRT))
+    }
+
+    override fun credits(style: TapeStyle) = TAPE_SPREADSHEET.parseCreditsTS(style)
+}
+
+
+private val PIC_STYLE = presetPictureStyle().copy("logo.svg", picture = PictureRef(LOGO_PIC))
 private const val PIC_SPREADSHEET = """
 @Body
 {{Pic logo.svg}}
         """
 
-private val TAPE_STYLE = PRESET_TAPE_STYLE.copy("rainbow", tape = TapeRef(RAINBOW_TAPE))
+private val TAPE_STYLE = presetTapeStyle().copy("rainbow", tape = TapeRef(RAINBOW_TAPE))
 private const val TAPE_SPREADSHEET = """
 @Body
 {{Video rainbow}}

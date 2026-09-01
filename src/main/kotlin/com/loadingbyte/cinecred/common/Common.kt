@@ -5,15 +5,14 @@ import com.electronwill.toml.TomlException
 import com.electronwill.toml.TomlWriter
 import com.formdev.flatlaf.util.SystemInfo
 import com.google.common.math.IntMath
-import org.apache.pdfbox.util.Matrix
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.w3c.dom.Node
 import org.w3c.dom.traversal.DocumentTraversal
+import sun.font.FontUtilities
 import java.awt.Font
 import java.awt.Shape
-import java.awt.font.FontRenderContext
-import java.awt.font.LineMetrics
+import java.awt.font.TextAttribute
 import java.awt.geom.AffineTransform
 import java.awt.geom.Path2D
 import java.awt.geom.Rectangle2D
@@ -22,27 +21,30 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.StringWriter
 import java.lang.ref.Cleaner
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
 import java.nio.file.*
 import java.nio.file.attribute.BasicFileAttributes
 import java.text.Collator
 import java.text.MessageFormat
 import java.text.NumberFormat
+import java.time.Duration
 import java.util.*
-import java.util.concurrent.Callable
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
+import java.util.concurrent.*
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JComponent
 import javax.swing.UIManager
 import kotlin.io.path.*
 import kotlin.math.abs
+import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.pow
-import kotlin.math.sqrt
 
 
-val VERSION = useResourceStream("/version") { it.bufferedReader().readText().trim() }
-val BUILD_ID = useResourceStream("/build-id") { it.bufferedReader().readText().trim() }
-val COPYRIGHT = useResourceStream("/copyright") { it.bufferedReader().readText().trim() }
+val VERSION = useResourceStream("/version") { it.reader().readAllAsString().trim() }
+val BUILD_ID = useResourceStream("/build-id") { it.reader().readAllAsString().trim() }
+val COPYRIGHT = useResourceStream("/copyright") { it.reader().readAllAsString().trim() }
 
 val USER_AGENT =
     "Cinecred/$VERSION (" + when {
@@ -59,9 +61,12 @@ val USER_AGENT =
 
 val LOGGER: Logger = LoggerFactory.getLogger("Cinecred")
 val CLEANER: Cleaner = Cleaner.create()
-val GLOBAL_THREAD_POOL: ExecutorService = Executors.newCachedThreadPool { runnable ->
-    Thread(runnable, "GlobalThreadPool").apply { isDaemon = true }
-}
+val GLOBAL_THREAD_POOL: ExecutorService = Executors.newCachedThreadPool(object : ThreadFactory {
+    private val ctr = AtomicInteger(1)
+    override fun newThread(r: Runnable) =
+        Thread(r, "GlobalThreadPool-${ctr.getAndIncrement()}").apply { isDaemon = true }
+})
+val GLOBAL_HTTP_CLIENT: HttpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build()
 
 
 enum class Severity { INFO, WARN, MIGRATE, ERROR }
@@ -70,6 +75,10 @@ enum class Severity { INFO, WARN, MIGRATE, ERROR }
 data class Resolution(val widthPx: Int, val heightPx: Int) {
 
     override fun toString() = "${widthPx}x${heightPx}"
+
+    /** Returns whether the width is closest to 2k (order 1), 4k (order 2), and so on. Returns at least 1. */
+    val order: Int
+        get() = max(1, roundingDiv(widthPx, 2048))
 
     companion object {
         fun fromString(str: String): Resolution {
@@ -88,6 +97,7 @@ class FPS(numerator: Int, denominator: Int) {
     val denominator: Int
 
     init {
+        require(numerator > 0 && denominator > 0) { "FPS must be finite and positive." }
         val gcd = IntMath.gcd(numerator, denominator)
         this.numerator = numerator / gcd
         this.denominator = denominator / gcd
@@ -97,6 +107,10 @@ class FPS(numerator: Int, denominator: Int) {
         get() = numerator.toDouble() / denominator
     val isFractional: Boolean
         get() = numerator / denominator * denominator != numerator
+
+    /** Returns whether the FPS are in the ~24-30 range (order 1), ~48-60 (order 2), and so on. Returns at least 1. */
+    val order: Int
+        get() = max(1, roundingDiv(numerator, denominator * 25))
 
     override fun equals(other: Any?) =
         this === other || other is FPS && numerator == other.numerator && denominator == other.denominator
@@ -122,11 +136,13 @@ class FPS(numerator: Int, denominator: Int) {
 
 /** Implements `floor(a / b)`, but works only for non-negative denominators! */
 fun floorDiv(a: Int, b: Int) = (a - ((b - 1) and (a shr 31))) / b
+/** Implements `floor(a / b)`, but works only for non-negative denominators! */
+fun floorDiv(a: Long, b: Long) = (a - ((b - 1L) and (a shr 63))) / b
 
 /** Implements `ceil(a / b)`, but works only for non-negative denominators! */
 fun ceilDiv(a: Int, b: Int) = (a + ((b - 1) and (a.inv() shr 31))) / b
 /** Implements `ceil(a / b)`, but works only for non-negative denominators! */
-fun ceilDiv(a: Long, b: Long) = (a + ((b - 1L) and (a.inv() shr 31))) / b
+fun ceilDiv(a: Long, b: Long) = (a + ((b - 1L) and (a.inv() shr 63))) / b
 
 /** Implements `round(a / b)`, but works only for non-negative numbers! */
 fun roundingDiv(a: Int, b: Int): Int = (a + (b shr 1)) / b
@@ -160,8 +176,8 @@ fun execProcess(
     logger: Logger = LoggerFactory.getLogger(cmd[0])
 ) {
     val process = ProcessBuilder(cmd).apply { env?.let(environment()::putAll) }.start()
-    GLOBAL_THREAD_POOL.submit { process.inputReader().lines().forEach { logger.info(it) } }
-    GLOBAL_THREAD_POOL.submit { process.errorReader().lines().forEach { logger.error(it) } }
+    GLOBAL_THREAD_POOL.submit { process.inputReader().use { it.lines().forEach(logger::info) } }
+    GLOBAL_THREAD_POOL.submit { process.errorReader().use { it.lines().forEach(logger::error) } }
     if (stdin != null)
         process.outputWriter().use { it.write(stdin) }
     val exitCode = process.waitFor()
@@ -200,14 +216,19 @@ fun File.toPathSafely(): Path? =
 
 
 fun Path.isAccessibleDirectory(thatContainsNonHiddenFiles: Boolean = false): Boolean =
-    if (!isDirectory())
-        false
-    else
-        try {
-            useDirectoryEntries { seq -> !thatContainsNonHiddenFiles || !seq.all(Path::isHidden) }
-        } catch (_: IOException) {
-            false
-        }
+    isDirectory() &&
+            try {
+                useDirectoryEntries { seq -> !thatContainsNonHiddenFiles || !seq.all(Path::isHidden) }
+            } catch (_: IOException) {
+                false
+            }
+
+fun Path.isHiddenSafely(): Boolean =
+    try {
+        isHidden()
+    } catch (_: IOException) {
+        true
+    }
 
 fun Path.isSameFileAsSafely(other: Path): Boolean =
     try {
@@ -216,6 +237,15 @@ fun Path.isSameFileAsSafely(other: Path): Boolean =
         false
     }
 
+
+/** Like [createFile], but does not throw if the file already exists. */
+fun Path.createFileSafely() {
+    try {
+        createFile()
+    } catch (_: FileAlreadyExistsException) {
+        // Ignore
+    }
+}
 
 /**
  * The implementation of [createDirectories] will throw an exception if the path already exists and is a symbolic link
@@ -321,9 +351,19 @@ val CONFIG_DIR: Path = when {
 }
 
 
+fun httpRequest(uri: URI): HttpRequest =
+    httpRequestBuilder(uri).build()
+
+fun httpRequestBuilder(uri: URI): HttpRequest.Builder =
+    HttpRequest.newBuilder(uri).header("User-Agent", USER_AGENT).timeout(Duration.ofSeconds(10))
+
+fun HttpRequest.Builder.basicAuth(username: String, password: String): HttpRequest.Builder =
+    header("Authorization", "Basic " + Base64.getEncoder().encodeToString("$username:$password".toByteArray()))
+
+
 val TRANSLATED_LOCALES: List<Locale> =
-    useResourceStream("/locales") { it.bufferedReader().readLines() }
-        .filter(String::isNotEmpty).sorted().map(Locale::forLanguageTag)
+    useResourceStream("/translators.properties") { Properties().apply { load(it.reader()) } }
+        .keys.sortedBy { it as String }.map { Locale.forLanguageTag(it as String) }
 
 val FALLBACK_TRANSLATED_LOCALE: Locale = Locale.ENGLISH
 
@@ -331,17 +371,19 @@ val FALLBACK_TRANSLATED_LOCALE: Locale = Locale.ENGLISH
  * This is the translated locale which is closest to the system's default locale. It necessarily has to be computed
  * before the default locale is changed for the first time, which is fulfilled by a read prior to that action.
  */
-val SYSTEM_LOCALE: Locale = run {
-    val def = Locale.getDefault()
-    TRANSLATED_LOCALES.find { it.language == def.language && it.country == def.country }
-        ?: TRANSLATED_LOCALES.find { it.language == def.language }
-        ?: FALLBACK_TRANSLATED_LOCALE
-}
+val SYSTEM_LOCALE: Locale = closestLocale(Locale.getDefault(), TRANSLATED_LOCALES) ?: FALLBACK_TRANSLATED_LOCALE
+
+fun closestLocale(target: Locale, options: Collection<Locale>): Locale? =
+    options.find { it.language == target.language && it.country == target.country }
+        ?: options.find { it.language == target.language }
 
 private val BUNDLE_CONTROL = ResourceBundle.Control.getNoFallbackControl(ResourceBundle.Control.FORMAT_PROPERTIES)
-private fun getL10nBundle(locale: Locale) = ResourceBundle.getBundle("l10n.strings", locale, BUNDLE_CONTROL)
 
-fun l10n(key: String, locale: Locale = Locale.getDefault()): String = getL10nBundle(locale).getString(key)
+fun l10n(key: String, locale: Locale = Locale.getDefault()): String =
+    ResourceBundle.getBundle("l10n.strings", locale, BUNDLE_CONTROL).getString(key)
+
+fun l10nKeyword(key: String, locale: Locale = Locale.getDefault()): String =
+    ResourceBundle.getBundle("l10n.keywords", locale, BUNDLE_CONTROL).getString(key)
 
 private val DOUBLE_BRACE_REGEX = Regex("(?<!\\{)\\{\\{|}}(?!})")
 fun l10n(key: String, vararg args: Any, locale: Locale = Locale.getDefault()): String {
@@ -394,14 +436,26 @@ fun caseInsensitiveCollator(locale: Locale = Locale.getDefault()): Collator = Co
     decomposition = Collator.FULL_DECOMPOSITION
 }
 
-inline fun <E> List<E>.sortedWithCollator(collator: Collator, selector: (E) -> String): List<E> =
+fun Iterable<String>.sortedWithCollator(collator: Collator, ascending: Boolean = true): List<String> =
+    sortedWithCollator(collator, ascending) { it }
+
+inline fun <E> Iterable<E>.sortedWithCollator(collator: Collator, selector: (E) -> String): List<E> =
     sortedWithCollator(collator, true, selector)
 
-inline fun <E> List<E>.sortedWithCollator(collator: Collator, ascending: Boolean, selector: (E) -> String): List<E> {
+inline fun <E> Iterable<E>.sortedWithCollator(collator: Collator, ascending: Boolean, selector: (E) -> String):
+        List<E> {
     val helper = mapTo(mutableListOf()) { elem -> Pair(elem, collator.getCollationKey(selector(elem))) }
     if (ascending) helper.sortBy { it.second } else helper.sortByDescending { it.second }
     return helper.map { it.first }
 }
+
+
+val Throwable.userNotification: String
+    get() {
+        val name = javaClass.simpleName
+        val msg = localizedMessage
+        return if (msg.isNullOrBlank()) name else "$name: $msg"
+    }
 
 
 const val XLINK_NS_URI = "http://www.w3.org/1999/xlink"
@@ -420,18 +474,11 @@ inline fun Node.forEachNodeInSubtree(whatToShow: Int, action: (Node) -> Unit) {
 }
 
 
-// This is a reference font render context used to measure the size of fonts.
-val REF_FRC = FontRenderContext(null, true, true)
-
-
 fun AffineTransform.scale(s: Double) = scale(s, s)
-fun Matrix.translate(tx: Double, ty: Double) = translate(tx.toFloat(), ty.toFloat())
-fun Matrix.scale(sx: Double, sy: Double) = scale(sx.toFloat(), sy.toFloat())
-fun Matrix.scale(s: Double) = scale(s.toFloat(), s.toFloat())
 
 // See PDFBox's Matrix.getScalingFactorX/Y() for the derivation.
-val AffineTransform.scalingFactorX: Double get() = sqrt(scaleX.pow(2) + shearY.pow(2))
-val AffineTransform.scalingFactorY: Double get() = sqrt(scaleY.pow(2) + shearX.pow(2))
+val AffineTransform.scalingFactorX: Double get() = hypot(scaleX, shearY)
+val AffineTransform.scalingFactorY: Double get() = hypot(scaleY, shearX)
 
 
 fun Shape.transformedBy(transform: AffineTransform?): Shape = when {
@@ -446,14 +493,16 @@ fun Shape.transformedBy(transform: AffineTransform?): Shape = when {
 }
 
 
-const val KERNING_FONT_FEAT = "kern"
-val LIGATURES_FONT_FEATS = setOf("liga", "clig")
-const val SMALL_CAPS_FONT_FEAT = "smcp"
-const val PETITE_CAPS_FONT_FEAT = "pcap"
-const val CAPITAL_SPACING_FONT_FEAT = "cpsp"
-val MANAGED_FONT_FEATS = LIGATURES_FONT_FEATS +
-        setOf(KERNING_FONT_FEAT, SMALL_CAPS_FONT_FEAT, PETITE_CAPS_FONT_FEAT, CAPITAL_SPACING_FONT_FEAT)
+private val compositeBundledFontCache = ConcurrentHashMap<String, Font>()
 
-
-val Font.lineMetrics: LineMetrics
-    get() = getLineMetrics("Beispiel!", REF_FRC)
+fun compositeBundledFont(path: String): Font =
+    compositeBundledFontCache.computeIfAbsent(path) {
+        val attrs = mapOf(
+            TextAttribute.KERNING to TextAttribute.KERNING_ON,
+            TextAttribute.LIGATURES to TextAttribute.LIGATURES_ON
+        )
+        @Suppress("JAVA_MODULE_DOES_NOT_EXPORT_PACKAGE")
+        useResourceStream(path, Font::createFonts)[0]
+            .deriveFont(attrs)
+            .let(FontUtilities::getCompositeFontUIResource)
+    }
