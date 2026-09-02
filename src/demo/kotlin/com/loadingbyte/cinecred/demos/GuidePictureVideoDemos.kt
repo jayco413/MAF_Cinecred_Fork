@@ -356,13 +356,13 @@ object GuidePictureVideoVideoInterpretationDemo : StyleSettingsVideoDemo<TapeSty
 }
 
 
-private val PIC_STYLE = presetPictureStyle().copy("logo.svg", picture = PictureRef(LOGO_PIC))
+private val PIC_STYLE = presetPictureStyle().copy(name = "logo.svg", picture = PictureRef(LOGO_PIC))
 private const val PIC_SPREADSHEET = """
 @Body
 {{Pic logo.svg}}
         """
 
-private val TAPE_STYLE = presetTapeStyle().copy("rainbow", tape = TapeRef(RAINBOW_TAPE))
+private val TAPE_STYLE = presetTapeStyle().copy(name = "rainbow", tape = TapeRef(RAINBOW_TAPE))
 private const val TAPE_SPREADSHEET = """
 @Body
 {{Video rainbow}}
